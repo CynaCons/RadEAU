@@ -49,7 +49,7 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Static view skeletons with representative mock data: Trace, Network, Signals, Recorder, Simulation, Automation, Settings (PRD §3.7)
 - [x] Smoke test: navigate all views with zero console errors
 
-### v0.1.2 — View visuals to parity (static + dev data) (ACTIVE)
+### v0.1.2 — View visuals to parity (static + dev data)
 - [x] Trace view visual: virtualized protocol-aware table (arrival + network time, endpoint, protocol, service/method, message type, session, return code), column filtering UI, pause/resume, expandable payload decode rows — mock frames
 - [ ] Network view visual: topology panel (ECUs, offered services, subscription edges), SD state monitor with TTL countdowns, PTP status panel — mock states
 - [ ] Recorder, Simulation, Automation, Settings visual pass to parity with the established design
@@ -231,6 +231,17 @@ release.
 - [ ] First tagged release with full evidence bundle
 
 ---
+
+### v0.1.3 — Functional prototype — simulator node streams to Trace (current) (ACTIVE)
+> Pulled forward on user direction (2026-08-26): visual tailoring needs a live simulator node in Trace, not the dev generator. First even-split Codex/Grok delegation wave; Claude coordinates, pins contracts, integrates.
+**Goal:** A user can start ecu-netsim, connect the app to it over the monitor link (TCP 5560), and watch the simulated sensor-fusion network stream live in the Trace view — the functional substrate the v0.1.2 visual-tailoring work resumes on. Minimal vertical cut of v0.3.x/v0.4.0; those iterations later formalize what this one pins.
+- [ ] radeau-proto codecs: SOME/IP header (SP-001..003 cut), minimal SOME/IP-SD payload (OfferService entries + TTL), gPTP Sync/FollowUp — bounded, panic-free, round-trip vectors [delegated: Codex]
+- [ ] ecu-netsim minimal live mode: sensor-fusion cast (SRS_ecu_netsim §6) emitting cyclic SOME/IP events + SD offers + gPTP sync as fully serialized wire frames through a ns-stamped virtual switch, deterministic under --seed [delegated: Codex]
+- [ ] ecu-netsim monitor link (TCP 5560, loopback bind): JSON handshake line (version, scenario, ports) then length-prefixed binary records {u32 len, u64 switch-ns, u16 port, u8 dir, frame bytes}; bounded outbound queue emitting gap records on overflow (SRS_ecu_netsim §8) [delegated: Codex]
+- [ ] Core frame sources behind one reader (minimal cut of v0.3.1): devgen source + simulator-link TCP source (connect, handshake, record stream, reconnect with backoff), capture_start takes a tagged SourceSpec [delegated: Grok]
+- [ ] Capture reader parses link records via radeau-proto (Ethernet/IPv4/UDP → SOME/IP | SD | gPTP classification) into the existing accumulator → frames:batch path; session endpoint table delivered to the UI via a capture:session event; link state via capture:link events [delegated: Grok]
+- [ ] UI: capture source picker (Dev generator | Simulator link 127.0.0.1:5560) + link status chip in the Trace toolbar; endpoint names resolved from the session table with static fallback; browser mode keeps the devgen mirror only [delegated: Grok]
+- [ ] Integration: E2E extends e2e-smoke to launch ecu-netsim, start a simulator-link capture, and assert live simulator frames rendered in Trace; README run recipe; smoke test [integration: Claude]
 
 ## Backlog
 - [ ] CAN / CAN FD backend behind the channel abstraction + DBC schema pipeline (dual bit-walk decoders, shared vectors)

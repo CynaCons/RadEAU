@@ -11,7 +11,10 @@
 //! yields *missing* (`ParseError::Truncated`), never a partial value.
 
 pub mod ethernet;
+pub mod gptp;
 pub mod ipv4;
+pub mod sd;
+pub mod someip;
 pub mod udp;
 
 pub const CRATE_NAME: &str = "radeau-proto";
