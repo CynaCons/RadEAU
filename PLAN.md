@@ -49,7 +49,7 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Static view skeletons with representative mock data: Trace, Network, Signals, Recorder, Simulation, Automation, Settings (PRD §3.7)
 - [x] Smoke test: navigate all views with zero console errors
 
-### v0.1.2 — View visuals to parity (static + dev data)
+### v0.1.2 — View visuals to parity (static + dev data) (current) (ACTIVE)
 - [x] Trace view visual: virtualized protocol-aware table (arrival + network time, endpoint, protocol, service/method, message type, session, return code), column filtering UI, pause/resume, expandable payload decode rows — mock frames
 - [ ] Network view visual: topology panel (ECUs, offered services, subscription edges), SD state monitor with TTL countdowns, PTP status panel — mock states
 - [ ] Recorder, Simulation, Automation, Settings visual pass to parity with the established design
@@ -232,7 +232,7 @@ release.
 
 ---
 
-### v0.1.3 — Functional prototype — simulator node streams to Trace (current) (ACTIVE)
+### v0.1.3 — Functional prototype — simulator node streams to Trace (COMPLETE)
 > Pulled forward on user direction (2026-08-26): visual tailoring needs a live simulator node in Trace, not the dev generator. First even-split Codex/Grok delegation wave; Claude coordinates, pins contracts, integrates.
 **Goal:** A user can start ecu-netsim, connect the app to it over the monitor link (TCP 5560), and watch the simulated sensor-fusion network stream live in the Trace view — the functional substrate the v0.1.2 visual-tailoring work resumes on. Minimal vertical cut of v0.3.x/v0.4.0; those iterations later formalize what this one pins.
 - [x] radeau-proto codecs: SOME/IP header (SP-001..003 cut), minimal SOME/IP-SD payload (OfferService entries + TTL), gPTP Sync/FollowUp — bounded, panic-free, round-trip vectors [delegated: Codex]
