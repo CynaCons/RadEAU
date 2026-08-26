@@ -352,7 +352,9 @@ API works identically over the simulator link, a future physical Ethernet
 interface, or replay. (This surface subsumes the earlier SIL API role.)
 
 - Version-checked handshake; each node registers a **node identity** (id +
-  display name).
+  display name). Encoding mirrors the simulator monitor link: **JSON for the
+  handshake and control messages, length-prefixed binary records for the frame
+  stream** — one framing implementation shared with §8.2's link.
 - A node **subscribes** to receive live frames and **injects** its own; injected
   frames are tagged `remote` + originating node id and are routed exactly like
   channel traffic — out the active channel's TX when one is up, into the
