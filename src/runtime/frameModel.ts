@@ -1,0 +1,169 @@
+/**
+ * Shared frame model for the trace pipeline: the single batched event shape
+ * (columnar arrays, mirrored by the Rust core's `FrameBatch`), the endpoint
+ * and service tables shared with the dev frame generator (PRD §3.8), and the
+ * columnar → row projection the Trace view renders.
+ */
+
+export interface TraceFrame {
+  id: number;
+  time: string;
+  dir: "rx" | "tx";
+  source: string;
+  protocol: string;
+  serviceMethod: string;
+  name: string;
+  type: string;
+  session: string;
+  length: string;
+  payload: string;
+  deltaGlobal: string;
+  deltaKey: string;
+  channel: string;
+}
+
+/** The one batched frame event shape — arrays of primitives, never row objects. */
+export interface FrameBatchRaw {
+  seq: number;
+  /** Global frame index. */
+  i: number[];
+  /** Seconds since session start. */
+  t: number[];
+  /** Direction: 1 rx, 0 tx. */
+  d: number[];
+  /** Endpoint index into ENDPOINTS. */
+  s: number[];
+  /** Protocol class: PROTO_*. */
+  p: number[];
+  sv: number[];
+  m: number[];
+  /** Message type: MSG_*. */
+  ty: number[];
+  /** Session id, -1 when absent. */
+  se: number[];
+  /** Full wire length incl. Ethernet header. */
+  l: number[];
+  /** Payload preview bytes. */
+  pb: number[][];
+}
+
+export const PROTO_SOMEIP = 0;
+export const PROTO_SD = 1;
+export const PROTO_GPTP = 2;
+
+export const MSG_EVENT = 0;
+export const MSG_OFFER = 1;
+export const MSG_SYNC = 2;
+
+/** Endpoint table shared with the generator (10.42.0.11..15). */
+export const ENDPOINTS: readonly string[] = [
+  "10.42.0.11",
+  "10.42.0.12",
+  "10.42.0.13",
+  "10.42.0.14",
+  "10.42.0.15",
+];
+
+interface ServiceDef {
+  svc: number;
+  method: number;
+  srcEp: number;
+  name: string;
+  eventName: string;
+}
+
+const SERVICES: readonly ServiceDef[] = [
+  { svc: 0x1101, method: 0x8001, srcEp: 0, name: "CameraObjects", eventName: "ObjectList" },
+  { svc: 0x1102, method: 0x8001, srcEp: 1, name: "RadarTargets", eventName: "TargetList" },
+  { svc: 0x1103, method: 0x8001, srcEp: 2, name: "LidarClusters", eventName: "ClusterList" },
+  { svc: 0x1104, method: 0x8001, srcEp: 3, name: "VehicleDynamics", eventName: "DynamicsState" },
+  { svc: 0x1201, method: 0x8001, srcEp: 4, name: "FusedObjects", eventName: "FusedObjectList" },
+];
+
+const SERVICE_BY_KEY = new Map<string, ServiceDef>(
+  SERVICES.map((s) => [`${s.svc}:${s.method}`, s]),
+);
+
+const SD_SERVICE_METHOD = "0xFFFF:0x8100";
+
+function hex4(n: number): string {
+  return "0x" + n.toString(16).toUpperCase().padStart(4, "0");
+}
+
+export function deltaKeyOf(p: number, sv: number, m: number): string {
+  return `${p}:${sv}:${m}`;
+}
+
+/**
+ * Payload preview hex from snap bytes + wire length. L3 frames carry
+ * Eth+IP+UDP overhead (42 bytes); gPTP rides directly on Ethernet (14).
+ */
+function payloadPreview(pb: readonly number[], wireLen: number, proto: number): string {
+  const payloadLen = proto === PROTO_GPTP ? wireLen - 14 : wireLen - 42;
+  const shown = Math.max(0, Math.min(pb.length, payloadLen));
+  if (shown === 0) return "--";
+  let out = "";
+  for (let j = 0; j < shown; j += 1) {
+    out += pb[j].toString(16).toUpperCase().padStart(2, "0") + (j < shown - 1 ? " " : "");
+  }
+  return out + (payloadLen > shown ? " …" : "");
+}
+
+/** Projects one columnar entry to the row shape the Trace table renders. */
+export function projectRow(
+  batch: FrameBatchRaw,
+  k: number,
+  prevT: number | null,
+  lastByKey: Map<string, number>,
+): TraceFrame {
+  const idx = batch.i[k];
+  const t = batch.t[k];
+  const dir = batch.d[k] === 1 ? "rx" : "tx";
+  const source = ENDPOINTS[batch.s[k]] ?? `ep-${batch.s[k]}`;
+  const proto = batch.p[k];
+  const sv = batch.sv[k];
+  const m = batch.m[k];
+  const ty = batch.ty[k];
+  const se = batch.se[k];
+  const len = batch.l[k];
+  const key = deltaKeyOf(proto, sv, m);
+
+  let protocol: string;
+  let serviceMethod: string;
+  let name: string;
+  let type: string;
+  if (proto === PROTO_SOMEIP) {
+    const def = SERVICE_BY_KEY.get(`${sv}:${m}`);
+    protocol = "SOME/IP";
+    serviceMethod = `${hex4(sv)}:${hex4(m)}`;
+    name = def ? `${def.name}.${def.eventName}` : `Service ${hex4(sv)}`;
+    type = ty === MSG_EVENT ? "Event" : `Type ${ty}`;
+  } else if (proto === PROTO_SD) {
+    protocol = "SD";
+    serviceMethod = SD_SERVICE_METHOD;
+    name = "OfferService";
+    type = "Offer";
+  } else {
+    protocol = "gPTP";
+    serviceMethod = "--";
+    name = `Sync · GM ${source}`;
+    type = "Sync";
+  }
+
+  return {
+    id: idx,
+    time: t.toFixed(4),
+    dir,
+    source,
+    protocol,
+    serviceMethod,
+    name,
+    type,
+    session: se < 0 ? "--" : String(se),
+    length: String(len),
+    payload: payloadPreview(batch.pb[k], len, proto),
+    deltaGlobal: prevT === null ? "--" : (t - prevT).toFixed(4),
+    deltaKey: lastByKey.get(key) === undefined ? "--" : (t - (lastByKey.get(key) as number)).toFixed(4),
+    channel: "1",
+  };
+}

@@ -2,7 +2,14 @@
 // The core owns capture links, files, and network surfaces; the WebView owns
 // all visualization. IPC is exactly commands (request/response) and events
 // (push) — see PRD.md §3.1.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Windowed subsystem unconditionally: launching the executable (even a debug
+// build) must never pop a console window. Diagnostics flow through the
+// automation/event surfaces and the E2E CDP harness instead of stdout.
+#![windows_subsystem = "windows"]
+
+mod capture;
+#[cfg(debug_assertions)]
+mod devgen;
 
 fn main() {
     // Touch the shared protocol crate so the workspace dependency graph is
@@ -10,6 +17,12 @@ fn main() {
     let _ = radeau_proto::CRATE_NAME;
 
     tauri::Builder::default()
+        .manage(capture::CaptureState::default())
+        .invoke_handler(tauri::generate_handler![
+            capture::capture_start,
+            capture::capture_stop,
+            capture::ack_frames,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running RadEAU");
 }

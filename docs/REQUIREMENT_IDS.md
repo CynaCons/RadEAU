@@ -17,7 +17,7 @@ deleted. `scripts/check-req-ids.mjs` fails CI on duplicate definitions.
 | LM- | Live mode / render loop | SRS_graphing.md | 001–004 | 005 |
 | MG- | Multi-pane graphing | SRS_graphing.md | 001–004 | 005 |
 | FF- | FFT view | SRS_graphing.md | 001–005 | 006 |
-| PF- | Streaming / performance | SRS_streaming.md | — | 001 |
+| PF- | Streaming / performance | SRS_streaming.md | 001–004 | 005 |
 | SP- | SOME/IP protocol + decode | SRS_ecu_netsim.md (elaborated in SRS_protocols.md) | 001–005 | 006 |
 | SD- | Service discovery | SRS_ecu_netsim.md | 001–005 | 006 |
 | PT- | PTP / time sync | SRS_ecu_netsim.md | 001–004 | 005 |

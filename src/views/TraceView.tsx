@@ -6,13 +6,23 @@ import FilterListIcon from "@mui/icons-material/FilterList";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import StopIcon from "@mui/icons-material/Stop";
 import TuneIcon from "@mui/icons-material/Tune";
-import { useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import type { TableComponents } from "react-virtuoso";
 import { EmptyState } from "../components/EmptyState";
 import { useViewLifecycle } from "../shell/viewLifecycle";
+import {
+  ackFrames,
+  isDesktop,
+  onFrameBatch,
+  startCapture,
+  stopCapture,
+} from "../runtime/desktop";
+import { traceStore } from "../runtime/traceStore";
+import type { TraceFrame } from "../runtime/frameModel";
 
 // ---------------------------------------------------------------------------
 // Columns (SRS_visual_ui.md §5.2). Sequential mode — the Pin column belongs to
@@ -57,143 +67,6 @@ const COLUMNS: ColumnDef[] = [
 ];
 
 const TABLE_MIN_WIDTH = COLUMNS.reduce((sum, c) => sum + c.width, 0);
-
-// ---------------------------------------------------------------------------
-// Mock data — deterministic frames from the SOME/IP sensor-fusion network,
-// replaced by the live frame stream when the core lands (PRD §3.4).
-// ---------------------------------------------------------------------------
-
-interface TraceFrame {
-  id: number;
-  time: string;
-  dir: "rx" | "tx";
-  source: string;
-  protocol: string;
-  serviceMethod: string;
-  name: string;
-  type: string;
-  session: string;
-  length: string;
-  payload: string;
-  deltaGlobal: string;
-  deltaKey: string;
-  channel: string;
-}
-
-interface ServiceDef {
-  svc: number;
-  method: number;
-  name: string;
-  eventName: string;
-  src: string;
-  len: number;
-  tx: boolean;
-}
-
-const FUSION_SERVICES: ServiceDef[] = [
-  { svc: 0x1101, method: 0x8001, name: "CameraObjects", eventName: "ObjectList", src: "10.42.0.11", len: 128, tx: false },
-  { svc: 0x1102, method: 0x8001, name: "RadarTargets", eventName: "TargetList", src: "10.42.0.12", len: 96, tx: false },
-  { svc: 0x1103, method: 0x8001, name: "LidarClusters", eventName: "ClusterList", src: "10.42.0.13", len: 160, tx: false },
-  { svc: 0x1104, method: 0x8001, name: "VehicleDynamics", eventName: "DynamicsState", src: "10.42.0.14", len: 48, tx: false },
-  { svc: 0x1201, method: 0x8001, name: "FusedObjects", eventName: "FusedObjectList", src: "10.42.0.15", len: 144, tx: true },
-];
-
-function hex4(n: number): string {
-  return "0x" + n.toString(16).toUpperCase().padStart(4, "0");
-}
-
-function payloadPreview(seed: number, totalLen: number): string {
-  const shown = Math.min(12, totalLen);
-  const parts: string[] = [];
-  for (let j = 0; j < shown; j += 1) {
-    parts.push((((seed + 1) * 37 + j * 29) % 256).toString(16).toUpperCase().padStart(2, "0"));
-  }
-  return parts.join(" ") + (totalLen > shown ? " …" : "");
-}
-
-function buildMockFrames(count: number): TraceFrame[] {
-  const frames: TraceFrame[] = [];
-  const lastByKey = new Map<string, number>();
-  const sessionByKey = new Map<string, number>();
-  let t = 3.9184;
-  let prev = t;
-  for (let i = 0; i < count; i += 1) {
-    t += 0.0006 + ((i * 7) % 13) * 0.00025;
-    let key: string;
-    let dir: "rx" | "tx";
-    let source: string;
-    let protocol: string;
-    let serviceMethod: string;
-    let name: string;
-    let type: string;
-    let len: number;
-    let hasSession = true;
-    if (i % 23 === 11) {
-      // Periodic SD offers on the wildcard service, cycling the ECUs.
-      const sd = FUSION_SERVICES[Math.floor(i / 23) % FUSION_SERVICES.length];
-      key = `sd:${sd.svc}`;
-      dir = sd.tx ? "tx" : "rx";
-      source = sd.src;
-      protocol = "SD";
-      serviceMethod = `${hex4(0xffff)}:${hex4(0x8100)}`;
-      name = `OfferService · ${sd.name}`;
-      type = "Offer";
-      len = 60;
-    } else if (i % 16 === 5) {
-      // gPTP Sync from the grandmaster.
-      key = "gptp";
-      dir = "rx";
-      source = "10.42.0.11";
-      protocol = "gPTP";
-      serviceMethod = "--";
-      name = "Sync · GM 10.42.0.11";
-      type = "Sync";
-      len = 44;
-      hasSession = false;
-    } else {
-      const s = FUSION_SERVICES[i % FUSION_SERVICES.length];
-      key = `${s.svc}:${s.method}`;
-      dir = s.tx ? "tx" : "rx";
-      source = s.src;
-      protocol = "SOME/IP";
-      serviceMethod = `${hex4(s.svc)}:${hex4(s.method)}`;
-      name = `${s.name}.${s.eventName}`;
-      type = "Event";
-      len = s.len + ((i * 3) % 4) * 8;
-    }
-    let session = "--";
-    if (hasSession) {
-      const n = (sessionByKey.get(key) ?? 0) + 1;
-      sessionByKey.set(key, n);
-      session = String(n);
-    }
-    const last = lastByKey.get(key);
-    lastByKey.set(key, t);
-    frames.push({
-      id: i,
-      time: t.toFixed(4),
-      dir,
-      source,
-      protocol,
-      serviceMethod,
-      name,
-      type,
-      session,
-      length: String(len),
-      payload: payloadPreview(i, len),
-      deltaGlobal: i === 0 ? "--" : (t - prev).toFixed(4),
-      deltaKey: last === undefined ? "--" : (t - last).toFixed(4),
-      channel: "1",
-    });
-    prev = t;
-  }
-  return frames;
-}
-
-const MOCK_FRAMES = buildMockFrames(150);
-
-/** Mock buffered-while-paused count; live streaming supplies the real one. */
-const PAUSED_BUFFERED = 128;
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -344,10 +217,56 @@ function rowContent(_index: number, f: TraceFrame): ReactNode {
 
 export function TraceView() {
   useViewLifecycle("trace", {});
+  const [capturing, setCapturing] = useState(false);
   const [paused, setPaused] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
-  const [frames, setFrames] = useState<TraceFrame[]>(() => MOCK_FRAMES);
+  const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
+  const frames = snap.rows;
 
+  // Live pipeline: subscribe to batches; restore exactly one backpressure
+  // credit per animation frame while a capture is active (SRS §1). Keep-alive
+  // views stay mounted, so the stream continues across navigation.
+  useEffect(() => {
+    if (!capturing) return;
+    const unsubscribe = onFrameBatch((batch) => traceStore.ingest(batch));
+    let raf = 0;
+    if (isDesktop()) {
+      const loop = (): void => {
+        ackFrames(1);
+        raf = requestAnimationFrame(loop);
+      };
+      raf = requestAnimationFrame(loop);
+    }
+    return () => {
+      unsubscribe();
+      cancelAnimationFrame(raf);
+    };
+  }, [capturing]);
+
+  const toggleCapture = (): void => {
+    if (capturing) {
+      setCapturing(false);
+      void stopCapture().catch(() => {
+        /* session already gone */
+      });
+    } else {
+      startCapture("normal")
+        .then(() => setCapturing(true))
+        .catch(() => {
+          /* already active elsewhere */
+          setCapturing(true);
+        });
+    }
+  };
+
+  const togglePause = (): void => {
+    setPaused((v) => {
+      traceStore.setPaused(!v);
+      return !v;
+    });
+  };
+
+  const captureLabel = capturing ? "Stop capture" : "Start capture · dev generator";
   const pauseLabel = paused ? "Resume" : "Pause";
   const catalogLabel = catalogLoaded ? "Unload service catalog" : "Load service catalog";
   const clearLabel = frames.length > 0 ? "Clear trace" : "Trace is already empty";
@@ -367,6 +286,20 @@ export function TraceView() {
           alignItems: "center",
         }}
       >
+        <Box sx={RAIL_SLOT_SX}>
+          <Tooltip title={captureLabel} placement="right">
+            <IconButton
+              size="small"
+              aria-label={captureLabel}
+              aria-pressed={capturing}
+              onClick={toggleCapture}
+              data-testid="trace-capture-btn"
+              sx={{ color: capturing ? "var(--success)" : "text.secondary" }}
+            >
+              {capturing ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        </Box>
         <Box sx={RAIL_SLOT_SX}>
           <Tooltip title="Display settings" placement="right">
             <IconButton
@@ -414,7 +347,7 @@ export function TraceView() {
               size="small"
               aria-label={pauseLabel}
               aria-pressed={paused}
-              onClick={() => setPaused((v) => !v)}
+              onClick={togglePause}
               data-testid="trace-pause-btn"
               sx={{ color: paused ? "var(--warning)" : "text.secondary" }}
             >
@@ -429,7 +362,7 @@ export function TraceView() {
                 size="small"
                 aria-label={clearLabel}
                 disabled={frames.length === 0}
-                onClick={() => setFrames([])}
+                onClick={() => traceStore.clear()}
                 data-testid="trace-clear-btn"
                 sx={{ color: "text.secondary" }}
               >
@@ -462,7 +395,7 @@ export function TraceView() {
             <Chip
               size="small"
               variant="outlined"
-              label={`Paused · ${PAUSED_BUFFERED} buffered`}
+              label={`Paused · ${snap.pausedBuffered} buffered`}
               data-testid="trace-paused-chip"
               sx={{
                 position: "absolute",
@@ -480,7 +413,7 @@ export function TraceView() {
         ) : null}
         {frames.length === 0 ? (
           <EmptyState
-            text="No frames captured — resume the trace or start a session"
+            text="No frames captured — start the capture or resume the trace"
             testId="trace-empty"
           />
         ) : (

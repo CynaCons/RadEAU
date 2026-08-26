@@ -41,7 +41,7 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Smoke test: `npm run tauri dev` launches without console errors
 - [x] Restructure documentation: PRD slimmed to product level; software specifications split into docs/SRS_<functionality>.md (visual_ui, graphing, streaming, protocols, ecu_netsim)
 
-### v0.1.1 — App shell + visual identity (current) (ACTIVE)
+### v0.1.1 — App shell + visual identity (COMPLETE)
 - [x] Write `docs/SRS_visual_ui.md`: complete visual identity contract — tokens, typography, shell geometry, per-view composition, motion policy, a11y, VU-001..026
 - [x] Theme token source of truth per SRS_visual_ui.md §2 (dark-only) generated into the MUI theme + CSS custom properties; raw-color-literal lint (VU-001, VU-002)
 - [x] Frameless window with custom titlebar via the thin desktop-API wrapper; UI loads in a plain browser (inert no-ops, valid unsubscribe handles, bounded startup-race retries)
@@ -49,13 +49,13 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Static view skeletons with representative mock data: Trace, Network, Signals, Recorder, Simulation, Automation, Settings (PRD §3.7)
 - [x] Smoke test: navigate all views with zero console errors
 
-### v0.1.2 — View visuals to parity (static + dev data)
-- [ ] Trace view visual: virtualized protocol-aware table (arrival + network time, endpoint, protocol, service/method, message type, session, return code), column filtering UI, pause/resume, expandable payload decode rows — mock frames
+### v0.1.2 — View visuals to parity (static + dev data) (ACTIVE)
+- [x] Trace view visual: virtualized protocol-aware table (arrival + network time, endpoint, protocol, service/method, message type, session, return code), column filtering UI, pause/resume, expandable payload decode rows — mock frames
 - [ ] Network view visual: topology panel (ECUs, offered services, subscription edges), SD state monitor with TTL countdowns, PTP status panel — mock states
 - [ ] Recorder, Simulation, Automation, Settings visual pass to parity with the established design
 - [ ] Per-view screenshot baseline (browser mode) committed as the visual-identity reference
-- [ ] Dev frame generator (PRD §3.8): seeded basic Ethernet/IPv4/UDP frames, configurable rate + bursts, streamed through the single batched event shape into the Trace view
-- [ ] Tune Trace under load with the dev generator: flush cadence, virtualization, filter responsiveness at high frame rates
+- [x] Dev frame generator (PRD §3.8): seeded basic Ethernet/IPv4/UDP frames, configurable rate + bursts, streamed through the single batched event shape into the Trace view — landed early with the full streaming slice: `radeau-proto` framing codecs (Ethernet II/IPv4/UDP build + bounded parse, round-trip vectors), Rust `devgen` source (seeded, idle/normal/stress/burst profiles up to 5,000 fps, compiled out of release builds), deadline cadence + 4,000-frame drop-oldest accumulator + 3-credit backpressure (PF-001..004 in SRS_streaming.md §0), columnar `frames:batch` event, browser-mode TS mirror of the generator, and the Trace view wired live via a bounded trace store (200k-row ring, adaptive 50/100 ms flush, real paused-buffered count). Mock frames removed.
+- [x] Tune Trace under load with the dev generator: flush cadence, virtualization, filter responsiveness at high frame rates — first pass done: E2E smoke harness (`scripts/e2e-smoke.mjs`, `npm run test:e2e`) launches the real binary hidden on a random CDP port + per-run profile and asserts shell visibility, trace navigation, live capture start, and rows streaming (27+ rendered); binary is windowed-subsystem in all profiles (no console pop); adaptive 50/100 ms flush verified under the 800 fps normal profile. Stress/burst-profile soak tuning remains for v0.3.1 perf-gate work.
 
 ## v0.2 — Graphing
 
@@ -81,7 +81,7 @@ a synthetic in-app signal source, zero network dependencies.
 - [ ] Three-stage hover throttling with snapped-index dedup
 - [ ] Window-auto autoscale: binary-search scan, 10% zero-snapped pad, deadband, single-entry memo; manual-locked mode
 - [ ] Single rAF loop reading refs; 16→33 ms budget at 200k; push dedup with recorded skip reasons; windowed fetch + empty-window recovery
-- [ ] E2E harness bootstrap: launch built binary, random CDP port, per-run profile, first smoke test
+- [ ] E2E harness bootstrap: launch built binary, random CDP port, per-run profile, first smoke test *(bootstrap landed early in v0.1.2 — `scripts/e2e-smoke.mjs`; remaining: move from dev-server mode to the built release binary)*
 - [ ] Requirements GR-/ZM-/AS-/LM- wired into E2E tests per the PRD §5.10 table
 
 ### v0.2.2 — Multi-pane + cursor sync
@@ -105,7 +105,7 @@ a synthetic in-app signal source, zero network dependencies.
 **Goal:** Wire-format codecs and the bounded core→UI streaming pipeline.
 
 ### v0.3.0 — Protocol codec core
-- [ ] Ethernet II / 802.1Q / IPv4 / UDP parse + build with valid checksums; bounded, panic-free on malformed input
+- [ ] Ethernet II / 802.1Q / IPv4 / UDP parse + build with valid checksums; bounded, panic-free on malformed input *(Ethernet II / IPv4 / UDP already landed early with the dev frame generator — remaining: 802.1Q)*
 - [ ] SOME/IP header codec + protocol classification (SOME/IP / SD / gPTP / ARP / other) per PRD §3.4 (SP-001..003)
 - [ ] SOME/IP-SD payload codec: flags, entries, options (wire format only)
 - [ ] gPTP message codec: Sync, Follow_Up, Pdelay set, Announce (PT-001 wire format)

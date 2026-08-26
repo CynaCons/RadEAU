@@ -3,8 +3,17 @@
 **Scope:** The core→UI streaming pipeline — batching, backpressure, consumer
 registry, ring buffers, UI-thread and native-core discipline, consolidated
 memory bounds, and CI performance gates. Product context: [PRD.md](../PRD.md)
-§4. ID prefix: `PF-` (requirements to be enumerated as the pipeline is built;
-the normative bounds and gates below are the source they will cite).
+§4. ID prefix: `PF-`; the normative bounds and gates below are the source the
+rows cite.
+
+## 0. Requirements
+
+| ID | Requirement | Status | Test |
+|---|---|---|---|
+| PF-001 | Exactly one batched frame event (`frames:batch`) exists on the frame path; payloads are columnar arrays of primitives, never row objects. | Implemented (dev generator path) | `cargo test --workspace` (`capture::tests`) |
+| PF-002 | Deadline-based batch cadence as a pure function `(elapsed, interval) → bool`, default 16 ms; emit ceilings hold for sparse and bursty arrivals. | Implemented | `capture::tests::cadence_*` |
+| PF-003 | Credit-based backpressure: emission pauses at 3 unacked batches; the UI acks exactly once per animation frame; credits reset on session start/stop. | Implemented | `capture::tests` + UI ack loop (`TraceView.tsx`) |
+| PF-004 | Bounded accumulator: 4,000 frames, drop oldest; cleared per session stop; an empty read never flushes a waiting batch. | Implemented | `capture::tests::accumulator_evicts_oldest_at_cap` |
 
 ---
 

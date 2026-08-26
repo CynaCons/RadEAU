@@ -8,6 +8,15 @@
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUNBUFFERED": "1"
       }
+    },
+    "powerspawn": {
+      "command": "python",
+      "args": ["-m", "powerspawn.mcp_server"],
+      "env": {
+        "PYTHONPATH": "C:\\dev\\public-repo",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUNBUFFERED": "1"
+      }
     }
   }
 }

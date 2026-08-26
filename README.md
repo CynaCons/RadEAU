@@ -35,7 +35,15 @@ npm run dev           # UI only, in a plain browser
 
 ```
 npm run ci            # typecheck + unit tests + color lint + ID lint + dependency check
+npm run test:e2e      # launches the real binary, asserts the UI is visible and streaming
 ```
+
+Note: a **debug** binary compiled by `npm run tauri dev` loads the vite dev
+server (`localhost:1420`) and shows *Page not found* without it. For a
+double-clickable executable use `npm run tauri build` (release, canonical) or
+`npm run build:debug` (debug profile with embedded assets, much faster —
+note it recompiles `target/debug/radeau.exe` into standalone mode until the
+next `tauri dev`).
 
 ## License
 
