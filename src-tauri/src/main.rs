@@ -7,8 +7,10 @@
 // automation/event surfaces and the E2E CDP harness instead of stdout.
 #![windows_subsystem = "windows"]
 
+// The dev frame generator is a runtime-gated development data source
+// (PRD §3.8) — compiled in every profile, activated only by an explicit
+// capture profile, and superseded as the default source by ecu-netsim (v0.4).
 mod capture;
-#[cfg(debug_assertions)]
 mod devgen;
 
 fn main() {
