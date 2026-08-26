@@ -12,6 +12,7 @@
 // capture profile, and superseded as the default source by ecu-netsim (v0.4).
 mod capture;
 mod devgen;
+mod simlink;
 
 fn main() {
     // Touch the shared protocol crate so the workspace dependency graph is

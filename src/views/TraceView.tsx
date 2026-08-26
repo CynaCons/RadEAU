@@ -1,4 +1,12 @@
-import { Badge, Box, Chip, IconButton, Tooltip } from "@mui/material";
+import {
+  Badge,
+  Box,
+  Chip,
+  IconButton,
+  MenuItem,
+  TextField,
+  Tooltip,
+} from "@mui/material";
 import type { SxProps } from "@mui/material";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
@@ -15,12 +23,28 @@ import type { TableComponents } from "react-virtuoso";
 import { EmptyState } from "../components/EmptyState";
 import { useViewLifecycle } from "../shell/viewLifecycle";
 import {
+  buildCaptureSource,
+  captureButtonLabel,
+  DEFAULT_SIM_ADDR,
+  linkChipColorVar,
+  linkChipLabel,
+  showLinkStatusChip,
+  showSimAddressField,
+  simSourceAvailable,
+  sourceControlsDisabled,
+  type CaptureLinkStatus,
+  type SourceKind,
+} from "../runtime/captureSource";
+import {
   ackFrames,
   isDesktop,
+  onCaptureLink,
+  onCaptureSession,
   onFrameBatch,
   startCapture,
   stopCapture,
 } from "../runtime/desktop";
+import { setSessionEndpoints } from "../runtime/frameModel";
 import { traceStore } from "../runtime/traceStore";
 import type { TraceFrame } from "../runtime/frameModel";
 
@@ -113,6 +137,24 @@ const TABLE_WRAP_SX: SxProps = {
   "& tbody tr:hover td": { backgroundColor: "var(--fill-subtle)" },
 };
 
+const SOURCE_BAR_SX: SxProps = {
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  px: 1,
+  py: 0.75,
+  minHeight: 40,
+  backgroundColor: "var(--surface-raised)",
+  borderBottom: "1px solid var(--border)",
+  flexShrink: 0,
+};
+
+const COMPACT_FIELD_SX: SxProps = {
+  minWidth: 150,
+  "& .MuiInputBase-root": { fontSize: 13, height: 32 },
+  "& .MuiInputLabel-root": { fontSize: 13 },
+};
+
 // ---------------------------------------------------------------------------
 // Table pieces (module-level: no per-render identity churn on the hot path)
 // ---------------------------------------------------------------------------
@@ -196,7 +238,7 @@ function rowContent(_index: number, f: TraceFrame): ReactNode {
       <td style={{ color: f.dir === "rx" ? "var(--info)" : "var(--accent-secondary)" }}>
         {f.dir === "rx" ? "Rx" : "Tx"}
       </td>
-      <td>{f.source}</td>
+      <td title={f.sourceTitle}>{f.source}</td>
       <td>{f.protocol}</td>
       <td style={MONO_RIGHT}>{f.serviceMethod}</td>
       <td>{f.name}</td>
@@ -217,11 +259,17 @@ function rowContent(_index: number, f: TraceFrame): ReactNode {
 
 export function TraceView() {
   useViewLifecycle("trace", {});
+  const desktop = isDesktop();
   const [capturing, setCapturing] = useState(false);
   const [paused, setPaused] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const [sourceKind, setSourceKind] = useState<SourceKind>("devgen");
+  const [simAddr, setSimAddr] = useState(DEFAULT_SIM_ADDR);
+  const [linkStatus, setLinkStatus] = useState<CaptureLinkStatus | null>(null);
   const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
   const frames = snap.rows;
+  const controlsLocked = sourceControlsDisabled(capturing);
+  const simOk = simSourceAvailable(desktop);
 
   // Live pipeline: subscribe to batches; restore exactly one backpressure
   // credit per animation frame while a capture is active (SRS §1). Keep-alive
@@ -243,17 +291,41 @@ export function TraceView() {
     };
   }, [capturing]);
 
+  useEffect(() => {
+    const offSession = onCaptureSession(() => {
+      /* endpoints applied inside desktop.ts */
+    });
+    const offLink = onCaptureLink((status) => setLinkStatus(status));
+    return () => {
+      offSession();
+      offLink();
+    };
+  }, []);
+
   const toggleCapture = (): void => {
     if (capturing) {
       setCapturing(false);
+      setLinkStatus(null);
+      setSessionEndpoints(null);
       void stopCapture().catch(() => {
         /* session already gone */
       });
     } else {
-      startCapture("normal")
+      const source = buildCaptureSource(sourceKind, { addr: simAddr });
+      if (source.kind === "sim") {
+        setLinkStatus({ state: "connecting", detail: source.addr });
+      } else {
+        setLinkStatus(null);
+      }
+      startCapture(source)
         .then(() => setCapturing(true))
         .catch(() => {
-          /* already active elsewhere */
+          // Browser rejects sim; a concurrent desktop session still counts as live.
+          if (source.kind === "sim" && !desktop) {
+            setCapturing(false);
+            setLinkStatus(null);
+            return;
+          }
           setCapturing(true);
         });
     }
@@ -266,10 +338,11 @@ export function TraceView() {
     });
   };
 
-  const captureLabel = capturing ? "Stop capture" : "Start capture · dev generator";
+  const captureLabel = captureButtonLabel(capturing, sourceKind);
   const pauseLabel = paused ? "Resume" : "Pause";
   const catalogLabel = catalogLoaded ? "Unload service catalog" : "Load service catalog";
   const clearLabel = frames.length > 0 ? "Clear trace" : "Trace is already empty";
+  const chipColor = linkStatus ? linkChipColorVar(linkStatus.state) : "var(--text-secondary)";
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
@@ -373,61 +446,134 @@ export function TraceView() {
         </Box>
       </Box>
 
-      {/* Table region */}
-      <Box sx={{ flex: 1, minWidth: 0, position: "relative", backgroundColor: "var(--surface-canvas)" }}>
-        {paused ? (
-          <>
-            {/* Paused tri-indicator, parts 2 and 3 (VU-015): warning rule along
-                the table's top edge + warning-outlined chip at its top-right. */}
-            <Box
-              data-testid="trace-paused-rule"
-              sx={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                height: "2px",
-                backgroundColor: "var(--warning)",
-                zIndex: 3,
-                pointerEvents: "none",
-              }}
-            />
-            <Chip
+      {/* Table region + compact source strip */}
+      <Box
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          position: "relative",
+          backgroundColor: "var(--surface-canvas)",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <Box sx={SOURCE_BAR_SX} data-testid="trace-source-bar">
+          <TextField
+            select
+            size="small"
+            label="Source"
+            value={sourceKind}
+            disabled={controlsLocked}
+            onChange={(e) => {
+              const next = e.target.value as SourceKind;
+              if (next === "sim" && !simOk) return;
+              setSourceKind(next);
+              if (next === "devgen") setLinkStatus(null);
+            }}
+            sx={COMPACT_FIELD_SX}
+            data-testid="trace-source-select"
+          >
+            <MenuItem value="devgen" data-testid="trace-source-option-devgen">
+              Dev generator
+            </MenuItem>
+            <MenuItem
+              value="sim"
+              disabled={!simOk}
+              title={simOk ? undefined : "desktop app only"}
+              data-testid="trace-source-option-sim"
+            >
+              Simulator link
+            </MenuItem>
+          </TextField>
+          {showSimAddressField(sourceKind) ? (
+            <TextField
               size="small"
-              variant="outlined"
-              label={`Paused · ${snap.pausedBuffered} buffered`}
-              data-testid="trace-paused-chip"
-              sx={{
-                position: "absolute",
-                top: 10,
-                right: 20,
-                zIndex: 3,
-                height: 22,
-                fontSize: 12,
-                color: "var(--warning)",
-                borderColor: "var(--warning)",
-                backgroundColor: "var(--surface-raised-2)",
+              label="Address"
+              value={simAddr}
+              disabled={controlsLocked}
+              onChange={(e) => setSimAddr(e.target.value)}
+              sx={{ ...COMPACT_FIELD_SX, minWidth: 180, flex: "0 1 220px" }}
+              inputProps={{
+                "aria-label": "Simulator monitor address",
+                style: { fontFamily: "var(--font-mono)", fontSize: 13 },
               }}
+              data-testid="trace-sim-addr"
             />
-          </>
-        ) : null}
-        {frames.length === 0 ? (
-          <EmptyState
-            text="No frames captured — start the capture or resume the trace"
-            testId="trace-empty"
-          />
-        ) : (
-          <Box sx={TABLE_WRAP_SX} data-testid="trace-table">
-            <TableVirtuoso
-              data={frames}
-              fixedItemHeight={32}
-              components={tableComponents}
-              fixedHeaderContent={renderFixedHeader}
-              itemContent={rowContent}
-              style={{ height: "100%" }}
+          ) : null}
+          {showLinkStatusChip(sourceKind) && linkStatus ? (
+            <Tooltip title={linkStatus.detail ?? linkChipLabel(linkStatus.state)}>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={linkChipLabel(linkStatus.state)}
+                data-testid="trace-link-chip"
+                sx={{
+                  height: 22,
+                  fontSize: 12,
+                  color: chipColor,
+                  borderColor: chipColor,
+                  backgroundColor: "var(--surface-raised-2)",
+                }}
+              />
+            </Tooltip>
+          ) : null}
+        </Box>
+
+        <Box sx={{ flex: 1, minHeight: 0, position: "relative" }}>
+          {paused ? (
+            <>
+              {/* Paused tri-indicator, parts 2 and 3 (VU-015): warning rule along
+                  the table's top edge + warning-outlined chip at its top-right. */}
+              <Box
+                data-testid="trace-paused-rule"
+                sx={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: "2px",
+                  backgroundColor: "var(--warning)",
+                  zIndex: 3,
+                  pointerEvents: "none",
+                }}
+              />
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`Paused · ${snap.pausedBuffered} buffered`}
+                data-testid="trace-paused-chip"
+                sx={{
+                  position: "absolute",
+                  top: 10,
+                  right: 20,
+                  zIndex: 3,
+                  height: 22,
+                  fontSize: 12,
+                  color: "var(--warning)",
+                  borderColor: "var(--warning)",
+                  backgroundColor: "var(--surface-raised-2)",
+                }}
+              />
+            </>
+          ) : null}
+          {frames.length === 0 ? (
+            <EmptyState
+              text="No frames captured — start the capture or resume the trace"
+              testId="trace-empty"
             />
-          </Box>
-        )}
+          ) : (
+            <Box sx={TABLE_WRAP_SX} data-testid="trace-table">
+              <TableVirtuoso
+                data={frames}
+                fixedItemHeight={32}
+                components={tableComponents}
+                fixedHeaderContent={renderFixedHeader}
+                itemContent={rowContent}
+                style={{ height: "100%" }}
+              />
+            </Box>
+          )}
+        </Box>
       </Box>
     </Box>
   );

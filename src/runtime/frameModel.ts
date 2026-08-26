@@ -10,6 +10,8 @@ export interface TraceFrame {
   time: string;
   dir: "rx" | "tx";
   source: string;
+  /** Tooltip / full identity (`name (ip)` when the session table is live). */
+  sourceTitle: string;
   protocol: string;
   serviceMethod: string;
   name: string;
@@ -55,7 +57,7 @@ export const MSG_EVENT = 0;
 export const MSG_OFFER = 1;
 export const MSG_SYNC = 2;
 
-/** Endpoint table shared with the generator (10.42.0.11..15). */
+/** Fallback endpoint table shared with the generator (10.42.0.11..15). */
 export const ENDPOINTS: readonly string[] = [
   "10.42.0.11",
   "10.42.0.12",
@@ -63,6 +65,43 @@ export const ENDPOINTS: readonly string[] = [
   "10.42.0.14",
   "10.42.0.15",
 ];
+
+/** Session endpoint row delivered by `capture:session`. */
+export interface SessionEndpoint {
+  name: string;
+  ip: string;
+}
+
+/**
+ * Live session endpoint table (from `capture:session`), or null to fall back
+ * to the static `ENDPOINTS` names-as-ips table used by the dev generator.
+ */
+let sessionEndpoints: readonly SessionEndpoint[] | null = null;
+
+export function setSessionEndpoints(endpoints: readonly SessionEndpoint[] | null): void {
+  sessionEndpoints = endpoints;
+}
+
+export function getSessionEndpoints(): readonly SessionEndpoint[] | null {
+  return sessionEndpoints;
+}
+
+/** Resolved display label + tooltip for a batch endpoint index. */
+export function resolveEndpoint(index: number): { label: string; title: string } {
+  const fromSession = sessionEndpoints?.[index];
+  if (fromSession) {
+    // Prefer the port name in the narrow Source column; IP rides in the tooltip.
+    if (fromSession.name && fromSession.name !== fromSession.ip) {
+      return {
+        label: fromSession.name,
+        title: `${fromSession.name} (${fromSession.ip})`,
+      };
+    }
+    return { label: fromSession.ip || fromSession.name, title: fromSession.ip || fromSession.name };
+  }
+  const fallback = ENDPOINTS[index] ?? `ep-${index}`;
+  return { label: fallback, title: fallback };
+}
 
 interface ServiceDef {
   svc: number;
@@ -119,7 +158,9 @@ export function projectRow(
   const idx = batch.i[k];
   const t = batch.t[k];
   const dir = batch.d[k] === 1 ? "rx" : "tx";
-  const source = ENDPOINTS[batch.s[k]] ?? `ep-${batch.s[k]}`;
+  const ep = resolveEndpoint(batch.s[k]);
+  const source = ep.label;
+  const sourceTitle = ep.title;
   const proto = batch.p[k];
   const sv = batch.sv[k];
   const m = batch.m[k];
@@ -155,6 +196,7 @@ export function projectRow(
     time: t.toFixed(4),
     dir,
     source,
+    sourceTitle,
     protocol,
     serviceMethod,
     name,

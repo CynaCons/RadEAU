@@ -238,10 +238,10 @@ release.
 - [x] radeau-proto codecs: SOME/IP header (SP-001..003 cut), minimal SOME/IP-SD payload (OfferService entries + TTL), gPTP Sync/FollowUp — bounded, panic-free, round-trip vectors [delegated: Codex]
 - [x] ecu-netsim minimal live mode: sensor-fusion cast (SRS_ecu_netsim §6) emitting cyclic SOME/IP events + SD offers + gPTP sync as fully serialized wire frames through a ns-stamped virtual switch, deterministic under --seed [delegated: Codex]
 - [x] ecu-netsim monitor link (TCP 5560, loopback bind): JSON handshake line (version, scenario, ports) then length-prefixed binary records {u32 len, u64 switch-ns, u16 port, u8 dir, frame bytes}; bounded outbound queue emitting gap records on overflow (SRS_ecu_netsim §8) [delegated: Codex]
-- [ ] Core frame sources behind one reader (minimal cut of v0.3.1): devgen source + simulator-link TCP source (connect, handshake, record stream, reconnect with backoff), capture_start takes a tagged SourceSpec [delegated: Grok]
-- [ ] Capture reader parses link records via radeau-proto (Ethernet/IPv4/UDP → SOME/IP | SD | gPTP classification) into the existing accumulator → frames:batch path; session endpoint table delivered to the UI via a capture:session event; link state via capture:link events [delegated: Grok]
-- [ ] UI: capture source picker (Dev generator | Simulator link 127.0.0.1:5560) + link status chip in the Trace toolbar; endpoint names resolved from the session table with static fallback; browser mode keeps the devgen mirror only [delegated: Grok]
-- [ ] Integration: E2E extends e2e-smoke to launch ecu-netsim, start a simulator-link capture, and assert live simulator frames rendered in Trace; README run recipe; smoke test [integration: Claude]
+- [x] Core frame sources behind one reader (minimal cut of v0.3.1): devgen source + simulator-link TCP source (connect, handshake, record stream, reconnect with backoff), capture_start takes a tagged SourceSpec [delegated: Grok]
+- [x] Capture reader parses link records via radeau-proto (Ethernet/IPv4/UDP → SOME/IP | SD | gPTP classification) into the existing accumulator → frames:batch path; session endpoint table delivered to the UI via a capture:session event; link state via capture:link events [delegated: Grok]
+- [x] UI: capture source picker (Dev generator | Simulator link 127.0.0.1:5560) + link status chip in the Trace toolbar; endpoint names resolved from the session table with static fallback; browser mode keeps the devgen mirror only [delegated: Grok]
+- [x] Integration: E2E extends e2e-smoke to launch ecu-netsim, start a simulator-link capture, and assert live simulator frames rendered in Trace; README run recipe; smoke test [integration: Claude]
 
 ## Backlog
 - [ ] CAN / CAN FD backend behind the channel abstraction + DBC schema pipeline (dual bit-walk decoders, shared vectors)

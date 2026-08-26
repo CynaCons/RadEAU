@@ -5,40 +5,46 @@ Diagram companion to the normative documents — [PRD.md](../PRD.md) §3–§4,
 [SRS_ecu_netsim.md](SRS_ecu_netsim.md). Where this page and those documents
 disagree, the documents win.
 
-## 1. Current data path (v0.1.x — as built)
+## 1. Current data path (v0.1.3 — as built)
 
-One pipeline slice exists end to end today. Its **source is the dev frame
-generator (PRD §3.8), wired directly into the capture module** — a deliberate
-temporary shortcut: the channel abstraction it will move behind arrives in
-v0.3.1. Everything downstream of the accumulator is already the real,
-spec-shaped pipeline (PF-001..004 implemented and tested).
+One pipeline slice exists end to end today, with **two selectable sources
+behind one capture session**: the dev frame generator (PRD §3.8) and the
+`ecu-netsim` monitor link — the first live cut of the unified pipeline. The
+full channel abstraction still arrives in v0.3.1; everything downstream of
+the accumulator is already the real, spec-shaped pipeline (PF-001..004
+implemented and tested).
 
 ```mermaid
 flowchart LR
-  subgraph core["Rust core (radeau.exe)"]
-    devgen["DevGen\nseeded SOME/IP · SD · gPTP\nsynthetic frames"]
-    emitter["devgen-emitter thread\nrate profile → frames"]
-    acc["Accumulator\n4,000 cap · drop oldest"]
-    cadence["Deadline cadence 16 ms\n+ credits (3 in flight)"]
-    devgen --> emitter --> acc --> cadence
+  subgraph netsim["ecu-netsim (live, minimal)"]
+    ecus["Simulated ECUs\ncamera · radar · lidar\ndynamics · fusion\nSOME/IP events · SD offers · gPTP"]
+    mon["Monitor link :5560\nJSON handshake +\nbinary records · gap records"]
+    ecus --> mon
   end
 
+  subgraph core["Rust core (radeau.exe)"]
+    devgen["DevGen source\nseeded synthetic frames"]
+    sim["Sim-link source\nTCP client · deframer\nclassify via radeau-proto\nreconnect + capture:link"]
+    acc["Accumulator\n4,000 cap · drop oldest"]
+    cadence["Deadline cadence 16 ms\n+ credits (3 in flight)"]
+    devgen --> acc
+    sim --> acc
+    acc --> cadence
+  end
+  mon -- "length-prefixed\nframe records" --> sim
+
   subgraph ui["WebView UI"]
-    store["traceStore\n(bounded row store)"]
-    trace["Trace view\n(virtualized table)"]
+    store["traceStore\n(bounded row store)\n+ session endpoint table"]
+    trace["Trace view\nsource picker · link chip\n(virtualized table)"]
     ack["1 ack / animation frame"]
     store --> trace
     trace -.-> ack
   end
 
   cadence -- "frames:batch\n(columnar event)" --> store
+  core -- "capture:session / capture:link" --> store
   ack -- "ack_frames" --> cadence
-  ui -- "capture_start / capture_stop" --> core
-
-  subgraph netsim["ecu-netsim (skeleton binary)"]
-    ns["NOT CONNECTED YET\narrives v0.4"]
-  end
-  netsim ~~~ core
+  ui -- "capture_start(SourceSpec) / capture_stop" --> core
 ```
 
 In a plain browser (no Tauri), a TypeScript mirror of the generator

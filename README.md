@@ -31,6 +31,24 @@ npm run tauri dev     # full app (Rust core + WebView)
 npm run dev           # UI only, in a plain browser
 ```
 
+## Running against the ECU network simulator
+
+The companion simulator streams a PTP-synchronized SOME/IP sensor-fusion
+network (camera, radar, lidar, dynamics, fusion) over a loopback monitor
+link that the app consumes live:
+
+```
+cargo run -p ecu-netsim          # monitor link on 127.0.0.1:5560
+npm run tauri dev                # in a second terminal
+```
+
+In the app: **Trace → Source: Simulator link → ▶** (the address field
+defaults to `127.0.0.1:5560`). Frames appear with their source node names
+from the link handshake; the chip next to the picker shows the link state.
+`--monitor-port` and `--seed` adjust the port and the deterministic traffic.
+The **Dev generator** source needs no external process and remains the
+default.
+
 ## Checks
 
 ```
