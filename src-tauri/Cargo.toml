@@ -1,0 +1,15 @@
+[package]
+name = "radeau"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RadEAU — automotive Ethernet network analysis (SOME/IP, SOME/IP-SD, gPTP)"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+radeau-proto = { path = "../crates/radeau-proto" }

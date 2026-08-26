@@ -1,0 +1,41 @@
+{
+  "name": "radeau",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "gen:tokens": "node scripts/gen-tokens-css.mjs",
+    "lint:colors": "node scripts/lint-colors.mjs",
+    "lint:ids": "node scripts/check-req-ids.mjs",
+    "lint:deps": "knip",
+    "ci": "npm run typecheck && npm run test && npm run gen:tokens -- --check && npm run lint:colors && npm run lint:ids && npm run lint:deps"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@fontsource/roboto": "^5.2.5",
+    "@fontsource/roboto-mono": "^5.2.5",
+    "@mui/icons-material": "^7.1.0",
+    "@mui/material": "^7.1.0",
+    "@tauri-apps/api": "^2.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-virtuoso": "^4.12.6"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "knip": "^5.50.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.1.3"
+  }
+}

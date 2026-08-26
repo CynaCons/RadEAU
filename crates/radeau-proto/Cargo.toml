@@ -1,0 +1,8 @@
+[package]
+name = "radeau-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared protocol codecs for RadEAU and ecu-netsim: Ethernet II / IPv4 / UDP, SOME/IP, SOME/IP-SD, gPTP (docs/SRS_protocols.md)"
+
+[dependencies]

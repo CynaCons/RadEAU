@@ -1,0 +1,9 @@
+[package]
+name = "ecu-netsim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "RadEAU's companion ECU network simulator: virtual switch, SOME/IP + SD runtimes, gPTP, sensor-fusion scenario (docs/SRS_ecu_netsim.md)"
+
+[dependencies]
+radeau-proto = { path = "../radeau-proto" }
