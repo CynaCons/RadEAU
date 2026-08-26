@@ -1,7 +1,9 @@
 //! Capture session + the streaming pipeline slice (SRS_streaming.md §1):
 //! deadline-batched emission, bounded drop-oldest accumulator, credit-based
 //! backpressure — one event shape (`frames:batch`) from the first commit.
-//! Dev-generator sessions are compiled out of release builds.
+//! The dev generator is the interim source, wired directly here until the
+//! channel abstraction lands (v0.3.1) and it becomes one backend among many
+//! behind the single capture reader (docs/ARCHITECTURE.md §2).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
