@@ -298,6 +298,14 @@ appearance: [docs/SRS_visual_ui.md](docs/SRS_visual_ui.md) §6.
   A companion command maps a chart position to the nearest recorded timestamp
   so users jump from analysis into replay. Both paths built in the first
   iteration.
+- **The core logs everything, as JSONL.** Beyond frame recordings, the core
+  writes a structured event log — session lifecycle, channel/backend
+  transitions, node attach/detach, drop and gap counters, fault events,
+  command errors — one JSON object per line through the same buffered-writer
+  discipline (256 KB / 2 s), size-capped with rotation. JSONL is the one
+  on-disk format for frames and events alike: append-only, streamable,
+  truncation-tolerant, greppable. (It is deliberately **not** the hot-path IPC
+  format — decision D5; JSON stays for command/control IPC only.)
 
 ## 7. ECU Network Simulator (`ecu-netsim`)
 
@@ -333,10 +341,33 @@ few failed attempts. The same posture governs the simulator's control channel.
 
 RadEAU's connection to `ecu-netsim` is a channel backend, not a special path:
 monitor + inject on 5560 through the channel abstraction, scenario control on
-5561 through the simulator control client. External tools may attach their own
-nodes to the simulator; RadEAU observes them like any other traffic.
+5561 through the simulator control client. External tools may also attach nodes
+directly to the simulator; RadEAU observes them like any other traffic.
 
-### 8.3 Script runner
+### 8.3 Node plane (frame-level API, TCP 5562)
+
+External processes act as **additional network nodes through RadEAU's core** —
+independent of which channel backend is active, so a node written against this
+API works identically over the simulator link, a future physical Ethernet
+interface, or replay. (This surface subsumes the earlier SIL API role.)
+
+- Version-checked handshake; each node registers a **node identity** (id +
+  display name).
+- A node **subscribes** to receive live frames and **injects** its own; injected
+  frames are tagged `remote` + originating node id and are routed exactly like
+  channel traffic — out the active channel's TX when one is up, into the
+  pipeline always.
+- **Fan-out without echo:** every frame is distributed to all sinks — UI,
+  recording, automation subscriptions, and every attached node — **except the
+  node that originated it**. Origin tags carry through the pipeline; for
+  backends whose physical loopback re-delivers transmitted frames, a
+  short-lived **injection-signature window** re-tags the loopback with its true
+  origin and suppresses the echo (otherwise two nodes amplify each other).
+- Bounded per-node outbound queues with drop counters; node cap; gated on an
+  active session with a clear rejection otherwise. Same security posture as
+  §8.1.
+
+### 8.4 Script runner
 
 Spawns Python with output buffering disabled; stdout/stderr stream as
 rate-limited line events; termination reaps the child and still emits

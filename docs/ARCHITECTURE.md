@@ -83,11 +83,17 @@ flowchart LR
   end
   sources --> reader
 
-  subgraph surfaces["Remote surfaces (the automation / SIL plane)"]
+  replay["Replay worker\npaced JSONL recording\n(source label: replay)"] --> reader
+  log["Core event log\nJSONL · rotated"]
+  reader --> log
+
+  subgraph surfaces["Remote surfaces (the automation plane)"]
     auto["Automation JSON-RPC :5555\nUI-verb parity · ghost user\nsignal subscriptions"]
+    nodes["Node plane :5562\nexternal nodes inject/receive\norigin-tagged · no echo\nto the originator"]
     runner["Script runner\n(Python, observes via :5555)"]
   end
   core <--> auto
+  nodes <--> reader
   runner --> auto
 
   subgraph ui["WebView UI"]
@@ -107,8 +113,16 @@ Key consequences:
   emit accumulator. There is no second path for frames into the system;
   injected/transmitted frames enter through the channel `write` and come back
   as observed traffic like everything else.
+- **Four frame-source classes, one pipeline**: channel RX (simulator or a real
+  NIC), replay files, the UI's Simulation view, and external nodes on the node
+  plane (:5562). Every frame carries a source label + originating node id
+  (PRD §3.4) shown in Trace; fan-out reaches every sink **except the frame's
+  originator** — Node A never receives what Node A sent (PRD §8.3).
 - **Replay** substitutes the reader's source with the paced recording worker but
   reuses the same batched/backpressured emit path (`replay` source label).
+- **Everything on disk is JSONL** — frame recordings and the core event log
+  alike; the hot-path IPC batch is deliberately not JSON-encoded per frame
+  (decision D5).
 
 ## 3. Automation and SIL layering (v0.6–v0.7 surfaces)
 

@@ -183,6 +183,7 @@ bulk analysis.
 - [ ] Replay worker: absolute-schedule pacing, 50 ms sleep cap, responsive control channel, same batched path with `replay` label
 - [ ] Seek rebuilds RX snapshot without emitting; 10 Hz position events, immediate on seek
 - [ ] Seeded scenario-recording fixtures via `ecu-netsim` accelerated mode (sine/ramp/step/noise profiles + large-file variant)
+- [ ] Core event log (JSONL): session lifecycle, channel transitions, node attach/detach, drop/gap counters, faults — buffered writer, size-capped rotation (PRD §6)
 
 ### v0.6.1 — Analysis mode
 - [ ] Bulk-analysis command: one blocking-pool pass, per-signal parallel timestamp/value arrays, irregular axes
@@ -204,6 +205,14 @@ bulk analysis.
 - [ ] External bind opt-in requiring token + allowlist, rejected at startup otherwise (also governs the simulator control channel)
 - [ ] Hot-path fan-out discipline: preallocated serialization, coalesced writes, bounded queues (PRD §4.6)
 - [ ] Script runner: unbuffered Python spawn, rate-limited output events, clean reaping
+
+### v0.7.2 — Node plane (frame-level API)
+**Goal:** External nodes attach to the core (TCP 5562), inject and receive frames over any channel backend, with origin-tagged fan-out and no echo to the originator (PRD §8.3).
+- [ ] Node plane server (TCP 5562): version handshake, node identity registry, subscribe + inject with `remote` + node-id tagging routed like channel traffic
+- [ ] Fan-out without echo: origin-tag routing to every sink except the originator; injection-signature window re-tags physical loopbacks — pure module with unit tests
+- [ ] Bounded per-node outbound queues with drop counters; node cap; active-session gating with clear rejection; §8.1 security posture on external bind
+- [ ] Source attribution end to end: Trace shows the originating node per frame; Network view node registry reflects live attach/detach
+- [ ] E2E: two API nodes exchange frames through the core with zero echo, over both the loopback and simulator-link backends
 
 ## v0.8 — Hardening and release
 
