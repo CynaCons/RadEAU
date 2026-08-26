@@ -1,4 +1,5 @@
 import { Box, Dialog, DialogContent, Typography } from "@mui/material";
+import radeauMark from "../assets/radeau-mark.png";
 
 /**
  * About modal (SRS_visual_ui.md §4.4): product mark, name, one-line
@@ -10,17 +11,7 @@ export function AboutDialog(props: { open: boolean; onClose: () => void }) {
   return (
     <Dialog open={props.open} onClose={props.onClose} maxWidth="xs" data-testid="about-dialog">
       <DialogContent sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, p: 4 }}>
-        <svg viewBox="0 0 96 96" width="64" height="64" aria-hidden="true">
-          <circle cx="48" cy="48" r="42" fill="none" stroke="var(--accent-primary)" strokeWidth="5" />
-          <polyline
-            points="16,48 34,48 42,26 54,70 62,48 80,48"
-            fill="none"
-            stroke="var(--info)"
-            strokeWidth="5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <Box component="img" src={radeauMark} alt="" aria-hidden sx={{ width: 64, height: 64 }} />
         <Typography sx={{ fontSize: 20, fontWeight: 500 }}>RadEAU</Typography>
         <Typography sx={{ fontSize: 14, color: "text.secondary", textAlign: "center" }}>
           High-performance automotive Ethernet network analysis — SOME/IP, SOME/IP-SD, gPTP.

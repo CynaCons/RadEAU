@@ -16,6 +16,7 @@ import {
   onMaximizedChange,
   toggleMaximizeWindow,
 } from "../runtime/desktop";
+import radeauMark from "../assets/radeau-mark.png";
 
 /** Interactive app-bar children opt out of the window drag region (VU-008). */
 const noDrag = {
@@ -78,19 +79,13 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
         </IconButton>
       </Tooltip>
 
-      <Box sx={{ height: 40, width: 40, mr: "12px", pointerEvents: "none", display: "flex" }}>
-        <svg viewBox="0 0 96 96" width="40" height="40" aria-hidden="true">
-          <circle cx="48" cy="48" r="42" fill="none" stroke="var(--accent-primary)" strokeWidth="6" />
-          <polyline
-            points="16,48 34,48 42,26 54,70 62,48 80,48"
-            fill="none"
-            stroke="var(--info)"
-            strokeWidth="6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </Box>
+      <Box
+        component="img"
+        src={radeauMark}
+        alt=""
+        aria-hidden
+        sx={{ height: 40, width: 40, mr: "12px", pointerEvents: "none" }}
+      />
 
       <Typography noWrap sx={{ fontSize: 20, fontWeight: 500, mr: "16px" }}>
         RadEAU
