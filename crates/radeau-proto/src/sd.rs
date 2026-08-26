@@ -39,17 +39,123 @@ pub struct SdMessage {
 /// Parse an SD message from a SOME/IP payload (the bytes `someip::parse`
 /// returns for service 0xFFFF / method 0x8100).
 pub fn parse(payload: &[u8]) -> Result<SdMessage, ParseError> {
-    // Implemented in this iteration (Codex-owned): flags u8 + reserved[3] +
-    // entries-length u32 + 16-byte entries + options-length u32 + skipped
-    // options. Truncated for short input, Malformed for inconsistent lengths.
-    let _ = payload;
-    Err(ParseError::Malformed)
+    const PREFIX_LEN: usize = 8;
+    const ENTRY_LEN: usize = 16;
+    let prefix = payload.get(..PREFIX_LEN).ok_or(ParseError::Truncated)?;
+    let entries_len = u32::from_be_bytes(prefix[4..8].try_into().expect("exact slice")) as usize;
+    if entries_len % ENTRY_LEN != 0 {
+        return Err(ParseError::Malformed);
+    }
+    let entries_end = PREFIX_LEN
+        .checked_add(entries_len)
+        .ok_or(ParseError::Malformed)?;
+    let options_len_end = entries_end.checked_add(4).ok_or(ParseError::Malformed)?;
+    if payload.len() < options_len_end {
+        return Err(ParseError::Truncated);
+    }
+    let options_len = u32::from_be_bytes(
+        payload[entries_end..options_len_end]
+            .try_into()
+            .expect("exact slice"),
+    ) as usize;
+    let message_end = options_len_end
+        .checked_add(options_len)
+        .ok_or(ParseError::Malformed)?;
+    if payload.len() < message_end {
+        return Err(ParseError::Truncated);
+    }
+
+    let mut entries = Vec::with_capacity(entries_len / ENTRY_LEN);
+    for entry in payload[PREFIX_LEN..entries_end].chunks_exact(ENTRY_LEN) {
+        if entry[0] != ENTRY_FIND_SERVICE && entry[0] != ENTRY_OFFER_SERVICE {
+            return Err(ParseError::Malformed);
+        }
+        entries.push(SdEntry {
+            entry_type: entry[0],
+            service_id: u16::from_be_bytes([entry[4], entry[5]]),
+            instance_id: u16::from_be_bytes([entry[6], entry[7]]),
+            major_version: entry[8],
+            ttl: u32::from_be_bytes([0, entry[9], entry[10], entry[11]]),
+            minor_version: u32::from_be_bytes([entry[12], entry[13], entry[14], entry[15]]),
+        });
+    }
+    Ok(SdMessage {
+        flags: prefix[0],
+        entries,
+    })
 }
 
 /// Serialize an SD message as a SOME/IP payload (entries only, empty options
 /// array). The result goes through `someip::build` with the SD identity.
 pub fn build(msg: &SdMessage, out: &mut Vec<u8>) {
-    // Implemented in this iteration (Codex-owned).
-    let _ = (msg, out);
-    unimplemented!("sd::build lands with the v0.1.3 codec wave");
+    out.push(msg.flags);
+    out.extend_from_slice(&[0, 0, 0]);
+    out.extend_from_slice(&((msg.entries.len() * 16) as u32).to_be_bytes());
+    for entry in &msg.entries {
+        out.push(entry.entry_type);
+        out.extend_from_slice(&[0, 0, 0]); // option indices and option count
+        out.extend_from_slice(&entry.service_id.to_be_bytes());
+        out.extend_from_slice(&entry.instance_id.to_be_bytes());
+        out.push(entry.major_version);
+        let ttl = entry.ttl & 0x00ff_ffff;
+        out.extend_from_slice(&[(ttl >> 16) as u8, (ttl >> 8) as u8, ttl as u8]);
+        out.extend_from_slice(&entry.minor_version.to_be_bytes());
+    }
+    out.extend_from_slice(&0u32.to_be_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> SdMessage {
+        SdMessage {
+            flags: 0xc0,
+            entries: vec![SdEntry {
+                entry_type: ENTRY_OFFER_SERVICE,
+                service_id: 0x1101,
+                instance_id: 1,
+                major_version: 1,
+                ttl: 3,
+                minor_version: 0,
+            }],
+        }
+    }
+
+    #[test]
+    fn known_vector_byte_exact() {
+        let mut wire = Vec::new();
+        build(&sample(), &mut wire);
+        assert_eq!(
+            wire,
+            [
+                0xc0, 0, 0, 0, 0, 0, 0, 16, 1, 0, 0, 0, 0x11, 1, 0, 1, 1, 0, 0, 3, 0, 0, 0, 0, 0,
+                0, 0, 0
+            ]
+        );
+    }
+
+    #[test]
+    fn round_trip() {
+        let mut wire = Vec::new();
+        build(&sample(), &mut wire);
+        assert_eq!(parse(&wire).unwrap(), sample());
+    }
+
+    #[test]
+    fn every_short_prefix_is_truncated() {
+        let mut wire = Vec::new();
+        build(&sample(), &mut wire);
+        for n in 0..wire.len() {
+            assert_eq!(parse(&wire[..n]).unwrap_err(), ParseError::Truncated);
+        }
+    }
+
+    #[test]
+    fn malformed_lengths_rejected() {
+        let mut wire = Vec::new();
+        build(&sample(), &mut wire);
+        wire[4..8].copy_from_slice(&15u32.to_be_bytes());
+        assert_eq!(parse(&wire).unwrap_err(), ParseError::Malformed);
+    }
 }
