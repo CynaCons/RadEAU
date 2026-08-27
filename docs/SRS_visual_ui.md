@@ -367,8 +367,13 @@ Two modes share the table. **Sequential** appends chronologically and
 auto-follows the tail while scrolled to the bottom. **Fixed** collapses to one
 row per (service, method) key — pinned first, then key ascending — rewriting
 rows in place, so the per-key delta becomes a live cycle-time readout and a pin
-column appears. Mode, history window and column order live in the settings
-panel rather than on screen, being set once per session.
+column appears. Rows without a service identity key by (protocol, source
+node) instead — SD offers and gPTP messages keep one row per emitting node
+rather than fighting over a single row. **Fixed is the default mode**: the
+steady-state picture of the network is the first thing an operator needs, as
+with a CAN trace keyed by arbitration id. Mode, history window and column
+order live in the settings panel rather than on screen, being set once per
+session.
 
 Service and name columns offer filtering through a header glyph that tints
 `accent-primary` while active, opening a 250 px popover: search field, a

@@ -569,6 +569,9 @@ export function TraceView() {
                 components={tableComponents}
                 fixedHeaderContent={renderFixedHeader}
                 itemContent={rowContent}
+                // Sequential mode auto-follows the tail while scrolled to the
+                // bottom (SRS_visual_ui §5.2); scrolling up detaches.
+                followOutput="auto"
                 style={{ height: "100%" }}
               />
             </Box>

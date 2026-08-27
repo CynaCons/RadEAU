@@ -285,12 +285,15 @@ const SIM_STATE_PROBE = `(() => {
   const table = q("trace-table");
   const chip = q("trace-link-chip");
   const cells = table ? [...table.querySelectorAll("tbody tr td")] : [];
+  const text = cells.map((c) => c.textContent || "");
   const names = ["camera", "radar", "lidar", "dynamics", "fusion"];
   return {
     rowCount: table ? table.querySelectorAll("tbody tr").length : 0,
     chipLabel: chip ? chip.textContent : null,
-    endpointNameSeen: cells.some((c) =>
-      names.some((n) => (c.textContent || "").includes(n))),
+    endpointNameSeen: text.some((t) => names.some((n) => t.includes(n))),
+    // All three simulated traffic classes must actually render as rows.
+    protocolsSeen: ["SOME/IP", "SD", "gPTP"].filter((p) =>
+      text.some((t) => t === p)),
   };
 })()`;
 
@@ -363,16 +366,33 @@ async function main() {
       fail("could not clear devgen rows before the sim phase");
     if (!(await session.eval(clickProbe("trace-capture-btn"))))
       fail("could not start the sim capture");
+    // Protocol classes accumulate across polls: the visible window is a
+    // moving sample of the stream (sequential mode follows the tail), so all
+    // three classes must *render* at some point, not share one snapshot.
+    let lastSim = null;
+    const protocolsRendered = new Set();
     const sim = await waitFor(async () => {
       const s = await session.eval(SIM_STATE_PROBE);
-      return s.rowCount > 0 && s.chipLabel === "Connected" && s.endpointNameSeen
+      lastSim = s;
+      for (const p of s.protocolsSeen) protocolsRendered.add(p);
+      return s.rowCount > 0 &&
+        s.chipLabel === "Connected" &&
+        s.endpointNameSeen &&
+        protocolsRendered.size === 3
         ? s
         : null;
-    }, 20_000, "simulator frames + Connected chip + endpoint names in Trace");
+    }, 20_000, "simulator frames (SOME/IP + SD + gPTP) + Connected chip + endpoint names in Trace").catch((err) => {
+      console.error(
+        "last sim state:", JSON.stringify(lastSim),
+        "protocols rendered so far:", [...protocolsRendered].join(", ") || "none",
+      );
+      throw err;
+    });
     console.log("sim:", JSON.stringify(sim));
     console.log(
       `PASS — devgen ${trace.rowCount} rows; simulator link ${sim.rowCount} rows, ` +
-        `chip "${sim.chipLabel}", endpoint names rendered`,
+        `chip "${sim.chipLabel}", protocols [${[...protocolsRendered].join(", ")}], ` +
+        `endpoint names rendered`,
     );
   } catch (err) {
     failures += 1;
