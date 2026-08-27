@@ -51,7 +51,7 @@ and every view — reproduced with static mock data before any protocol work.
 
 ### v0.1.2 — View visuals to parity (static + dev data) (current) (ACTIVE)
 - [x] Trace view visual: virtualized protocol-aware table (arrival + network time, endpoint, protocol, service/method, message type, session, return code), column filtering UI, pause/resume, expandable payload decode rows — mock frames
-- [ ] Network view visual: topology panel (ECUs, offered services, subscription edges), SD state monitor with TTL countdowns, PTP status panel — mock states
+- [ ] Network view: Connection panel with TRUE data only (active source, link state, counters from the session store; attached node-plane clients with session states once §8.3 lands) + honest empty states for topology/SD/PTP panels until live decode feeds them (v0.5) — no mock states (SRS_visual_ui §1.5)
 - [ ] Recorder, Simulation, Automation, Settings visual pass to parity with the established design
 - [ ] Per-view screenshot baseline (browser mode) committed as the visual-identity reference
 - [x] Dev frame generator (PRD §3.8): seeded basic Ethernet/IPv4/UDP frames, configurable rate + bursts, streamed through the single batched event shape into the Trace view — landed early with the full streaming slice: `radeau-proto` framing codecs (Ethernet II/IPv4/UDP build + bounded parse, round-trip vectors), Rust `devgen` source (seeded, idle/normal/stress/burst profiles up to 5,000 fps, compiled out of release builds), deadline cadence + 4,000-frame drop-oldest accumulator + 3-credit backpressure (PF-001..004 in SRS_streaming.md §0), columnar `frames:batch` event, browser-mode TS mirror of the generator, and the Trace view wired live via a bounded trace store (200k-row ring, adaptive 50/100 ms flush, real paused-buffered count). Mock frames removed.
@@ -164,6 +164,7 @@ traffic wired into the already-built views.
 - [ ] UI payload decoder: plain-number path ≤ 53 bits, identity-keyed per-(service,method) caches, zero-alloc-when-warm assertion
 - [ ] Shared payload vector corpus; both decoders green against it
 - [ ] Synthetic catalog generator committed as a fixture generator
+- [ ] AUTOSAR Ethernet Communication Extract: author the sensor-fusion network as a real ARXML extract (SOME/IP service-interface deployment, sockets, PDU triggering) checked into the repo; importer maps it into the same in-memory catalog model as native YAML; ecu-netsim and the app consume one shared definition
 
 ### v0.5.1 — Live wiring: trace, network, signals
 - [ ] Frame history ring: 100,000 cap + 256 MB payload byte budget + time-window eviction on 5 s timer; background consumer
@@ -215,6 +216,7 @@ bulk analysis.
 - [ ] Bounded per-node outbound queues with drop counters; node cap; active-session gating with clear rejection; §8.1 security posture on external bind
 - [ ] Source attribution end to end: Trace shows the originating node per frame; Network view node registry reflects live attach/detach
 - [ ] E2E: two API nodes exchange frames through the core with zero echo, over both the loopback and simulator-link backends
+- [ ] Node session state machine (PRD §8.3): hello/welcome/subscribe/bye JSON control messages, handshake timeout, CONNECTED→DECLARED→ACTIVE→CLOSED with REJECTED reasons; transitions as core events (JSONL + UI stream) feeding the Network connectivity panel
 
 ## v0.8 — Hardening and release
 

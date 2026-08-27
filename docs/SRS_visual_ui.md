@@ -30,6 +30,11 @@ principles follow; every rule below applies one of them.
 4. **Density over comfort.** Toolbars are 48 px, not 64. Rows are compact.
    Controls are icon-only wherever the icon is unambiguous, the label carried by
    a tooltip. Screen budget goes to rows and pixels of plot.
+5. **Only true information.** Every dynamic value on screen derives from real
+   core data — live traffic, real session state, real link state. No view
+   fabricates activity: where the data source does not exist yet, the view
+   shows an honest empty state naming what it is waiting for, never a mock
+   that looks alive. Static layout scaffolding is fine; fake numbers are not.
 
 ## 2. Color tokens
 
@@ -473,11 +478,17 @@ that cannot change while a session runs is disabled with a tooltip stating why
 A 24 px-padded column of raised panels with 16 px gaps, the last growing and
 scrolling — the same panel language as Settings/Recorder. Composition:
 
-- **Connection panel:** the simulator/capture link — connection switches, small
-  address fields (160 px host, 96 px port) and connect/disconnect buttons above
-  a wrapping row of small status chips reporting link state, port and counters;
-  errors appear as inline alerts beneath the row that caused them, not as
-  toasts.
+- **Connection panel:** everything the core is connected to, live. The active
+  capture source (interface kind, address, link state per the session store)
+  with a wrapping row of small status chips reporting link state, port and
+  counters; errors appear as inline alerts beneath the row that caused them,
+  not as toasts. Beneath it, one row per **attached external node** (node
+  plane, PRD §8.3): id, display name, and its session state
+  (CONNECTED / DECLARED / ACTIVE / REJECTED / CLOSED, with the reason on the
+  terminal states) as a fixed-width state chip, plus per-node injected/received
+  counters and drop count. Automation clients (§8.1) list the same way when
+  that surface lands. Empty states name what is absent ("no external nodes
+  attached").
 - **Topology panel:** ECU nodes with offered services and subscription edges,
   derived passively from observed SD traffic. Node cards carry name over
   address with trailing chips — a filled state chip at fixed 92 px width and

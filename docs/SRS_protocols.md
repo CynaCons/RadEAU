@@ -53,8 +53,17 @@ expectations, and payload layouts with scaling and units. It is parsed once at
 load into precomputed lookups — (service) → name, (service, method) → payload
 schema, eventgroup maps, value-table index — built in one pass. An atomic
 catalog version counter bumps per load; downstream caches compare and rebuild
-without locking the read path. ARXML/FIBEX import is a backlog importer that
-targets this same in-memory model.
+without locking the read path.
+
+**AUTOSAR Ethernet Communication Extract (first-class import).** The
+sensor-fusion network ships as a real ARXML communication extract — SOME/IP
+service-interface deployment, socket-address and socket-connection
+configuration, PDU triggering — checked into the repo as the reference
+definition of the simulated network. The ARXML importer maps it into the same
+in-memory catalog model that native YAML targets, so downstream consumers
+(decoders, netsim, Network view) cannot tell which format loaded the catalog.
+Import diagnostics are per-element (skipped-with-reason), never
+all-or-nothing. FIBEX remains a backlog importer against the same model.
 
 ## 5. Payload decode and the dual-decoder contract
 

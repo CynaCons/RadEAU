@@ -369,6 +369,31 @@ interface, or replay. (This surface subsumes the earlier SIL API role.)
   active session with a clear rejection otherwise. Same security posture as
   §8.1.
 
+**Node session state machine.** Every attached node advances through an
+explicit, observable state machine — the state exists first for the operator
+(§6 connectivity panel shows it per node), second for protocol robustness:
+
+```
+CONNECTED ──hello──▶ DECLARED ──subscribe──▶ ACTIVE ──bye / EOF──▶ CLOSED
+    │                    │                      │
+    │ timeout /          │ timeout              │ protocol violation,
+    │ bad version        ▼                      │ queue-overflow policy
+    └──────────────▶ REJECTED ◀────────────────┘
+```
+
+- `CONNECTED`: TCP accepted; the node must send `hello` (JSON control message:
+  protocol version, node id, display name) within the handshake timeout — a
+  silent peer can never hold a half-open slot.
+- `DECLARED`: identity validated, `welcome` returned (session info, endpoint
+  table, capabilities). The node may configure filters, then `subscribe`.
+- `ACTIVE`: receiving origin-tagged fan-out; may inject while a session runs
+  (injection outside a running session is an error reply, not a drop).
+- `REJECTED` / `CLOSED`: terminal; the reason (version mismatch, timeout,
+  violation) is part of the state, displayed and logged, never silent.
+
+State transitions are core events (JSONL-logged, §6) and stream to the UI so
+the connectivity panel reflects every node's state live.
+
 ### 8.4 Script runner
 
 Spawns Python with output buffering disabled; stdout/stderr stream as
