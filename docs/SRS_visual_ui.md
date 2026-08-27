@@ -196,6 +196,15 @@ Contents left to right:
 | 8 | Run control | PlayArrow / Stop | Filled: `success` live start, `info` replay start, `error` running; icon and label both change; 60% opacity disabled |
 | 9 | Window controls | Remove / CropSquare / Close | As §4.1 |
 
+**The run control owns the session.** Starting it is the one trigger that
+begins reading frames from the selected interface and processing them; stopping
+it halts the session everywhere. While stopped, nothing anywhere in the app
+displays or updates dynamically — no view animates, streams, or refreshes.
+View-local start/stop affordances (the Trace rail's capture button) are
+mirrors of this same session state, never independent sessions. The selected
+interface (dev generator, simulator link, later a physical NIC) is session
+configuration, editable only while stopped.
+
 ### 4.4 Navigation rail
 
 A permanent left drawer, 65 px collapsed and 240 px expanded, `surface-raised`,
