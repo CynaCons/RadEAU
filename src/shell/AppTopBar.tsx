@@ -8,7 +8,7 @@ import RemoveIcon from "@mui/icons-material/Remove";
 import CropSquareIcon from "@mui/icons-material/CropSquare";
 import FilterNoneIcon from "@mui/icons-material/FilterNone";
 import CloseIcon from "@mui/icons-material/Close";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   closeWindow,
@@ -16,6 +16,7 @@ import {
   onMaximizedChange,
   toggleMaximizeWindow,
 } from "../runtime/desktop";
+import { sessionStore } from "../runtime/sessionStore";
 import radeauMark from "../assets/radeau-mark.png";
 
 /** Interactive app-bar children opt out of the window drag region (VU-008). */
@@ -25,15 +26,16 @@ const noDrag = {
 
 /**
  * App bar (SRS_visual_ui.md §4.3): 48 px, surface-raised, 1 px bottom border,
- * a window drag region with the specified nine-control inventory. Run/record
- * state is mock until the core session lands.
+ * a window drag region with the specified nine-control inventory. The run
+ * control owns the capture session via sessionStore.
  */
 export function AppTopBar(props: { onToggleRail: () => void }) {
   const [autosave, setAutosave] = useState(true);
   const [sessionTitle, setSessionTitle] = useState("");
   const [recordArmed, setRecordArmed] = useState(false);
-  const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const running = session.running;
 
   useEffect(() => onMaximizedChange(setMaximized), []);
 
@@ -152,7 +154,9 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
         size="small"
         color={running ? "error" : "success"}
         startIcon={running ? <StopIcon /> : <PlayArrowIcon />}
-        onClick={() => setRunning((v) => !v)}
+        onClick={() => {
+          void sessionStore.toggle();
+        }}
         data-testid="appbar-run-btn"
         sx={{ mr: 2, minWidth: 88 }}
       >

@@ -179,4 +179,25 @@ describe("TraceStore", () => {
     expect(row.type).toBe("Offer");
     store.dispose();
   });
+
+  it("computes per-node cycle time for SD / gPTP keys", () => {
+    const store = new TraceStore();
+    store.ingest(
+      makeBatch(0, [
+        { idx: 1, t: 1.0, p: PROTO_SD, s: 0, sv: 0xffff, m: 0x8100, ty: 1 },
+        { idx: 2, t: 1.1, p: PROTO_SD, s: 1, sv: 0xffff, m: 0x8100, ty: 1 },
+        { idx: 3, t: 1.5, p: PROTO_SD, s: 0, sv: 0xffff, m: 0x8100, ty: 1 },
+        { idx: 4, t: 2.0, p: PROTO_GPTP, s: 2 },
+        { idx: 5, t: 2.25, p: PROTO_GPTP, s: 2 },
+      ]),
+    );
+    vi.advanceTimersByTime(100);
+    const rows = store.getSnapshot().rows;
+    expect(rows[0].deltaKey).toBe("--");
+    expect(rows[1].deltaKey).toBe("--"); // different source node
+    expect(rows[2].deltaKey).toBe("0.5000"); // same SD node as rows[0]
+    expect(rows[3].deltaKey).toBe("--");
+    expect(rows[4].deltaKey).toBe("0.2500");
+    store.dispose();
+  });
 });

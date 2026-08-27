@@ -249,12 +249,39 @@ function clickProbe(testId) {
 const TRACE_STATE_PROBE = `(() => {
   const q = (t) => document.querySelector('[data-testid="' + t + '"]');
   const table = q("trace-table");
+  const cells = table ? [...table.querySelectorAll("tbody tr td")] : [];
+  const totalAttr = table ? table.getAttribute("data-row-total") : null;
   return {
     viewPresent: !!q("view-trace"),
     tablePresent: !!table,
-    rowCount: table ? table.querySelectorAll("tbody tr").length : 0,
+    // Model size (not Virtuoso's viewport-mounted tr count).
+    rowCount: totalAttr != null ? Number(totalAttr) : 0,
+    visibleRowCount: table ? table.querySelectorAll("tbody tr").length : 0,
     emptyShown: !!q("trace-empty"),
+    mode: table ? table.getAttribute("data-trace-mode") : null,
+    // Fingerprint of visible cell text — changes when Fixed rewrites in place.
+    cellFingerprint: cells.map((c) => c.textContent || "").join("|").slice(0, 800),
   };
+})()`;
+
+const OPEN_DISPLAY_SETTINGS_PROBE = `(() => {
+  const btn = document.querySelector('[data-testid="trace-display-settings-btn"]');
+  if (!btn) return false;
+  btn.click();
+  return true;
+})()`;
+
+const CLICK_SEQUENTIAL_MODE_PROBE = `(() => {
+  const radio = document.querySelector('[data-testid="trace-mode-sequential"]');
+  if (!radio) return false;
+  const input = radio.matches("input") ? radio : radio.querySelector("input");
+  (input || radio).click();
+  return true;
+})()`;
+
+const TRACE_MODE_PROBE = `(() => {
+  const table = document.querySelector('[data-testid="trace-table"]');
+  return table ? table.getAttribute("data-trace-mode") : null;
 })()`;
 
 // MUI Select opens on mousedown of its combobox; options render in a portal.
@@ -287,8 +314,9 @@ const SIM_STATE_PROBE = `(() => {
   const cells = table ? [...table.querySelectorAll("tbody tr td")] : [];
   const text = cells.map((c) => c.textContent || "");
   const names = ["camera", "radar", "lidar", "dynamics", "fusion"];
+  const totalAttr = table ? table.getAttribute("data-row-total") : null;
   return {
-    rowCount: table ? table.querySelectorAll("tbody tr").length : 0,
+    rowCount: totalAttr != null ? Number(totalAttr) : (table ? table.querySelectorAll("tbody tr").length : 0),
     chipLabel: chip ? chip.textContent : null,
     endpointNameSeen: text.some((t) => names.some((n) => t.includes(n))),
     // All three simulated traffic classes must actually render as rows.
@@ -332,24 +360,95 @@ async function main() {
     if (shell.viewport[0] < 1024 || shell.viewport[1] < 700)
       fail(`viewport too small: ${shell.viewport}`);
 
-    // Phase 2 — Trace streams live frames from the Rust dev generator.
-    if (!(await session.eval(clickProbe("nav-trace")))) fail("could not click nav-trace");
+    // Phase 2 — global run gate + Trace Fixed default (SRS §4.3 / §5.2).
+    // Trace is the default view; still click the rail entry when it is ready.
+    await waitFor(
+      () => session.eval(clickProbe("nav-trace")),
+      10_000,
+      "nav-trace clickable",
+    );
     await waitFor(async () => {
       const s = await session.eval(TRACE_STATE_PROBE);
       return s.viewPresent ? s : null;
     }, 10_000, "trace view mounted");
 
-    if (!(await session.eval(clickProbe("trace-capture-btn"))))
-      fail("could not click trace-capture-btn");
-    const trace = await waitFor(async () => {
+    // Stillness while stopped: zero rows and no growth over ~2 s.
+    {
+      const a = await session.eval(TRACE_STATE_PROBE);
+      await sleep(2000);
+      const b = await session.eval(TRACE_STATE_PROBE);
+      if (!a.emptyShown || a.rowCount !== 0)
+        fail(`expected empty trace while stopped, got ${JSON.stringify(a)}`);
+      if (!b.emptyShown || b.rowCount !== 0)
+        fail(`trace grew while stopped: ${JSON.stringify(b)}`);
+      console.log("stillness: ok (0 rows over 2 s while stopped)");
+    }
+
+    // Start via the app-bar run control (session owner), not the Trace mirror.
+    if (!(await session.eval(clickProbe("appbar-run-btn"))))
+      fail("could not click appbar-run-btn");
+    const fixedLive = await waitFor(async () => {
       const s = await session.eval(TRACE_STATE_PROBE);
       return s.tablePresent && s.rowCount > 0 ? s : null;
-    }, 15_000, "frames to appear in the trace table");
-    console.log("trace:", JSON.stringify(trace));
+    }, 15_000, "frames to appear after app-bar Start");
+    if (fixedLive.mode !== "fixed")
+      fail(`expected Fixed default mode, got "${fixedLive.mode}"`);
+    console.log("fixed:", JSON.stringify({
+      rowCount: fixedLive.rowCount,
+      mode: fixedLive.mode,
+    }));
+
+    // Fixed mode: row count stays near the key count while cell text rewrites.
+    {
+      const samples = [];
+      for (let i = 0; i < 4; i += 1) {
+        await sleep(400);
+        samples.push(await session.eval(TRACE_STATE_PROBE));
+      }
+      const counts = samples.map((s) => s.rowCount);
+      const maxC = Math.max(...counts);
+      const minC = Math.min(...counts);
+      // Keyed collapse: count should stay stable (small band), not race toward
+      // hundreds of chronological rows.
+      if (maxC > 64)
+        fail(`Fixed row count blew up (expected keyed collapse): ${counts.join(",")}`);
+      if (maxC - minC > 8)
+        fail(`Fixed row count unstable: ${counts.join(",")}`);
+      const fingerprints = new Set(samples.map((s) => s.cellFingerprint));
+      if (fingerprints.size < 2)
+        fail("Fixed mode did not rewrite row texts over time");
+      console.log(`fixed rewrite: counts=[${counts.join(",")}] fingerprints=${fingerprints.size}`);
+    }
+
+    // Switch to Sequential via the display-settings popover and prove growth.
+    if (!(await session.eval(OPEN_DISPLAY_SETTINGS_PROBE)))
+      fail("could not open display-settings popover");
+    await waitFor(
+      () => session.eval(CLICK_SEQUENTIAL_MODE_PROBE),
+      5_000,
+      "Sequential mode radio in the popover",
+    );
+    const modeAfter = await waitFor(async () => {
+      const m = await session.eval(TRACE_MODE_PROBE);
+      return m === "sequential" ? m : null;
+    }, 5_000, "table data-trace-mode=sequential");
+    console.log(`mode after popover: ${modeAfter}`);
+    const seqStart = await session.eval(TRACE_STATE_PROBE);
+    await sleep(1500);
+    const seqLater = await session.eval(TRACE_STATE_PROBE);
+    if (!(seqLater.rowCount > seqStart.rowCount))
+      fail(
+        `Sequential did not grow: ${seqStart.rowCount} → ${seqLater.rowCount}`,
+      );
+    console.log(`sequential growth: ${seqStart.rowCount} → ${seqLater.rowCount}`);
+    const trace = seqLater;
 
     // Phase 3 — the simulator link streams real ecu-netsim traffic into Trace.
+    // Stop via the Trace mirror (same session), switch source while stopped.
     if (!(await session.eval(clickProbe("trace-capture-btn"))))
-      fail("could not stop the devgen capture");
+      fail("could not stop the devgen capture via Trace mirror");
+    // Source controls unlock only while stopped — wait a beat for the stop.
+    await sleep(300);
     if (!(await session.eval(OPEN_SOURCE_SELECT_PROBE)))
       fail("could not open the source select");
     await waitFor(
@@ -364,11 +463,12 @@ async function main() {
     );
     if (!(await session.eval(clickProbe("trace-clear-btn"))))
       fail("could not clear devgen rows before the sim phase");
-    if (!(await session.eval(clickProbe("trace-capture-btn"))))
-      fail("could not start the sim capture");
-    // Protocol classes accumulate across polls: the visible window is a
-    // moving sample of the stream (sequential mode follows the tail), so all
-    // three classes must *render* at some point, not share one snapshot.
+    // Start sim via the app-bar again (prove both entry points).
+    if (!(await session.eval(clickProbe("appbar-run-btn"))))
+      fail("could not start the sim capture via appbar-run-btn");
+    // Protocol classes accumulate across polls. Fixed mode keeps one row per
+    // key so all three classes tend to stay visible; Sequential also works
+    // via the cumulative set.
     let lastSim = null;
     const protocolsRendered = new Set();
     const sim = await waitFor(async () => {
@@ -390,7 +490,7 @@ async function main() {
     });
     console.log("sim:", JSON.stringify(sim));
     console.log(
-      `PASS — devgen ${trace.rowCount} rows; simulator link ${sim.rowCount} rows, ` +
+      `PASS — devgen ${trace.rowCount} rows (Fixed→Sequential); simulator link ${sim.rowCount} rows, ` +
         `chip "${sim.chipLabel}", protocols [${[...protocolsRendered].join(", ")}], ` +
         `endpoint names rendered`,
     );

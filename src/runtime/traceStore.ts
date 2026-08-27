@@ -136,7 +136,10 @@ export class TraceStore {
       for (let k = 0; k < batch.i.length; k += 1) {
         decoded.push(projectRow(batch, k, prev, this.lastByKey));
         const t = batch.t[k];
-        this.lastByKey.set(deltaKeyOf(batch.p[k], batch.sv[k], batch.m[k]), t);
+        this.lastByKey.set(
+          deltaKeyOf(batch.p[k], batch.sv[k], batch.m[k], batch.s[k]),
+          t,
+        );
         prev = t;
       }
     }

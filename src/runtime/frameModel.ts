@@ -129,8 +129,14 @@ function hex4(n: number): string {
   return "0x" + n.toString(16).toUpperCase().padStart(4, "0");
 }
 
-export function deltaKeyOf(p: number, sv: number, m: number): string {
-  return `${p}:${sv}:${m}`;
+/**
+ * Per-key identity for Δ-per-key / fixed-mode cycle time.
+ * SOME/IP keys by (protocol, service, method); SD and gPTP key by
+ * (protocol, source endpoint) so each emitting node keeps its own cycle.
+ */
+export function deltaKeyOf(p: number, sv: number, m: number, s = 0): string {
+  if (p === PROTO_SOMEIP) return `${p}:${sv}:${m}`;
+  return `${p}:ep${s}`;
 }
 
 /**
@@ -167,7 +173,7 @@ export function projectRow(
   const ty = batch.ty[k];
   const se = batch.se[k];
   const len = batch.l[k];
-  const key = deltaKeyOf(proto, sv, m);
+  const key = deltaKeyOf(proto, sv, m, batch.s[k]);
 
   let protocol: string;
   let serviceMethod: string;

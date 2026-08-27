@@ -2,10 +2,17 @@ import {
   Badge,
   Box,
   Chip,
+  FormControl,
+  FormControlLabel,
+  FormLabel,
   IconButton,
   MenuItem,
+  Popover,
+  Radio,
+  RadioGroup,
   TextField,
   Tooltip,
+  Typography,
 } from "@mui/material";
 import type { SxProps } from "@mui/material";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
@@ -14,43 +21,41 @@ import FilterListIcon from "@mui/icons-material/FilterList";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import PushPinIcon from "@mui/icons-material/PushPin";
 import StopIcon from "@mui/icons-material/Stop";
 import TuneIcon from "@mui/icons-material/Tune";
-import { useEffect, useState, useSyncExternalStore } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import type { TableComponents } from "react-virtuoso";
 import { EmptyState } from "../components/EmptyState";
 import { useViewLifecycle } from "../shell/viewLifecycle";
 import {
-  buildCaptureSource,
   captureButtonLabel,
-  DEFAULT_SIM_ADDR,
   linkChipColorVar,
   linkChipLabel,
   showLinkStatusChip,
   showSimAddressField,
   simSourceAvailable,
   sourceControlsDisabled,
-  type CaptureLinkStatus,
   type SourceKind,
 } from "../runtime/captureSource";
+import { ackFrames, isDesktop, onFrameBatch } from "../runtime/desktop";
+import { sessionStore } from "../runtime/sessionStore";
 import {
-  ackFrames,
-  isDesktop,
-  onCaptureLink,
-  onCaptureSession,
-  onFrameBatch,
-  startCapture,
-  stopCapture,
-} from "../runtime/desktop";
-import { setSessionEndpoints } from "../runtime/frameModel";
+  DEFAULT_HISTORY_WINDOW,
+  DEFAULT_TRACE_MODE,
+  fixedDisplayKey,
+  HISTORY_WINDOW_OPTIONS,
+  projectDisplayRows,
+  type HistoryWindow,
+  type TraceDisplayMode,
+} from "../runtime/traceDisplay";
 import { traceStore } from "../runtime/traceStore";
 import type { TraceFrame } from "../runtime/frameModel";
 
 // ---------------------------------------------------------------------------
-// Columns (SRS_visual_ui.md §5.2). Sequential mode — the Pin column belongs to
-// fixed mode only and is omitted here.
+// Columns (SRS_visual_ui.md §5.2). Pin is fixed-mode only.
 // ---------------------------------------------------------------------------
 
 interface ColumnDef {
@@ -61,7 +66,7 @@ interface ColumnDef {
   filter?: { testId: string; label: string };
 }
 
-const COLUMNS: ColumnDef[] = [
+const BASE_COLUMNS: ColumnDef[] = [
   { id: "expand", label: "", width: 40, align: "center" },
   { id: "time", label: "Time", width: 120, align: "right" },
   { id: "dir", label: "Dir", width: 70, align: "left" },
@@ -90,7 +95,11 @@ const COLUMNS: ColumnDef[] = [
   { id: "channel", label: "Ch", width: 50, align: "right" },
 ];
 
-const TABLE_MIN_WIDTH = COLUMNS.reduce((sum, c) => sum + c.width, 0);
+const PIN_COLUMN: ColumnDef = { id: "pin", label: "Pin", width: 44, align: "center" };
+
+function columnsForMode(mode: TraceDisplayMode): ColumnDef[] {
+  return mode === "fixed" ? [...BASE_COLUMNS, PIN_COLUMN] : BASE_COLUMNS;
+}
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -156,35 +165,45 @@ const COMPACT_FIELD_SX: SxProps = {
 };
 
 // ---------------------------------------------------------------------------
-// Table pieces (module-level: no per-render identity churn on the hot path)
+// Table pieces
 // ---------------------------------------------------------------------------
 
-const tableComponents: TableComponents<TraceFrame> = {
-  Table: ({ style, children, context: _context, ...rest }) => (
-    <table
-      {...rest}
-      style={{
-        ...style,
-        tableLayout: "fixed",
-        borderCollapse: "separate",
-        borderSpacing: 0,
-        minWidth: TABLE_MIN_WIDTH,
-      }}
-    >
-      <colgroup>
-        {COLUMNS.map((c) => (
-          <col key={c.id} style={{ width: c.width }} />
-        ))}
-      </colgroup>
-      {children}
-    </table>
-  ),
-};
+interface TraceTableContext {
+  columns: ColumnDef[];
+  mode: TraceDisplayMode;
+  pinned: ReadonlySet<string>;
+  onTogglePin: (key: string) => void;
+}
 
-function renderFixedHeader(): ReactNode {
+function makeTableComponents(columns: ColumnDef[]): TableComponents<TraceFrame, TraceTableContext> {
+  const minWidth = columns.reduce((sum, c) => sum + c.width, 0);
+  return {
+    Table: ({ style, children, context: _context, ...rest }) => (
+      <table
+        {...rest}
+        style={{
+          ...style,
+          tableLayout: "fixed",
+          borderCollapse: "separate",
+          borderSpacing: 0,
+          minWidth,
+        }}
+      >
+        <colgroup>
+          {columns.map((c) => (
+            <col key={c.id} style={{ width: c.width }} />
+          ))}
+        </colgroup>
+        {children}
+      </table>
+    ),
+  };
+}
+
+function renderHeader(columns: ColumnDef[]): ReactNode {
   return (
     <tr>
-      {COLUMNS.map((c) => (
+      {columns.map((c) => (
         <th key={c.id} style={{ textAlign: c.align }}>
           {c.filter ? (
             <Box
@@ -219,7 +238,13 @@ function renderFixedHeader(): ReactNode {
   );
 }
 
-function rowContent(_index: number, f: TraceFrame): ReactNode {
+function rowContent(
+  _index: number,
+  f: TraceFrame,
+  context: TraceTableContext | undefined,
+): ReactNode {
+  const key = fixedDisplayKey(f);
+  const pinned = context?.pinned.has(key) ?? false;
   return (
     <>
       <td style={{ textAlign: "center", padding: 0 }}>
@@ -249,6 +274,26 @@ function rowContent(_index: number, f: TraceFrame): ReactNode {
       <td style={MONO_RIGHT}>{f.deltaGlobal}</td>
       <td style={MONO_RIGHT}>{f.deltaKey}</td>
       <td style={MONO_RIGHT}>{f.channel}</td>
+      {context?.mode === "fixed" ? (
+        <td style={{ textAlign: "center", padding: 0 }}>
+          <Tooltip title={pinned ? "Unpin row" : "Pin row"}>
+            <IconButton
+              size="small"
+              aria-label={pinned ? "Unpin row" : "Pin row"}
+              aria-pressed={pinned}
+              data-testid={`trace-pin-btn-${key}`}
+              onClick={() => context.onTogglePin(key)}
+              sx={{
+                p: "2px",
+                color: pinned ? "var(--accent-primary)" : "text.secondary",
+                transition: "none",
+              }}
+            >
+              <PushPinIcon sx={{ fontSize: 16, transform: pinned ? "none" : "rotate(45deg)" }} />
+            </IconButton>
+          </Tooltip>
+        </td>
+      ) : null}
     </>
   );
 }
@@ -260,23 +305,53 @@ function rowContent(_index: number, f: TraceFrame): ReactNode {
 export function TraceView() {
   useViewLifecycle("trace", {});
   const desktop = isDesktop();
-  const [capturing, setCapturing] = useState(false);
+  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const capturing = session.running;
+  const sourceKind = session.sourceKind;
+  const simAddr = session.simAddr;
+  const linkStatus = session.linkStatus;
+
   const [paused, setPaused] = useState(false);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
-  const [sourceKind, setSourceKind] = useState<SourceKind>("devgen");
-  const [simAddr, setSimAddr] = useState(DEFAULT_SIM_ADDR);
-  const [linkStatus, setLinkStatus] = useState<CaptureLinkStatus | null>(null);
+  const [mode, setMode] = useState<TraceDisplayMode>(DEFAULT_TRACE_MODE);
+  const [historyWindow, setHistoryWindow] = useState<HistoryWindow>(DEFAULT_HISTORY_WINDOW);
+  const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
+  const [settingsAnchor, setSettingsAnchor] = useState<HTMLElement | null>(null);
+
   const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
-  const frames = snap.rows;
+  const displayRows = useMemo(
+    () => projectDisplayRows(snap.rows, mode, pinned, historyWindow),
+    [snap.rows, mode, pinned, historyWindow],
+  );
+  const columns = useMemo(() => columnsForMode(mode), [mode]);
+  const tableComponents = useMemo(() => makeTableComponents(columns), [columns]);
+  const tableContext = useMemo<TraceTableContext>(
+    () => ({
+      columns,
+      mode,
+      pinned,
+      onTogglePin: (key: string) => {
+        setPinned((prev) => {
+          const next = new Set(prev);
+          if (next.has(key)) next.delete(key);
+          else next.add(key);
+          return next;
+        });
+      },
+    }),
+    [columns, mode, pinned],
+  );
+
   const controlsLocked = sourceControlsDisabled(capturing);
   const simOk = simSourceAvailable(desktop);
 
-  // Live pipeline: subscribe to batches; restore exactly one backpressure
-  // credit per animation frame while a capture is active (SRS §1). Keep-alive
-  // views stay mounted, so the stream continues across navigation.
+  // Live pipeline: subscribe to batches while the shared session is running;
+  // restore exactly one backpressure credit per animation frame on desktop.
   useEffect(() => {
     if (!capturing) return;
-    const unsubscribe = onFrameBatch((batch) => traceStore.ingest(batch));
+    const unsubscribe = onFrameBatch((batch) => {
+      if (sessionStore.getSnapshot().running) traceStore.ingest(batch);
+    });
     let raf = 0;
     if (isDesktop()) {
       const loop = (): void => {
@@ -291,46 +366,6 @@ export function TraceView() {
     };
   }, [capturing]);
 
-  useEffect(() => {
-    const offSession = onCaptureSession(() => {
-      /* endpoints applied inside desktop.ts */
-    });
-    const offLink = onCaptureLink((status) => setLinkStatus(status));
-    return () => {
-      offSession();
-      offLink();
-    };
-  }, []);
-
-  const toggleCapture = (): void => {
-    if (capturing) {
-      setCapturing(false);
-      setLinkStatus(null);
-      setSessionEndpoints(null);
-      void stopCapture().catch(() => {
-        /* session already gone */
-      });
-    } else {
-      const source = buildCaptureSource(sourceKind, { addr: simAddr });
-      if (source.kind === "sim") {
-        setLinkStatus({ state: "connecting", detail: source.addr });
-      } else {
-        setLinkStatus(null);
-      }
-      startCapture(source)
-        .then(() => setCapturing(true))
-        .catch(() => {
-          // Browser rejects sim; a concurrent desktop session still counts as live.
-          if (source.kind === "sim" && !desktop) {
-            setCapturing(false);
-            setLinkStatus(null);
-            return;
-          }
-          setCapturing(true);
-        });
-    }
-  };
-
   const togglePause = (): void => {
     setPaused((v) => {
       traceStore.setPaused(!v);
@@ -338,10 +373,14 @@ export function TraceView() {
     });
   };
 
+  const openSettings = (e: MouseEvent<HTMLElement>): void => {
+    setSettingsAnchor(e.currentTarget);
+  };
+
   const captureLabel = captureButtonLabel(capturing, sourceKind);
   const pauseLabel = paused ? "Resume" : "Pause";
   const catalogLabel = catalogLoaded ? "Unload service catalog" : "Load service catalog";
-  const clearLabel = frames.length > 0 ? "Clear trace" : "Trace is already empty";
+  const clearLabel = displayRows.length > 0 ? "Clear trace" : "Trace is already empty";
   const chipColor = linkStatus ? linkChipColorVar(linkStatus.state) : "var(--text-secondary)";
 
   return (
@@ -365,7 +404,9 @@ export function TraceView() {
               size="small"
               aria-label={captureLabel}
               aria-pressed={capturing}
-              onClick={toggleCapture}
+              onClick={() => {
+                void sessionStore.toggle();
+              }}
               data-testid="trace-capture-btn"
               sx={{ color: capturing ? "var(--success)" : "text.secondary" }}
             >
@@ -378,12 +419,75 @@ export function TraceView() {
             <IconButton
               size="small"
               aria-label="Display settings"
+              aria-expanded={settingsAnchor !== null}
+              onClick={openSettings}
               data-testid="trace-display-settings-btn"
-              sx={{ color: "text.secondary" }}
+              sx={{
+                color: settingsAnchor ? "var(--accent-primary)" : "text.secondary",
+              }}
             >
               <TuneIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          <Popover
+            open={settingsAnchor !== null}
+            anchorEl={settingsAnchor}
+            onClose={() => setSettingsAnchor(null)}
+            anchorOrigin={{ vertical: "center", horizontal: "right" }}
+            transformOrigin={{ vertical: "center", horizontal: "left" }}
+          >
+            <Box sx={{ width: 260, p: "12px" }} data-testid="trace-display-settings-popover">
+              <FormControl component="fieldset" sx={{ mb: 1.5, width: "100%" }}>
+                <FormLabel component="legend" sx={{ fontSize: 12, mb: 0.5 }}>
+                  Mode
+                </FormLabel>
+                <RadioGroup
+                  value={mode}
+                  onChange={(_, value) => setMode(value as TraceDisplayMode)}
+                  data-testid="trace-mode-group"
+                >
+                  <FormControlLabel
+                    value="fixed"
+                    data-testid="trace-mode-fixed"
+                    control={<Radio size="small" inputProps={{ "aria-label": "Fixed mode" }} />}
+                    label={<Typography sx={{ fontSize: 13 }}>Fixed</Typography>}
+                  />
+                  <FormControlLabel
+                    value="sequential"
+                    data-testid="trace-mode-sequential"
+                    control={<Radio size="small" inputProps={{ "aria-label": "Sequential mode" }} />}
+                    label={<Typography sx={{ fontSize: 13 }}>Sequential</Typography>}
+                  />
+                </RadioGroup>
+              </FormControl>
+              <TextField
+                select
+                fullWidth
+                size="small"
+                label="History window"
+                value={historyWindow}
+                disabled={mode === "fixed"}
+                onChange={(e) => setHistoryWindow(Number(e.target.value) as HistoryWindow)}
+                helperText={
+                  mode === "fixed"
+                    ? "Applies in Sequential mode"
+                    : "Max rows retained at the tail"
+                }
+                data-testid="trace-history-window"
+                sx={{ "& .MuiInputBase-root": { fontSize: 13 } }}
+              >
+                {HISTORY_WINDOW_OPTIONS.map((n) => (
+                  <MenuItem
+                    key={n}
+                    value={n}
+                    data-testid={`trace-history-window-${n}`}
+                  >
+                    {n.toLocaleString()} rows
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Box>
+          </Popover>
         </Box>
         <Box sx={RAIL_SLOT_SX}>
           <Tooltip title={catalogLabel} placement="right">
@@ -434,8 +538,11 @@ export function TraceView() {
               <IconButton
                 size="small"
                 aria-label={clearLabel}
-                disabled={frames.length === 0}
-                onClick={() => traceStore.clear()}
+                disabled={snap.rows.length === 0}
+                onClick={() => {
+                  traceStore.clear();
+                  setPinned(new Set());
+                }}
                 data-testid="trace-clear-btn"
                 sx={{ color: "text.secondary" }}
               >
@@ -467,8 +574,7 @@ export function TraceView() {
             onChange={(e) => {
               const next = e.target.value as SourceKind;
               if (next === "sim" && !simOk) return;
-              setSourceKind(next);
-              if (next === "devgen") setLinkStatus(null);
+              sessionStore.setSourceKind(next);
             }}
             sx={COMPACT_FIELD_SX}
             data-testid="trace-source-select"
@@ -491,7 +597,7 @@ export function TraceView() {
               label="Address"
               value={simAddr}
               disabled={controlsLocked}
-              onChange={(e) => setSimAddr(e.target.value)}
+              onChange={(e) => sessionStore.setSimAddr(e.target.value)}
               sx={{ ...COMPACT_FIELD_SX, minWidth: 180, flex: "0 1 220px" }}
               inputProps={{
                 "aria-label": "Simulator monitor address",
@@ -556,22 +662,28 @@ export function TraceView() {
               />
             </>
           ) : null}
-          {frames.length === 0 ? (
+          {displayRows.length === 0 ? (
             <EmptyState
               text="No frames captured — start the capture or resume the trace"
               testId="trace-empty"
             />
           ) : (
-            <Box sx={TABLE_WRAP_SX} data-testid="trace-table">
+            <Box
+              sx={TABLE_WRAP_SX}
+              data-testid="trace-table"
+              data-trace-mode={mode}
+              data-row-total={displayRows.length}
+            >
               <TableVirtuoso
-                data={frames}
+                data={displayRows as TraceFrame[]}
+                context={tableContext}
                 fixedItemHeight={32}
                 components={tableComponents}
-                fixedHeaderContent={renderFixedHeader}
+                fixedHeaderContent={() => renderHeader(columns)}
                 itemContent={rowContent}
                 // Sequential mode auto-follows the tail while scrolled to the
-                // bottom (SRS_visual_ui §5.2); scrolling up detaches.
-                followOutput="auto"
+                // bottom (SRS_visual_ui §5.2); Fixed rewrites in place — no follow.
+                followOutput={mode === "sequential" ? "auto" : false}
                 style={{ height: "100%" }}
               />
             </Box>
