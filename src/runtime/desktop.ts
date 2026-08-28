@@ -245,6 +245,14 @@ export interface FrameLayer {
   fields: FrameField[];
 }
 
+export interface DecodedSignal {
+  name: string;
+  rawHex: string;
+  rawDec: string;
+  scaled: number;
+  unit: string;
+}
+
 export interface FrameDetail {
   idx: number;
   tS: number;
@@ -254,6 +262,11 @@ export interface FrameDetail {
   layers: FrameLayer[];
   /** Full frame, uppercase hex, no separators. */
   bytes: string;
+  /**
+   * Catalog-decoded payload signals when the loaded catalog knows this
+   * frame's (service, event); otherwise null (hex dump only).
+   */
+  decoded: DecodedSignal[] | null;
 }
 
 /**
@@ -266,4 +279,78 @@ export function fetchFrameDetail(idx: number): Promise<FrameDetail> {
     return Promise.reject(new Error("desktop app only"));
   }
   return invoke<FrameDetail>("frame_detail", { idx });
+}
+
+// ---------------------------------------------------------------------------
+// Service catalog. Desktop: catalog_model / catalog_load / catalog_unload +
+// catalog:state. Browser: every command rejects; the UI stays unloaded and
+// uses the static SERVICES fallback in frameModel.
+// ---------------------------------------------------------------------------
+
+const CATALOG_STATE_EVENT = "catalog:state";
+
+export interface CatalogSignal {
+  name: string;
+  byteOffset: number;
+  byteLen: number;
+  base: string;
+  factor: number;
+  offset: number;
+  unit: string;
+}
+
+export interface CatalogEvent {
+  eventId: number;
+  name: string;
+  signals: CatalogSignal[];
+}
+
+export interface CatalogMethod {
+  methodId: number;
+  name: string;
+}
+
+export interface CatalogService {
+  serviceId: number;
+  name: string;
+  instanceId: number;
+  events: CatalogEvent[];
+  methods: CatalogMethod[];
+}
+
+export interface CatalogModel {
+  loaded: boolean;
+  source: string;
+  services: CatalogService[];
+}
+
+export interface CatalogStateEvent {
+  loaded: boolean;
+  serviceCount: number;
+}
+
+export function fetchCatalogModel(): Promise<CatalogModel> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<CatalogModel>("catalog_model");
+}
+
+export function catalogLoad(): Promise<void> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<void>("catalog_load");
+}
+
+export function catalogUnload(): Promise<void> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<void>("catalog_unload");
+}
+
+/** Fires at startup and on each load/unload; no-op-safe in browser mode. */
+export function onCatalogState(cb: (state: CatalogStateEvent) => void): () => void {
+  return listenEvent<CatalogStateEvent>(CATALOG_STATE_EVENT, cb);
 }

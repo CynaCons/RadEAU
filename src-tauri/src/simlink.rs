@@ -225,12 +225,7 @@ fn map_someip_msg_type(message_type: u8) -> u8 {
 /// Classify a raw Ethernet frame into a `GenFrame`, or `None` to skip (other).
 /// `gptp::parse` / `sd::parse` may still be stubs — on `Err` we keep the
 /// protocol class with sync/offer display defaults.
-pub fn classify_frame(
-    frame: &[u8],
-    idx: u64,
-    t_s: f64,
-    port_id: u16,
-) -> Option<GenFrame> {
+pub fn classify_frame(frame: &[u8], idx: u64, t_s: f64, port_id: u16) -> Option<GenFrame> {
     let src_ep = (port_id as usize).saturating_sub(1);
     let eth = EthernetFrame::parse(frame).ok()?;
 
@@ -379,12 +374,7 @@ pub fn encode_frame_record(
 
 /// Encode one gap record into `out` (test / fixture helper).
 #[cfg(test)]
-pub fn encode_gap_record(
-    switch_time_ns: u64,
-    dropped_count: u32,
-    span_ns: u64,
-    out: &mut Vec<u8>,
-) {
+pub fn encode_gap_record(switch_time_ns: u64, dropped_count: u32, span_ns: u64, out: &mut Vec<u8>) {
     let length = (RECORD_HEADER_LEN + 12) as u32;
     out.extend_from_slice(&length.to_be_bytes());
     out.extend_from_slice(&switch_time_ns.to_be_bytes());
@@ -447,7 +437,14 @@ mod tests {
         let src = [10, 42, 0, 11];
         let dst = [10, 42, 0, 20];
         let mut l3 = Vec::new();
-        UdpDatagram::build(src, dst, UDP_PORT_SOMEIP, UDP_PORT_SOMEIP, &payload, &mut l3);
+        UdpDatagram::build(
+            src,
+            dst,
+            UDP_PORT_SOMEIP,
+            UDP_PORT_SOMEIP,
+            &payload,
+            &mut l3,
+        );
         let mut ip_payload = Vec::new();
         Ipv4Packet::build(src, dst, ipv4::PROTOCOL_UDP, 1, 64, 0, &l3, &mut ip_payload);
         let mut wire = Vec::new();
@@ -493,7 +490,14 @@ mod tests {
         let src = [10, 42, 0, 11];
         let dst = [239, 255, 255, 250];
         let mut l3 = Vec::new();
-        UdpDatagram::build(src, dst, UDP_PORT_SOMEIP, UDP_PORT_SOMEIP, &payload, &mut l3);
+        UdpDatagram::build(
+            src,
+            dst,
+            UDP_PORT_SOMEIP,
+            UDP_PORT_SOMEIP,
+            &payload,
+            &mut l3,
+        );
         let mut ip_payload = Vec::new();
         Ipv4Packet::build(src, dst, ipv4::PROTOCOL_UDP, 1, 64, 0, &l3, &mut ip_payload);
         let mut wire = Vec::new();
@@ -610,7 +614,14 @@ mod tests {
         let src = [10, 42, 0, 11];
         let dst = [10, 42, 0, 20];
         let mut l3 = Vec::new();
-        UdpDatagram::build(src, dst, UDP_PORT_SOMEIP, UDP_PORT_SOMEIP, &payload, &mut l3);
+        UdpDatagram::build(
+            src,
+            dst,
+            UDP_PORT_SOMEIP,
+            UDP_PORT_SOMEIP,
+            &payload,
+            &mut l3,
+        );
         let mut ip_payload = Vec::new();
         Ipv4Packet::build(src, dst, ipv4::PROTOCOL_UDP, 1, 64, 0, &l3, &mut ip_payload);
         let mut wire = Vec::new();

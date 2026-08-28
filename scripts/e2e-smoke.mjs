@@ -585,10 +585,182 @@ async function main() {
     }, 10_000, "dissection panel with Ethernet II + at least 2 layers");
     console.log("dissection:", JSON.stringify(detail));
 
+    // Phase 5 — catalog-driven Trace content (names + clean dissections + decode).
+    // Ensure the catalog is loaded (core may auto-load at startup; rail toggles).
+    {
+      const pressed = await session.eval(`(() => {
+        const btn = document.querySelector('[data-testid="trace-catalog-btn"]');
+        return btn ? btn.getAttribute("aria-pressed") === "true" : false;
+      })()`);
+      if (!pressed) {
+        if (!(await session.eval(clickProbe("trace-catalog-btn"))))
+          fail("could not click trace-catalog-btn to load the catalog");
+        await waitFor(async () => {
+          const ok = await session.eval(`(() => {
+            const btn = document.querySelector('[data-testid="trace-catalog-btn"]');
+            return btn && btn.getAttribute("aria-pressed") === "true";
+          })()`);
+          return ok ? true : null;
+        }, 10_000, "catalog rail badge loaded (aria-pressed)");
+      }
+    }
+
+    // Collapse any open dissection before the content probes.
+    await session.eval(`(() => {
+      const open = document.querySelector('[data-testid^="trace-expand-btn-"][aria-expanded="true"]');
+      if (open) open.click();
+      return true;
+    })()`);
+
+    // 5a — catalog names appear on Fixed-mode rows (poll cumulatively).
+    const namesSeen = { objectList: false, fusionStats: false };
+    const nameProbe = await waitFor(async () => {
+      const s = await session.eval(`(() => {
+        const table = document.querySelector('[data-testid="trace-table"]');
+        const cells = table ? [...table.querySelectorAll("tbody tr td")] : [];
+        const text = cells.map((c) => (c.textContent || "").trim());
+        return {
+          objectList: text.some((t) => t === "CameraObjects.ObjectList"),
+          fusionStats: text.some((t) => t.includes("FusionStats")),
+        };
+      })()`);
+      if (s.objectList) namesSeen.objectList = true;
+      if (s.fusionStats) namesSeen.fusionStats = true;
+      return namesSeen.objectList && namesSeen.fusionStats ? namesSeen : null;
+    }, 20_000, "catalog names CameraObjects.ObjectList + FusionStats").catch((err) => {
+      console.error("catalog names so far:", JSON.stringify(namesSeen));
+      throw err;
+    });
+    console.log("catalog names:", JSON.stringify(nameProbe));
+
+    // 5b — no malformed layers across one frame of each protocol class.
+    const PROTO_EXPAND_PROBE = (proto) => `(() => {
+      const rows = [...document.querySelectorAll("tbody tr")].filter(
+        (r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"),
+      );
+      for (const row of rows) {
+        const cells = row.querySelectorAll("td");
+        if ((cells[4]?.textContent || "").trim() === ${JSON.stringify(proto)}) {
+          const btn = row.querySelector('[data-testid^="trace-expand-btn-"]');
+          if (!btn) return { ok: false, reason: "no expand btn" };
+          btn.click();
+          return { ok: true, idx: (btn.getAttribute("data-testid") || "").replace("trace-expand-btn-", "") };
+        }
+      }
+      return { ok: false, reason: "protocol row not found" };
+    })()`;
+
+    const COLLAPSE_EXPANDED_PROBE = `(() => {
+      const open = document.querySelector('[data-testid^="trace-expand-btn-"][aria-expanded="true"]');
+      if (open) open.click();
+      return true;
+    })()`;
+
+    const DISSECT_TEXT_PROBE = `(() => {
+      const panel = document.querySelector('[data-testid^="trace-detail-"]');
+      if (!panel) return null;
+      // Prefer the ready panel body over a loading/empty flash.
+      if (panel.querySelector('[data-testid="trace-detail-loading"]')) return null;
+      if (panel.querySelector('[data-testid="trace-detail-empty"]')) {
+        return { text: panel.textContent || "", layerCount: 0, empty: true };
+      }
+      return {
+        text: panel.textContent || "",
+        layerCount: panel.querySelectorAll('[data-testid^="trace-detail-layer-"]').length,
+        empty: false,
+      };
+    })()`;
+
+    const malformedByProto = {};
+    for (const proto of ["SOME/IP", "SD", "gPTP"]) {
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+      const expanded = await waitFor(async () => {
+        const r = await session.eval(PROTO_EXPAND_PROBE(proto));
+        return r && r.ok ? r : null;
+      }, 10_000, `${proto} row to expand`);
+      const dissected = await waitFor(async () => {
+        const d = await session.eval(DISSECT_TEXT_PROBE);
+        return d && !d.empty && d.layerCount >= 1 ? d : null;
+      }, 10_000, `${proto} dissection panel`);
+      const hasMalformed = /malformed/i.test(dissected.text);
+      malformedByProto[proto] = hasMalformed;
+      if (hasMalformed)
+        fail(`${proto} dissection contained "malformed" (idx ${expanded.idx})`);
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+    }
+    console.log("no-malformed:", JSON.stringify(malformedByProto));
+
+    // 5c — decoded signal table on a SOME/IP event dissection.
+    await session.eval(COLLAPSE_EXPANDED_PROBE);
+    const someIpEventExpand = `(() => {
+      const rows = [...document.querySelectorAll("tbody tr")].filter(
+        (r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"),
+      );
+      for (const row of rows) {
+        const cells = row.querySelectorAll("td");
+        const proto = (cells[4]?.textContent || "").trim();
+        const type = (cells[7]?.textContent || "").trim();
+        if (proto === "SOME/IP" && type === "Event") {
+          const btn = row.querySelector('[data-testid^="trace-expand-btn-"]');
+          if (!btn) return { ok: false };
+          btn.click();
+          return { ok: true };
+        }
+      }
+      return { ok: false };
+    })()`;
+    await waitFor(async () => {
+      const r = await session.eval(someIpEventExpand);
+      return r && r.ok ? r : null;
+    }, 10_000, "SOME/IP Event row to expand");
+
+    const SIGNAL_ALLOWLIST = [
+      "FrameCounter", "ObjectCount", "ExposureTime",
+      "TargetCount", "NearestRange", "NearestSpeed",
+      "ClusterCount", "PointCount", "MeanIntensity",
+      "VehicleSpeed", "YawRate", "AccelX",
+      "TrackCount", "QualityMean", "LeadRange", "LeadSpeed",
+      "InputLatencyCam", "MatchedTracks", "UnmatchedTracks",
+    ];
+    const UNIT_ALLOWLIST = ["m/s", "ms", "m", "%"];
+
+    const decoded = await waitFor(async () => {
+      const d = await session.eval(`(() => {
+        const table = document.querySelector('[data-testid^="trace-decoded-"]');
+        if (!table) return null;
+        const rows = [...table.querySelectorAll('[data-testid^="trace-decoded-row-"]')];
+        const names = rows.map((r) => (r.children[0]?.textContent || "").trim());
+        const units = [...table.querySelectorAll('[data-testid^="trace-decoded-unit-"]')]
+          .map((c) => (c.textContent || "").trim());
+        const scaled = [...table.querySelectorAll('[data-testid^="trace-decoded-scaled-"]')]
+          .map((c) => (c.textContent || "").trim());
+        return { names, units, scaled, rowCount: rows.length };
+      })()`);
+      return d && d.rowCount > 0 ? d : null;
+    }, 10_000, "decoded signal table on SOME/IP event");
+
+    const knownSignal = decoded.names.some((n) => SIGNAL_ALLOWLIST.includes(n));
+    if (!knownSignal)
+      fail(`decoded table had no allowlisted signal name: ${decoded.names.join(",")}`);
+    const knownUnit = decoded.units.some((u) => UNIT_ALLOWLIST.includes(u));
+    if (!knownUnit)
+      fail(`decoded table had no allowlisted unit: ${decoded.units.join(",")}`);
+    for (const s of decoded.scaled) {
+      const n = Number(s);
+      if (!Number.isFinite(n))
+        fail(`decoded scaled cell is not a finite number: "${s}"`);
+    }
+    console.log("decoded:", JSON.stringify({
+      names: decoded.names,
+      units: decoded.units,
+      scaled: decoded.scaled,
+    }));
+
     console.log(
       `PASS — devgen ${trace.rowCount} rows (Fixed→Sequential); simulator link ${sim.rowCount} rows, ` +
         `degraded chip absent, protocols [${[...protocolsRendered].join(", ")}], ` +
-        `endpoint names rendered; Network Connection "${network.sourceKind}" / "${network.linkLabel}"`,
+        `endpoint names rendered; Network Connection "${network.sourceKind}" / "${network.linkLabel}"; ` +
+        `catalog names + clean dissections + decoded signals`,
     );
   } catch (err) {
     failures += 1;

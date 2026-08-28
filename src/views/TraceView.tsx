@@ -44,6 +44,7 @@ import {
   rowMatchesExpansion,
   type TraceExpansion,
 } from "../runtime/frameDetail";
+import { catalogStore } from "../runtime/catalogStore";
 import { sessionStore } from "../runtime/sessionStore";
 import {
   DEFAULT_HISTORY_WINDOW,
@@ -337,12 +338,13 @@ function rowContent(
 export function TraceView() {
   useViewLifecycle("trace", {});
   const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const catalog = useSyncExternalStore(catalogStore.subscribe, catalogStore.getSnapshot);
   const capturing = session.running;
   const sourceKind = session.sourceKind;
   const linkStatus = session.linkStatus;
+  const catalogLoaded = catalog.loaded;
 
   const [paused, setPaused] = useState(false);
-  const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [mode, setMode] = useState<TraceDisplayMode>(DEFAULT_TRACE_MODE);
   const [historyWindow, setHistoryWindow] = useState<HistoryWindow>(DEFAULT_HISTORY_WINDOW);
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
@@ -415,7 +417,8 @@ export function TraceView() {
 
   const captureLabel = captureButtonLabel(capturing, sourceKind);
   const pauseLabel = paused ? "Resume" : "Pause";
-  const catalogLabel = catalogLoaded ? "Unload service catalog" : "Load service catalog";
+  const catalogActionLabel = catalogStore.railActionLabel();
+  const catalogTooltip = catalogStore.railTooltip();
   const clearLabel = displayRows.length > 0 ? "Clear trace" : "Trace is already empty";
   const showLinkChip = showDegradedLinkChip(capturing, sourceKind, linkStatus?.state);
   const chipColor = linkStatus ? linkChipColorVar(linkStatus.state) : "var(--text-secondary)";
@@ -530,12 +533,14 @@ export function TraceView() {
           </Popover>
         </Box>
         <Box sx={RAIL_SLOT_SX}>
-          <Tooltip title={catalogLabel} placement="right">
+          <Tooltip title={catalogTooltip} placement="right">
             <IconButton
               size="small"
-              aria-label={catalogLabel}
+              aria-label={catalogActionLabel}
               aria-pressed={catalogLoaded}
-              onClick={() => setCatalogLoaded((v) => !v)}
+              onClick={() => {
+                void catalogStore.toggle();
+              }}
               data-testid="trace-catalog-btn"
               sx={{ color: "text.secondary" }}
             >
@@ -543,6 +548,7 @@ export function TraceView() {
                 variant="dot"
                 overlap="circular"
                 invisible={!catalogLoaded}
+                data-testid="trace-catalog-badge"
                 sx={{
                   "& .MuiBadge-badge": {
                     backgroundColor: "var(--success)",

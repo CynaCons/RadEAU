@@ -90,7 +90,14 @@ mod tests {
         assert_eq!(d.dst_port, 50000);
         assert_eq!(d.payload, &[9, 8, 7, 6, 5]);
         let mut rebuilt = Vec::new();
-        UdpDatagram::build(SRC_IP, DST_IP, d.src_port, d.dst_port, d.payload, &mut rebuilt);
+        UdpDatagram::build(
+            SRC_IP,
+            DST_IP,
+            d.src_port,
+            d.dst_port,
+            d.payload,
+            &mut rebuilt,
+        );
         assert_eq!(rebuilt, wire);
     }
 

@@ -6,6 +6,7 @@ import {
   captureTraceExpansion,
   formatFieldExtent,
   formatHexDump,
+  formatScaled,
   frameDetailErrorMessage,
   isMalformedLayerSummary,
   rowMatchesExpansion,
@@ -52,6 +53,7 @@ const SOMEIP_DETAIL: FrameDetail = {
   ],
   // Exactly 60 bytes (120 hex chars). Payload = last 18 bytes from offset 42.
   bytes: `${"00".repeat(42)}${"A1".repeat(16)}${"B2".repeat(2)}`,
+  decoded: null,
 };
 
 /** Minimal TraceFrame for expansion-slot tests. */
@@ -100,6 +102,25 @@ describe("formatHexDump", () => {
 describe("formatFieldExtent", () => {
   it("renders offset:len", () => {
     expect(formatFieldExtent(14, 4)).toBe("14:4");
+  });
+});
+
+describe("formatScaled", () => {
+  it("keeps integers as plain decimal strings", () => {
+    expect(formatScaled(10)).toBe("10");
+    expect(formatScaled(0)).toBe("0");
+  });
+
+  it("trims trailing zeros at a sensible precision", () => {
+    expect(formatScaled(12.34)).toBe("12.34");
+    expect(formatScaled(1.0)).toBe("1");
+    expect(formatScaled(0.01)).toBe("0.01");
+    expect(formatScaled(0.001)).toBe("0.001");
+  });
+
+  it("passes through non-finite values honestly", () => {
+    expect(formatScaled(Number.NaN)).toBe("NaN");
+    expect(formatScaled(Number.POSITIVE_INFINITY)).toBe("Infinity");
   });
 });
 

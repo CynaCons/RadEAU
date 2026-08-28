@@ -13,3 +13,4 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 radeau-proto = { path = "../crates/radeau-proto" }
+radeau-catalog = { path = "../crates/radeau-catalog" }

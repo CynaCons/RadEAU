@@ -60,11 +60,41 @@ struct ServiceSpec {
 
 /// Mirrors the fusion network model (TraceView / ecu-netsim scenario).
 const SERVICES: [ServiceSpec; 5] = [
-    ServiceSpec { svc: 0x1101, method: 0x8001, src_ep: 0, base_len: 128, tx: false },
-    ServiceSpec { svc: 0x1102, method: 0x8001, src_ep: 1, base_len: 96, tx: false },
-    ServiceSpec { svc: 0x1103, method: 0x8001, src_ep: 2, base_len: 160, tx: false },
-    ServiceSpec { svc: 0x1104, method: 0x8001, src_ep: 3, base_len: 48, tx: false },
-    ServiceSpec { svc: 0x1201, method: 0x8001, src_ep: 4, base_len: 144, tx: true },
+    ServiceSpec {
+        svc: 0x1101,
+        method: 0x8001,
+        src_ep: 0,
+        base_len: 128,
+        tx: false,
+    },
+    ServiceSpec {
+        svc: 0x1102,
+        method: 0x8001,
+        src_ep: 1,
+        base_len: 96,
+        tx: false,
+    },
+    ServiceSpec {
+        svc: 0x1103,
+        method: 0x8001,
+        src_ep: 2,
+        base_len: 160,
+        tx: false,
+    },
+    ServiceSpec {
+        svc: 0x1104,
+        method: 0x8001,
+        src_ep: 3,
+        base_len: 48,
+        tx: false,
+    },
+    ServiceSpec {
+        svc: 0x1201,
+        method: 0x8001,
+        src_ep: 4,
+        base_len: 144,
+        tx: true,
+    },
 ];
 
 pub fn endpoint_ip(ep: usize) -> [u8; 4] {
@@ -111,7 +141,11 @@ impl RateProfile {
             Self::Stress => 5000.0,
             Self::Burst => {
                 // 250 fps base with a 200 ms burst to stress rate every 3 s.
-                if elapsed_s % 3.0 < 0.2 { 5000.0 } else { 250.0 }
+                if elapsed_s % 3.0 < 0.2 {
+                    5000.0
+                } else {
+                    250.0
+                }
             }
         }
     }
@@ -214,10 +248,17 @@ impl DevGen {
         // UDP datagram, then IPv4 packet around it, then Ethernet II around
         // that — one clean inside-out pass, exactly how the live path builds.
         wire.clear();
-        let mut l3 = Vec::with_capacity(
-            ipv4::Ipv4Packet::encoded_len(udp::UdpDatagram::encoded_len(payload_len)),
+        let mut l3 = Vec::with_capacity(ipv4::Ipv4Packet::encoded_len(
+            udp::UdpDatagram::encoded_len(payload_len),
+        ));
+        UdpDatagram::build(
+            src_ip,
+            dst_ip,
+            UDP_PORT_SOMEIP,
+            UDP_PORT_SOMEIP,
+            &payload,
+            &mut l3,
         );
-        UdpDatagram::build(src_ip, dst_ip, UDP_PORT_SOMEIP, UDP_PORT_SOMEIP, &payload, &mut l3);
         Ipv4Packet::build(
             src_ip,
             dst_ip,
@@ -229,7 +270,13 @@ impl DevGen {
             wire,
         );
         let mut full = Vec::with_capacity(EthernetFrame::encoded_len(wire.len()));
-        EthernetFrame::build(endpoint_mac(s.src_ep), SWITCH_MAC, ethernet::ETHERTYPE_IPV4, wire, &mut full);
+        EthernetFrame::build(
+            endpoint_mac(s.src_ep),
+            SWITCH_MAC,
+            ethernet::ETHERTYPE_IPV4,
+            wire,
+            &mut full,
+        );
         *wire = full;
         self.ip_ident = (self.ip_ident.wrapping_add(7)) & IP_IDENT_MASK | 1;
 
@@ -260,8 +307,24 @@ impl DevGen {
             .map(|_| (self.rng.next() & 0xff) as u8)
             .collect();
         let mut l3 = Vec::with_capacity(64);
-        UdpDatagram::build(src_ip, SD_MCAST_IP, UDP_PORT_SOMEIP, UDP_PORT_SOMEIP, &payload, &mut l3);
-        Ipv4Packet::build(src_ip, SD_MCAST_IP, ipv4::PROTOCOL_UDP, self.ip_ident, 64, 0, &l3, wire);
+        UdpDatagram::build(
+            src_ip,
+            SD_MCAST_IP,
+            UDP_PORT_SOMEIP,
+            UDP_PORT_SOMEIP,
+            &payload,
+            &mut l3,
+        );
+        Ipv4Packet::build(
+            src_ip,
+            SD_MCAST_IP,
+            ipv4::PROTOCOL_UDP,
+            self.ip_ident,
+            64,
+            0,
+            &l3,
+            wire,
+        );
         self.ip_ident = (self.ip_ident.wrapping_add(7)) & IP_IDENT_MASK | 1;
         let mut full = Vec::with_capacity(EthernetFrame::encoded_len(wire.len()));
         EthernetFrame::build(
@@ -379,7 +442,11 @@ mod tests {
         for f in &out {
             assert!(f.wire_len >= ethernet::HEADER_LEN as u32, "frame {}", f.idx);
             assert!(f.wire_len <= 1522, "frame {} len {}", f.idx, f.wire_len);
-            assert!(!f.snap.iter().all(|&b| b == 0), "empty snap frame {}", f.idx);
+            assert!(
+                !f.snap.iter().all(|&b| b == 0),
+                "empty snap frame {}",
+                f.idx
+            );
         }
         // All three protocol classes appear within a few hundred frames.
         let protos: std::collections::HashSet<u8> = out.iter().map(|f| f.proto).collect();

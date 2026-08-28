@@ -6,11 +6,13 @@
 // build) must never pop a console window. Diagnostics flow through the
 // automation/event surfaces and the E2E CDP harness instead of stdout.
 #![windows_subsystem = "windows"]
+use tauri::Manager;
 
 // The dev frame generator is a runtime-gated development data source
 // (PRD §3.8) — compiled in every profile, activated only by an explicit
 // capture profile, and superseded as the default source by ecu-netsim (v0.4).
 mod capture;
+mod catalog;
 mod devgen;
 mod dissect;
 mod simlink;
@@ -22,10 +24,18 @@ fn main() {
 
     tauri::Builder::default()
         .manage(capture::CaptureState::default())
+        .manage(catalog::CatalogState::default())
+        .setup(|app| {
+            catalog::emit_initial(app.state::<catalog::CatalogState>().inner(), &app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             capture::capture_start,
             capture::capture_stop,
             capture::ack_frames,
+            catalog::catalog_model,
+            catalog::catalog_load,
+            catalog::catalog_unload,
             dissect::frame_detail,
         ])
         .run(tauri::generate_context!())

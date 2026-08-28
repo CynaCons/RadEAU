@@ -10,12 +10,14 @@ import type { CSSProperties, ReactNode } from "react";
 
 import {
   fetchFrameDetail,
+  type DecodedSignal,
   type FrameDetail,
   type FrameLayer,
 } from "../runtime/desktop";
 import {
   formatFieldExtent,
   formatHexDump,
+  formatScaled,
   frameDetailErrorMessage,
   isMalformedLayerSummary,
   type HexDumpRow,
@@ -106,6 +108,7 @@ function ReadyDetail(props: {
 }): ReactNode {
   const { detail, showCapturedIdx, collapsedLayers, onToggleLayer } = props;
   const hexRows = formatHexDump(detail.bytes, detail.payloadOffset, detail.wireLen);
+  const showPayload = detail.decoded !== null || hexRows !== null;
 
   return (
     <>
@@ -122,7 +125,9 @@ function ReadyDetail(props: {
           />
         );
       })}
-      {hexRows ? <PayloadSection rows={hexRows} /> : null}
+      {showPayload ? (
+        <PayloadSection idx={detail.idx} decoded={detail.decoded} rows={hexRows} />
+      ) : null}
     </>
   );
 }
@@ -258,8 +263,20 @@ function LayerSection(props: {
   );
 }
 
-function PayloadSection(props: { rows: HexDumpRow[] }): ReactNode {
-  const { rows } = props;
+const DECODED_COLS: { id: string; label: string; width: string; align: "left" | "right"; mono: boolean }[] = [
+  { id: "name", label: "Name", width: "32%", align: "left", mono: false },
+  { id: "rawHex", label: "Raw hex", width: "18%", align: "right", mono: true },
+  { id: "rawDec", label: "Raw dec", width: "18%", align: "right", mono: true },
+  { id: "scaled", label: "Scaled", width: "22%", align: "right", mono: true },
+  { id: "unit", label: "Unit", width: "10%", align: "right", mono: true },
+];
+
+function PayloadSection(props: {
+  idx: number;
+  decoded: DecodedSignal[] | null;
+  rows: HexDumpRow[] | null;
+}): ReactNode {
+  const { idx, decoded, rows } = props;
   return (
     <Box data-testid="trace-detail-payload" sx={{ mt: "4px" }}>
       <Typography
@@ -267,23 +284,155 @@ function PayloadSection(props: { rows: HexDumpRow[] }): ReactNode {
       >
         Payload
       </Typography>
-      {rows.map((row) => (
+      {decoded !== null ? <DecodedTable idx={idx} signals={decoded} /> : null}
+      {rows
+        ? rows.map((row) => (
+            <Box
+              key={row.offsetLabel}
+              data-testid={`trace-detail-hex-${row.offsetLabel}`}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                height: 28,
+                gap: "16px",
+                ...MONO,
+                color: "text.primary",
+              }}
+            >
+              <Box component="span" sx={{ color: "var(--text-tertiary)", flexShrink: 0 }}>
+                {row.offsetLabel}
+              </Box>
+              <Box component="span">{row.hex}</Box>
+            </Box>
+          ))
+        : null}
+    </Box>
+  );
+}
+
+/** SRS §5.2 five-column decoded signal table (catalog-known events only). */
+function DecodedTable(props: { idx: number; signals: readonly DecodedSignal[] }): ReactNode {
+  const { idx, signals } = props;
+  return (
+    <Box
+      data-testid={`trace-decoded-${idx}`}
+      sx={{ width: "100%", mb: "4px", boxSizing: "border-box" }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          height: 28,
+          borderBottom: "1px solid var(--border)",
+          boxSizing: "border-box",
+        }}
+      >
+        {DECODED_COLS.map((col) => (
+          <Typography
+            key={col.id}
+            component="span"
+            sx={{
+              width: col.width,
+              flexShrink: 0,
+              fontSize: 12,
+              fontWeight: 500,
+              color: "text.secondary",
+              textAlign: col.align,
+              pr: col.align === "right" ? "8px" : 0,
+              pl: col.align === "left" ? "4px" : 0,
+              boxSizing: "border-box",
+            }}
+          >
+            {col.label}
+          </Typography>
+        ))}
+      </Box>
+      {signals.map((sig, i) => (
         <Box
-          key={row.offsetLabel}
-          data-testid={`trace-detail-hex-${row.offsetLabel}`}
+          key={`${sig.name}-${i}`}
+          data-testid={`trace-decoded-row-${i}`}
           sx={{
             display: "flex",
             alignItems: "center",
             height: 28,
-            gap: "16px",
-            ...MONO,
-            color: "text.primary",
+            boxSizing: "border-box",
           }}
         >
-          <Box component="span" sx={{ color: "var(--text-tertiary)", flexShrink: 0 }}>
-            {row.offsetLabel}
-          </Box>
-          <Box component="span">{row.hex}</Box>
+          <Typography
+            component="span"
+            sx={{
+              width: "32%",
+              flexShrink: 0,
+              fontSize: 13,
+              color: "text.secondary",
+              textAlign: "left",
+              pl: "4px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              boxSizing: "border-box",
+            }}
+          >
+            {sig.name}
+          </Typography>
+          <Typography
+            component="span"
+            sx={{
+              ...MONO,
+              width: "18%",
+              flexShrink: 0,
+              color: "text.primary",
+              textAlign: "right",
+              pr: "8px",
+              boxSizing: "border-box",
+            }}
+          >
+            {sig.rawHex}
+          </Typography>
+          <Typography
+            component="span"
+            sx={{
+              ...MONO,
+              width: "18%",
+              flexShrink: 0,
+              color: "text.primary",
+              textAlign: "right",
+              pr: "8px",
+              boxSizing: "border-box",
+            }}
+          >
+            {sig.rawDec}
+          </Typography>
+          <Typography
+            component="span"
+            data-testid={`trace-decoded-scaled-${i}`}
+            sx={{
+              ...MONO,
+              width: "22%",
+              flexShrink: 0,
+              color: "text.primary",
+              textAlign: "right",
+              pr: "8px",
+              boxSizing: "border-box",
+            }}
+          >
+            {formatScaled(sig.scaled)}
+          </Typography>
+          <Typography
+            component="span"
+            data-testid={`trace-decoded-unit-${i}`}
+            sx={{
+              ...MONO,
+              width: "10%",
+              flexShrink: 0,
+              color: "text.secondary",
+              textAlign: "right",
+              pr: "8px",
+              boxSizing: "border-box",
+            }}
+          >
+            {sig.unit}
+          </Typography>
         </Box>
       ))}
     </Box>

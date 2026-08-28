@@ -42,6 +42,7 @@ const SOMEIP_DETAIL: FrameDetail = {
     },
   ],
   bytes: `${"00".repeat(42)}${"A1".repeat(16)}${"B2".repeat(2)}`,
+  decoded: null,
 };
 
 const MALFORMED_DETAIL: FrameDetail = {
@@ -54,6 +55,15 @@ const MALFORMED_DETAIL: FrameDetail = {
       summary: "malformed: truncated UDP length",
       fields: [{ name: "Length", value: "4", offset: 38, len: 2 }],
     },
+  ],
+};
+
+const DECODED_DETAIL: FrameDetail = {
+  ...SOMEIP_DETAIL,
+  decoded: [
+    { name: "FrameCounter", rawHex: "000A", rawDec: "10", scaled: 10, unit: "" },
+    { name: "VehicleSpeed", rawHex: "04D2", rawDec: "1234", scaled: 12.34, unit: "m/s" },
+    { name: "ExposureTime", rawHex: "0064", rawDec: "100", scaled: 1.0, unit: "ms" },
   ],
 };
 
@@ -135,5 +145,35 @@ describe("TraceDetailBody", () => {
       <TraceDetailBody idx={9} state={{ status: "loading" }} />,
     );
     expect(html).toContain('data-testid="trace-detail-loading"');
+  });
+
+  it("renders the decoded five-column table above the hex dump", () => {
+    const html = renderToStaticMarkup(
+      <TraceDetailBody idx={42} state={{ status: "ready", detail: DECODED_DETAIL }} />,
+    );
+    expect(html).toContain('data-testid="trace-decoded-42"');
+    expect(html).toContain("Name");
+    expect(html).toContain("Raw hex");
+    expect(html).toContain("Raw dec");
+    expect(html).toContain("Scaled");
+    expect(html).toContain("Unit");
+    expect(html).toContain("FrameCounter");
+    expect(html).toContain("VehicleSpeed");
+    expect(html).toContain("12.34");
+    expect(html).toContain("m/s");
+    // Trailing zeros trimmed on scaled 1.0 → "1"
+    expect(html).toContain('data-testid="trace-decoded-scaled-2"');
+    expect(html).toMatch(/trace-decoded-scaled-2"[^>]*>1</);
+    // Decoded table precedes the hex dump in markup
+    expect(html.indexOf("trace-decoded-42")).toBeLessThan(html.indexOf("trace-detail-hex-002A"));
+    expect(html).toContain('data-testid="trace-detail-hex-002A"');
+  });
+
+  it("omits the decoded table when decoded is null (hex dump only)", () => {
+    const html = renderToStaticMarkup(
+      <TraceDetailBody idx={42} state={{ status: "ready", detail: SOMEIP_DETAIL }} />,
+    );
+    expect(html).not.toContain("trace-decoded-");
+    expect(html).toContain('data-testid="trace-detail-hex-002A"');
   });
 });

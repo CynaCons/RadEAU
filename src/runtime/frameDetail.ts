@@ -52,6 +52,18 @@ export function formatFieldExtent(offset: number, len: number): string {
   return `${offset}:${len}`;
 }
 
+/**
+ * Formats a catalog-scaled physical value for the decoded table: enough
+ * precision for extract factors (0.01 / 0.001 / 0.1), trailing zeros trimmed.
+ */
+export function formatScaled(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  if (Object.is(value, -0)) return "0";
+  if (Number.isInteger(value)) return String(value);
+  const fixed = value.toFixed(6);
+  return fixed.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+}
+
 /** Malformed layers carry a summary that starts with this prefix (core contract). */
 export function isMalformedLayerSummary(summary: string): boolean {
   return summary.startsWith("malformed: ");

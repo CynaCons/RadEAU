@@ -4,6 +4,7 @@
 //! routing belongs to the later v0.4 runtime. Pseudo-data derives from the
 //! supplied seed; monitor clients use bounded, independent writer queues.
 
+use radeau_catalog::{BaseType, Catalog, Signal};
 use radeau_proto::{
     ethernet::EthernetFrame,
     gptp,
@@ -99,7 +100,15 @@ fn main() {
     };
     let actual = listener.local_addr().map(|a| a.port()).unwrap_or(port);
     println!("monitor link listening on 127.0.0.1:{actual}");
-    run(listener, seed, Arc::new(AtomicBool::new(true)));
+    let catalog =
+        match radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml")) {
+            Ok((catalog, _)) => catalog,
+            Err(error) => {
+                eprintln!("catalog load failed: {error}");
+                std::process::exit(1)
+            }
+        };
+    run(listener, seed, Arc::new(AtomicBool::new(true)), &catalog);
 }
 
 fn args() -> Result<(u16, u64), String> {
@@ -139,7 +148,7 @@ fn args() -> Result<(u16, u64), String> {
     Ok((port, seed))
 }
 
-fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>) {
+fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Catalog) {
     if listener.set_nonblocking(true).is_err() {
         return;
     }
@@ -164,7 +173,7 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>) {
                     Record {
                         time: ns(start),
                         port: node.port,
-                        frame: event(*node, 0x8001, session, &mut rng, &mut ident),
+                        frame: event(*node, 0x8001, session, &mut rng, &mut ident, catalog),
                     },
                 );
                 sessions[i] = next_id(sessions[i]);
@@ -178,7 +187,7 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>) {
                 Record {
                     time: ns(start),
                     port: 5,
-                    frame: event(NODES[4], 0x8002, session, &mut rng, &mut ident),
+                    frame: event(NODES[4], 0x8002, session, &mut rng, &mut ident, catalog),
                 },
             );
             sessions[4] = next_id(sessions[4]);
@@ -301,13 +310,29 @@ fn next_id(v: u16) -> u16 {
         v + 1
     }
 }
-fn rand_byte(state: &mut u64) -> u8 {
+fn next_noise(state: &mut u64) -> u8 {
     *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
     (*state >> 32) as u8
 }
 
-fn event(node: Node, method: u16, session: u16, rng: &mut u64, ident: &mut u16) -> Vec<u8> {
-    let payload: Vec<_> = (0..node.size).map(|_| rand_byte(rng)).collect();
+/// Encodes only catalog-defined signal bytes; the fixed frame-size tail remains
+/// zero. The seed only affects bounded latency jitter, never arbitrary bytes.
+fn event(
+    node: Node,
+    method: u16,
+    session: u16,
+    rng: &mut u64,
+    ident: &mut u16,
+    catalog: &Catalog,
+) -> Vec<u8> {
+    let mut payload = vec![0u8; node.size];
+    if let Some(event) = catalog.event(node.service, method) {
+        let phase = session as f64 / 20.0;
+        for signal in &event.signals {
+            let physical = waveform(signal, phase, rng);
+            encode_signal(signal, physical, &mut payload);
+        }
+    }
     let mut message = Vec::new();
     someip::build(
         &someip::SomeIpHeader {
@@ -325,6 +350,53 @@ fn event(node: Node, method: u16, session: u16, rng: &mut u64, ident: &mut u16) 
         &mut message,
     );
     ip_frame(node, [255; 4], &message, ident)
+}
+
+fn waveform(signal: &Signal, phase: f64, rng: &mut u64) -> f64 {
+    let sine = phase.sin();
+    match signal.name.as_str() {
+        n if n.contains("Count") => (8.0 + (phase / 3.0).floor()).rem_euclid(80.0),
+        "FrameCounter" => (phase * 20.0).floor().rem_euclid(u16::MAX as f64),
+        "PointCount" => 12_000.0 + 2_000.0 * sine,
+        "QualityMean" | "MeanIntensity" => 75.0 + 15.0 * sine,
+        n if n.contains("Range") => 30.0 + 20.0 * sine,
+        n if n.contains("Speed") => {
+            if n == "VehicleSpeed" {
+                20.0 + 8.0 * sine
+            } else {
+                -2.0 + 4.0 * sine
+            }
+        }
+        "YawRate" => 0.15 * sine,
+        "AccelX" => 1.2 * sine,
+        "ExposureTime" => 8.0 + sine,
+        "InputLatencyCam" => 20.0 + (next_noise(rng) % 11) as f64 * 0.1,
+        "MatchedTracks" => 25.0 + 4.0 * sine,
+        "UnmatchedTracks" => 2.0 + (phase.cos() + 1.0),
+        _ => 0.0,
+    }
+}
+
+fn encode_signal(signal: &Signal, physical: f64, payload: &mut [u8]) {
+    if signal.factor == 0.0 {
+        return;
+    }
+    let raw = ((physical - signal.offset) / signal.factor).round();
+    let end = signal.byte_offset.saturating_add(signal.byte_len);
+    let Some(out) = payload.get_mut(signal.byte_offset..end) else {
+        return;
+    };
+    match signal.base {
+        BaseType::U8 => out.copy_from_slice(&[(raw.clamp(0.0, u8::MAX as f64)) as u8]),
+        BaseType::U16 => {
+            out.copy_from_slice(&((raw.clamp(0.0, u16::MAX as f64)) as u16).to_be_bytes())
+        }
+        BaseType::U32 => {
+            out.copy_from_slice(&((raw.clamp(0.0, u32::MAX as f64)) as u32).to_be_bytes())
+        }
+        BaseType::S16 => out
+            .copy_from_slice(&((raw.clamp(i16::MIN as f64, i16::MAX as f64)) as i16).to_be_bytes()),
+    }
 }
 fn offer(node: Node, session: u16, ident: &mut u16) -> Vec<u8> {
     let mut body = Vec::new();
@@ -421,7 +493,13 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let running = Arc::new(AtomicBool::new(true));
         let stop = Arc::clone(&running);
-        let worker = thread::spawn(move || run(listener, 7, stop));
+        let worker = thread::spawn(move || {
+            let catalog =
+                radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
+                    .map(|(catalog, _)| catalog)
+                    .expect("checked-in extract");
+            run(listener, 7, stop, &catalog)
+        });
         let stream = TcpStream::connect(address).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
@@ -494,5 +572,31 @@ mod tests {
         assert!(saw_event && saw_offer && saw_sync && saw_follow_up);
         running.store(false, Ordering::Relaxed);
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn event_payload_is_catalog_decodable_and_zero_tailed() {
+        let catalog =
+            radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
+                .map(|(catalog, _)| catalog)
+                .expect("checked-in extract");
+        let mut noise = 7;
+        let mut ident = 1;
+        let wire = event(NODES[1], 0x8001, 10, &mut noise, &mut ident, &catalog);
+        let ethernet = EthernetFrame::parse(&wire).expect("ethernet");
+        let ip = Ipv4Packet::parse(ethernet.payload).expect("ipv4");
+        let udp = UdpDatagram::parse(ip.payload).expect("udp");
+        let (_, payload) = someip::parse(udp.payload).expect("someip");
+        let event = catalog.event(0x1102, 0x8001).expect("radar event");
+        let decoded = radeau_catalog::decode(&event.signals, payload);
+        assert_eq!(decoded.len(), event.signals.len());
+        assert!(decoded.iter().all(|signal| signal.scaled.is_finite()));
+        let used = event
+            .signals
+            .iter()
+            .map(|s| s.byte_offset + s.byte_len)
+            .max()
+            .unwrap_or(0);
+        assert!(payload[used..].iter().all(|byte| *byte == 0));
     }
 }

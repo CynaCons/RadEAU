@@ -3,6 +3,9 @@
  * (columnar arrays, mirrored by the Rust core's `FrameBatch`), the endpoint
  * and service tables shared with the dev frame generator (PRD §3.8), and the
  * columnar → row projection the Trace view renders.
+ *
+ * SOME/IP display names resolve catalog-first via `setCatalogNames` (fed by
+ * catalogStore); the static SERVICES table is the unloaded / browser fallback.
  */
 
 export interface TraceFrame {
@@ -86,6 +89,33 @@ export function getSessionEndpoints(): readonly SessionEndpoint[] | null {
   return sessionEndpoints;
 }
 
+/** Catalog-resolved (service, method) → display names; null when unloaded. */
+export interface CatalogNameEntry {
+  serviceName: string;
+  eventName: string;
+}
+
+let catalogNames: ReadonlyMap<string, CatalogNameEntry> | null = null;
+
+/**
+ * Installs or clears the catalog name map. `null` restores the static
+ * SERVICES fallback (browser / unloaded). Non-null means the catalog is
+ * loaded — unknown ids stay honest as `Service 0x…`.
+ */
+export function setCatalogNames(
+  names: ReadonlyMap<string, CatalogNameEntry> | null,
+): void {
+  catalogNames = names;
+}
+
+export function getCatalogNames(): ReadonlyMap<string, CatalogNameEntry> | null {
+  return catalogNames;
+}
+
+export function isCatalogNamesLoaded(): boolean {
+  return catalogNames !== null;
+}
+
 /** Resolved display label + tooltip for a batch endpoint index. */
 export function resolveEndpoint(index: number): { label: string; title: string } {
   const fromSession = sessionEndpoints?.[index];
@@ -127,6 +157,20 @@ const SD_SERVICE_METHOD = "0xFFFF:0x8100";
 
 function hex4(n: number): string {
   return "0x" + n.toString(16).toUpperCase().padStart(4, "0");
+}
+
+/**
+ * Catalog-first SOME/IP name. Unknown ids stay honest as `Service 0x…`
+ * when the catalog is loaded; otherwise the static SERVICES table fills in.
+ */
+export function resolveSomeIpName(sv: number, m: number): string {
+  if (catalogNames !== null) {
+    const fromCatalog = catalogNames.get(`${sv}:${m}`);
+    if (fromCatalog) return `${fromCatalog.serviceName}.${fromCatalog.eventName}`;
+    return `Service ${hex4(sv)}`;
+  }
+  const def = SERVICE_BY_KEY.get(`${sv}:${m}`);
+  return def ? `${def.name}.${def.eventName}` : `Service ${hex4(sv)}`;
 }
 
 /**
@@ -180,10 +224,9 @@ export function projectRow(
   let name: string;
   let type: string;
   if (proto === PROTO_SOMEIP) {
-    const def = SERVICE_BY_KEY.get(`${sv}:${m}`);
     protocol = "SOME/IP";
     serviceMethod = `${hex4(sv)}:${hex4(m)}`;
-    name = def ? `${def.name}.${def.eventName}` : `Service ${hex4(sv)}`;
+    name = resolveSomeIpName(sv, m);
     type = ty === MSG_EVENT ? "Event" : `Type ${ty}`;
   } else if (proto === PROTO_SD) {
     protocol = "SD";

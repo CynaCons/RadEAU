@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/radeau-proto", "crates/ecu-netsim"]
+members = ["src-tauri", "crates/radeau-proto", "crates/radeau-catalog", "crates/ecu-netsim"]
 
 [workspace.package]
 version = "0.1.0"

@@ -49,7 +49,7 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Static view skeletons with representative mock data: Trace, Network, Signals, Recorder, Simulation, Automation, Settings (PRD §3.7)
 - [x] Smoke test: navigate all views with zero console errors
 
-### v0.1.2 — View visuals to parity (static + dev data)
+### v0.1.2 — View visuals to parity (static + dev data) (current) (ACTIVE)
 - [x] Trace view visual: virtualized protocol-aware table (arrival + network time, endpoint, protocol, service/method, message type, session, return code), column filtering UI, pause/resume, expandable payload decode rows — mock frames
 - [x] Network view: Connection panel with TRUE data only (active source, link state, counters from the session store; attached node-plane clients with session states once §8.3 lands) + honest empty states for topology/SD/PTP panels until live decode feeds them (v0.5) — no mock states (SRS_visual_ui §1.5)
 - [ ] Recorder, Simulation, Automation, Settings visual pass to parity with the established design
@@ -249,14 +249,14 @@ release.
 - [x] UI: capture source picker (Dev generator | Simulator link 127.0.0.1:5560) + link status chip in the Trace toolbar; endpoint names resolved from the session table with static fallback; browser mode keeps the devgen mirror only [delegated: Grok]
 - [x] Integration: E2E extends e2e-smoke to launch ecu-netsim, start a simulator-link capture, and assert live simulator frames rendered in Trace; README run recipe; smoke test [integration: Claude]
 
-### v0.1.4 — Catalog pulled forward — AUTOSAR extract, decode, truthful payloads (current) (ACTIVE)
+### v0.1.4 — Catalog pulled forward — AUTOSAR extract, decode, truthful payloads (COMPLETE)
 **Goal:** The trace reads like CANoe: catalog names on every row, decoded signal values (name/raw/scaled/unit) in the dissection, simulator payloads carrying real encoded signals per the checked-in AUTOSAR extract — one shared definition (SRS_protocols §4). Pulled forward from v0.5.0 on user direction (2026-08-28); v0.5.0 keeps live view wiring.
 - [x] AUTOSAR communication extract authored: catalog/sensor-fusion.arxml — base types, linear compu-methods with units, record payload types, service interfaces, SOME/IP deployments (ids), provided instances (sockets) [Claude]
-- [ ] radeau-catalog crate: ARXML-subset importer (quick-xml) → in-memory catalog model (services/events/byte-aligned signals with factor/offset/unit), per-element import diagnostics, serde JSON projection for the UI [delegated: Codex]
-- [ ] ecu-netsim payloads become truthful: encode each event's signals per the extract layouts (deterministic waveforms, seeded phase), remainder zero-filled — no random payload bytes [delegated: Codex]
-- [ ] Core catalog integration: load the extract at startup + catalog_model command + catalog:state event; dissection payload section decodes to name/raw hex/raw dec/scaled/unit when the catalog knows the event [delegated: Codex]
-- [ ] UI: catalog-driven names in Trace rows (service.event from catalog_model, static table fallback), decoded five-column table in the dissection payload section (SRS_visual_ui §5.2), catalog rail button shows the real load state [delegated: Grok]
-- [ ] E2E trace-content phase: assert catalog names render in rows (CameraObjects.ObjectList, FusionStats), dissect one frame per class and assert NO "malformed" layer, decoded signal table shows named signals with units and plausible scaled values [delegated: Grok]
+- [x] radeau-catalog crate: ARXML-subset importer (quick-xml) → in-memory catalog model (services/events/byte-aligned signals with factor/offset/unit), per-element import diagnostics, serde JSON projection for the UI [delegated: Codex]
+- [x] ecu-netsim payloads become truthful: encode each event's signals per the extract layouts (deterministic waveforms, seeded phase), remainder zero-filled — no random payload bytes [delegated: Codex]
+- [x] Core catalog integration: load the extract at startup + catalog_model command + catalog:state event; dissection payload section decodes to name/raw hex/raw dec/scaled/unit when the catalog knows the event [delegated: Codex]
+- [x] UI: catalog-driven names in Trace rows (service.event from catalog_model, static table fallback), decoded five-column table in the dissection payload section (SRS_visual_ui §5.2), catalog rail button shows the real load state [delegated: Grok]
+- [x] E2E trace-content phase: assert catalog names render in rows (CameraObjects.ObjectList, FusionStats), dissect one frame per class and assert NO "malformed" layer, decoded signal table shows named signals with units and plausible scaled values [delegated: Grok]
 
 ## Backlog
 - [ ] CAN / CAN FD backend behind the channel abstraction + DBC schema pipeline (dual bit-walk decoders, shared vectors)

@@ -156,10 +156,7 @@ struct CaptureLinkEvent {
 }
 
 fn emit_link(app: &AppHandle, state: &'static str, detail: Option<String>) {
-    let _ = app.emit(
-        EVENT_CAPTURE_LINK,
-        &CaptureLinkEvent { state, detail },
-    );
+    let _ = app.emit(EVENT_CAPTURE_LINK, &CaptureLinkEvent { state, detail });
 }
 
 fn emit_session(
@@ -196,10 +193,7 @@ fn try_emit_batch(
     seq: &mut u64,
 ) {
     let elapsed_ms = Instant::now().duration_since(start).as_millis() as u64;
-    let pending = accumulator
-        .lock()
-        .map(|a| !a.is_empty())
-        .unwrap_or(false);
+    let pending = accumulator.lock().map(|a| !a.is_empty()).unwrap_or(false);
     if pending && deadline_due(elapsed_ms, BATCH_INTERVAL_MS, *last_emit_ms) && take_credit(credits)
     {
         let mut batch = FrameBatch::with_capacity(ACCUMULATOR_CAP.min(256));
@@ -242,7 +236,10 @@ pub struct CaptureState {
 
 impl Default for CaptureState {
     fn default() -> Self {
-        Self { session: Mutex::new(None), frame_ring: Arc::new(Mutex::new(FrameRing::default())) }
+        Self {
+            session: Mutex::new(None),
+            frame_ring: Arc::new(Mutex::new(FrameRing::default())),
+        }
     }
 }
 
@@ -252,8 +249,15 @@ impl CaptureState {
     }
 
     /// Reads a retained frame after capture has stopped as well as while live.
-    pub fn frame_detail(&self, idx: u64) -> Result<FrameDetail, String> {
-        self.frame_ring.lock().map_err(|_| "frame buffer unavailable".to_string())?.detail(idx)
+    pub fn frame_detail(
+        &self,
+        idx: u64,
+        catalog: Option<&radeau_catalog::Catalog>,
+    ) -> Result<FrameDetail, String> {
+        self.frame_ring
+            .lock()
+            .map_err(|_| "frame buffer unavailable".to_string())?
+            .detail(idx, catalog)
     }
 }
 
@@ -346,8 +350,7 @@ fn resolve_addr(addr: &str) -> Result<SocketAddr, String> {
 
 fn connect_sim(addr: &str) -> Result<TcpStream, String> {
     let sock = resolve_addr(addr)?;
-    TcpStream::connect_timeout(&sock, CONNECT_TIMEOUT)
-        .map_err(|e| format!("connect {addr}: {e}"))
+    TcpStream::connect_timeout(&sock, CONNECT_TIMEOUT).map_err(|e| format!("connect {addr}: {e}"))
 }
 
 fn configure_stream(stream: &TcpStream) -> Result<(), String> {
@@ -399,7 +402,11 @@ fn emitter_loop_sim(
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
-                emit_link(&app, "reconnecting", Some(format!("backoff {}ms", backoff.as_millis())));
+                emit_link(
+                    &app,
+                    "reconnecting",
+                    Some(format!("backoff {}ms", backoff.as_millis())),
+                );
                 sleep_interruptible(&stop, backoff);
                 backoff = (backoff * 2).min(BACKOFF_MAX);
                 continue;
@@ -422,7 +429,10 @@ fn emitter_loop_sim(
             }
             match read_handshake_line(&mut stream, &mut line_buf, &mut scratch) {
                 Ok(line) => break line,
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
+                {
                     try_emit_batch(
                         &app,
                         &credits,
@@ -557,7 +567,14 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
             std::thread::Builder::new()
                 .name("devgen-emitter".into())
                 .spawn(move || {
-                    emitter_loop_devgen(app, thread_stop, thread_credits, thread_acc, thread_ring, profile);
+                    emitter_loop_devgen(
+                        app,
+                        thread_stop,
+                        thread_credits,
+                        thread_acc,
+                        thread_ring,
+                        profile,
+                    );
                 })
                 .map_err(|e| format!("failed to spawn emitter: {e}"))?
         }
@@ -568,7 +585,14 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
             std::thread::Builder::new()
                 .name("simlink-reader".into())
                 .spawn(move || {
-                    emitter_loop_sim(app, thread_stop, thread_credits, thread_acc, thread_ring, addr);
+                    emitter_loop_sim(
+                        app,
+                        thread_stop,
+                        thread_credits,
+                        thread_acc,
+                        thread_ring,
+                        addr,
+                    );
                 })
                 .map_err(|e| format!("failed to spawn reader: {e}"))?
         }
@@ -662,7 +686,7 @@ mod tests {
         assert!(!deadline_due(0, 16, 0)); // no time has passed since the last emit
         assert!(!deadline_due(15, 16, 0));
         assert!(deadline_due(16, 16, 0)); // exactly at boundary
-        // Saturating, no panic on huge values.
+                                          // Saturating, no panic on huge values.
         assert!(deadline_due(u64::MAX, 16, u64::MAX - 100));
     }
 

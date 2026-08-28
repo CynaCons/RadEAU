@@ -140,7 +140,10 @@ mod tests {
         // Recompute over the received header with the checksum zeroed.
         let mut hdr = wire[..MIN_HEADER_LEN].to_vec();
         hdr[10..12].copy_from_slice(&[0, 0]);
-        assert_eq!(internet_checksum(&[&hdr]), wire[10] as u16 * 256 + wire[11] as u16);
+        assert_eq!(
+            internet_checksum(&[&hdr]),
+            wire[10] as u16 * 256 + wire[11] as u16
+        );
     }
 
     #[test]
@@ -163,10 +166,7 @@ mod tests {
         assert!(Ipv4Packet::parse(cut).is_ok());
         // Cutting below total_len is missing, not partial.
         let short = &wire[..MIN_HEADER_LEN + 7];
-        assert_eq!(
-            Ipv4Packet::parse(short).unwrap_err(),
-            ParseError::Truncated
-        );
+        assert_eq!(Ipv4Packet::parse(short).unwrap_err(), ParseError::Truncated);
     }
 
     #[test]

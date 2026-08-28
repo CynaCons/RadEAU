@@ -9,6 +9,8 @@ import {
   PROTO_SD,
   PROTO_SOMEIP,
   resolveEndpoint,
+  resolveSomeIpName,
+  setCatalogNames,
   setSessionEndpoints,
   type FrameBatchRaw,
 } from "./frameModel";
@@ -68,6 +70,52 @@ describe("endpoint resolution", () => {
     const row = projectRow(oneRowBatch(0), 0, null, new Map());
     expect(row.source).toBe("camera");
     expect(row.sourceTitle).toBe("camera (10.42.0.11)");
+  });
+});
+
+describe("catalog-first SOME/IP names", () => {
+  afterEach(() => {
+    setCatalogNames(null);
+  });
+
+  it("falls back to the static SERVICES table when unloaded", () => {
+    expect(resolveSomeIpName(0x1101, 0x8001)).toBe("CameraObjects.ObjectList");
+    expect(resolveSomeIpName(0x1201, 0x8001)).toBe("FusedObjects.FusedObjectList");
+    expect(resolveSomeIpName(0x9999, 0x8001)).toBe("Service 0x9999");
+  });
+
+  it("prefers catalog names when loaded", () => {
+    setCatalogNames(
+      new Map([
+        ["4353:32769", { serviceName: "CameraObjects", eventName: "ObjectList" }],
+        ["4609:32770", { serviceName: "FusedObjects", eventName: "FusionStats" }],
+        ["4609:32769", { serviceName: "FusedObjects", eventName: "FusedTrackList" }],
+        ["4609:1", { serviceName: "FusedObjects", eventName: "SetFusionMode" }],
+      ]),
+    );
+    expect(resolveSomeIpName(0x1101, 0x8001)).toBe("CameraObjects.ObjectList");
+    expect(resolveSomeIpName(0x1201, 0x8002)).toBe("FusedObjects.FusionStats");
+    expect(resolveSomeIpName(0x1201, 0x8001)).toBe("FusedObjects.FusedTrackList");
+    expect(resolveSomeIpName(0x1201, 1)).toBe("FusedObjects.SetFusionMode");
+  });
+
+  it("stays honest for unknown ids while the catalog is loaded", () => {
+    setCatalogNames(
+      new Map([["4353:32769", { serviceName: "CameraObjects", eventName: "ObjectList" }]]),
+    );
+    // Static table would have named 0x1201:0x8001 — catalog loaded must not.
+    expect(resolveSomeIpName(0x1201, 0x8001)).toBe("Service 0x1201");
+    expect(resolveSomeIpName(0x9999, 0x1)).toBe("Service 0x9999");
+  });
+
+  it("projects catalog names into TraceFrame.name", () => {
+    setCatalogNames(
+      new Map([
+        ["4353:32769", { serviceName: "CameraObjects", eventName: "ObjectList" }],
+      ]),
+    );
+    const row = projectRow(oneRowBatch(0), 0, null, new Map());
+    expect(row.name).toBe("CameraObjects.ObjectList");
   });
 });
 
