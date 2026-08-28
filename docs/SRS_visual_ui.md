@@ -208,7 +208,12 @@ displays or updates dynamically — no view animates, streams, or refreshes.
 View-local start/stop affordances (the Trace rail's capture button) are
 mirrors of this same session state, never independent sessions. The selected
 interface (dev generator, simulator link, later a physical NIC) is session
-configuration, editable only while stopped.
+configuration, editable only while stopped, and lives in the Settings view's
+Interface group (§5.7) — never as a control strip on a data view. Data views
+surface interface *state*, not interface *choice*: while a session runs on a
+degraded link (connecting, reconnecting, error), Trace shows a small outlined
+chip in the same top-right slot family as the paused chip; a healthy link
+shows nothing.
 
 ### 4.4 Navigation rail
 
@@ -459,8 +464,10 @@ not committed shows in `warning` until written.
 A single scrolling column, 24 px padded, capped at 800 px, 24 px between
 panels. Each panel is a 24 px-padded raised surface headed by a 20 px / 500
 title and a 14 px `text-secondary` sentence explaining what the group is for —
-the subtitle is mandatory. Groups: **Interface** (channel select, transmit-only
-switch), **Performance** (refresh-rate select with three discrete options,
+the subtitle is mandatory. Groups: **Interface** (capture-source select — dev
+generator, simulator link, physical NIC when available — with the selected
+source's address field; this is the ONLY place the interface is chosen, per
+§4.3; transmit-only switch), **Performance** (refresh-rate select with three discrete options,
 low-overhead switch), **Automation** (port, bind host, token, allowlist),
 **Diagnostics** (collection switches, thresholds, read-only reports),
 **Memory** (reclaim controls, anything destructive behind a confirmation
