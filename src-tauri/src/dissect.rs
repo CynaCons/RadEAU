@@ -258,6 +258,23 @@ mod tests {
         assert_eq!(detail.payload_offset, wire.len());
     }
 
+    /// Regression vector: a real SOME/IP event captured from the live
+    /// `ecu-netsim` monitor link (RadarTargets 0x1102, broadcast dst).
+    #[test]
+    fn dissects_live_netsim_event_capture() {
+        let hex = "01005e7fffff02524144000208004500008c8b7640004011a4b50a2a000cffffffff771a771a0078b7b611028001000000680002136e01010200a6f266068a651be5417bfaaf0837136bfbfc46f1ed0e5c41ebc6a283f2203fd01e7c1230";
+        let mut wire: Vec<u8> = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex"))
+            .collect();
+        wire.resize(154, 0); // captured frame is 154 bytes; tail is payload noise
+        let detail = dissect(0, 0.0, &wire);
+        let protocols: Vec<_> = detail.layers.iter().map(|l| l.protocol.as_str()).collect();
+        assert_eq!(protocols, ["Ethernet II", "IPv4", "UDP", "SOME/IP"], "layers: {:?}",
+            detail.layers.iter().map(|l| (l.protocol.clone(), l.summary.clone())).collect::<Vec<_>>());
+        assert_eq!(detail.layers[3].fields[0].value, "0x1102");
+        assert_eq!(detail.payload_offset, 58);
+    }
+
     #[test]
     fn malformed_tail_is_a_layer_not_an_error() {
         let mut wire = someip_wire(&[1, 2], 0x1101, 0x8001); wire.truncate(55);
