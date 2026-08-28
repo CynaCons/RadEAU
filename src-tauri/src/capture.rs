@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::devgen::{DevGen, GenFrame, RateProfile};
+use crate::dissect::{FrameDetail, FrameRing};
 use crate::simlink::{
     endpoints_from_handshake, read_handshake_line, validate_handshake_line, FrameMapper,
     RecordDeframer,
@@ -234,12 +235,31 @@ struct Session {
     thread: Option<JoinHandle<()>>,
 }
 
-#[derive(Default)]
-pub struct CaptureState(Mutex<Option<Session>>);
+pub struct CaptureState {
+    session: Mutex<Option<Session>>,
+    frame_ring: Arc<Mutex<FrameRing>>,
+}
+
+impl Default for CaptureState {
+    fn default() -> Self {
+        Self { session: Mutex::new(None), frame_ring: Arc::new(Mutex::new(FrameRing::default())) }
+    }
+}
 
 impl CaptureState {
     fn take(&self) -> Option<Session> {
-        self.0.lock().ok()?.take()
+        self.session.lock().ok()?.take()
+    }
+
+    /// Reads a retained frame after capture has stopped as well as while live.
+    pub fn frame_detail(&self, idx: u64) -> Result<FrameDetail, String> {
+        self.frame_ring.lock().map_err(|_| "frame buffer unavailable".to_string())?.detail(idx)
+    }
+}
+
+fn retain_frame(ring: &Arc<Mutex<FrameRing>>, frame: &GenFrame, wire: Vec<u8>) {
+    if let Ok(mut guard) = ring.lock() {
+        guard.push(frame.idx, frame.t_s, wire);
     }
 }
 
@@ -262,13 +282,14 @@ fn emitter_loop_devgen(
     stop: Arc<AtomicBool>,
     credits: Arc<AtomicU32>,
     accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
+    frame_ring: Arc<Mutex<FrameRing>>,
     profile: RateProfile,
 ) {
     emit_session(&app, "devgen", None, devgen_endpoints());
     emit_link(&app, "connected", None);
 
     let mut gen = DevGen::new(0x5eed_2026_0001);
-    let mut scratch_out: Vec<GenFrame> = Vec::new();
+    let mut scratch_out: Vec<(GenFrame, Vec<u8>)> = Vec::new();
     let start = Instant::now();
     let mut last_gen = start;
     let mut carry = 0.0f64;
@@ -292,9 +313,10 @@ fn emitter_loop_devgen(
 
         if n > 0 {
             scratch_out.clear();
-            gen.gen_frames(n, rate, &mut scratch_out);
+            gen.gen_frames_with_wire(n, rate, &mut scratch_out);
             if let Ok(mut acc) = accumulator.lock() {
-                for f in scratch_out.drain(..) {
+                for (f, wire) in scratch_out.drain(..) {
+                    retain_frame(&frame_ring, &f, wire);
                     if acc.len() >= ACCUMULATOR_CAP {
                         acc.pop_front();
                     }
@@ -357,6 +379,7 @@ fn emitter_loop_sim(
     stop: Arc<AtomicBool>,
     credits: Arc<AtomicU32>,
     accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
+    frame_ring: Arc<Mutex<FrameRing>>,
     addr: String,
 ) {
     let start = Instant::now();
@@ -468,7 +491,8 @@ fn emitter_loop_sim(
                     loop {
                         match deframer.next_record() {
                             Ok(Some(rec)) => {
-                                if let Some(f) = mapper.map_record(rec) {
+                                if let Some((f, wire)) = mapper.map_record_with_wire(rec) {
+                                    retain_frame(&frame_ring, &f, wire);
                                     push_frame(&accumulator, f);
                                 }
                             }
@@ -511,16 +535,20 @@ fn emitter_loop_sim(
 }
 
 fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|_| "capture state poisoned")?;
+    let mut guard = state.session.lock().map_err(|_| "capture state poisoned")?;
     if guard.is_some() {
         return Err("capture already active".into());
     }
     let stop = Arc::new(AtomicBool::new(false));
     let credits = Arc::new(AtomicU32::new(MAX_CREDITS));
     let accumulator = Arc::new(Mutex::new(VecDeque::with_capacity(ACCUMULATOR_CAP)));
+    if let Ok(mut ring) = state.frame_ring.lock() {
+        ring.clear();
+    }
     let thread_stop = Arc::clone(&stop);
     let thread_credits = Arc::clone(&credits);
     let thread_acc = Arc::clone(&accumulator);
+    let thread_ring = Arc::clone(&state.frame_ring);
 
     let handle = match source {
         SourceSpec::Devgen { profile } => {
@@ -529,7 +557,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
             std::thread::Builder::new()
                 .name("devgen-emitter".into())
                 .spawn(move || {
-                    emitter_loop_devgen(app, thread_stop, thread_credits, thread_acc, profile);
+                    emitter_loop_devgen(app, thread_stop, thread_credits, thread_acc, thread_ring, profile);
                 })
                 .map_err(|e| format!("failed to spawn emitter: {e}"))?
         }
@@ -540,7 +568,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
             std::thread::Builder::new()
                 .name("simlink-reader".into())
                 .spawn(move || {
-                    emitter_loop_sim(app, thread_stop, thread_credits, thread_acc, addr);
+                    emitter_loop_sim(app, thread_stop, thread_credits, thread_acc, thread_ring, addr);
                 })
                 .map_err(|e| format!("failed to spawn reader: {e}"))?
         }
@@ -587,7 +615,7 @@ pub fn capture_stop(state: State<CaptureState>) -> Result<(), String> {
 #[tauri::command]
 pub fn ack_frames(state: State<CaptureState>, n: u32) -> Result<(), String> {
     // Read the live session without taking it; if none, acks are stale no-ops.
-    let guard = state.0.lock().map_err(|_| "capture state poisoned")?;
+    let guard = state.session.lock().map_err(|_| "capture state poisoned")?;
     if let Some(session) = guard.as_ref() {
         for _ in 0..n.min(MAX_CREDITS) {
             let _ = session

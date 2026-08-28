@@ -159,12 +159,30 @@ impl DevGen {
 
     /// Generates `n` frames spaced ~`1/rate` apart on the synthetic timeline,
     /// appending to `out`. One reusable scratch buffer across all frames.
+    #[cfg(test)]
     pub fn gen_frames(&mut self, n: usize, rate: f64, out: &mut Vec<GenFrame>) {
         let mut scratch = Vec::with_capacity(256);
         for _ in 0..n {
             self.t_s += (1.0 / rate) * (0.5 + self.rng.below(1000) as f64 / 1000.0);
             let frame = self.gen_one(&mut scratch);
             out.push(frame);
+        }
+    }
+
+    /// Generates frames with their complete wire bytes for the cold-path frame
+    /// ring. The streaming `GenFrame` shape remains unchanged.
+    pub fn gen_frames_with_wire(
+        &mut self,
+        n: usize,
+        rate: f64,
+        out: &mut Vec<(GenFrame, Vec<u8>)>,
+    ) {
+        let mut scratch = Vec::with_capacity(256);
+        for _ in 0..n {
+            self.t_s += (1.0 / rate) * (0.5 + self.rng.below(1000) as f64 / 1000.0);
+            scratch.clear();
+            let frame = self.gen_one(&mut scratch);
+            out.push((frame, scratch.clone()));
         }
     }
 

@@ -314,7 +314,14 @@ impl FrameMapper {
         Self::default()
     }
 
+    #[cfg(test)]
     pub fn map_record(&mut self, record: MonitorRecord) -> Option<GenFrame> {
+        self.map_record_with_wire(record).map(|(frame, _)| frame)
+    }
+
+    /// Maps a monitor record while preserving the owned Ethernet frame for the
+    /// capture-side raw-frame ring.
+    pub fn map_record_with_wire(&mut self, record: MonitorRecord) -> Option<(GenFrame, Vec<u8>)> {
         match record {
             MonitorRecord::Gap {
                 dropped_count,
@@ -341,7 +348,7 @@ impl FrameMapper {
                 match classify_frame(&frame, idx, t_s, port_id) {
                     Some(f) => {
                         self.idx += 1;
-                        Some(f)
+                        Some((f, frame))
                     }
                     None => {
                         self.skipped_other += 1;

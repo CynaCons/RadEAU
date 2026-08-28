@@ -30,6 +30,7 @@ import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import type { TableComponents } from "react-virtuoso";
 import { EmptyState } from "../components/EmptyState";
+import { TraceDetailPanel } from "../components/TraceDetailPanel";
 import { useViewLifecycle } from "../shell/viewLifecycle";
 import {
   captureButtonLabel,
@@ -38,6 +39,11 @@ import {
   showDegradedLinkChip,
 } from "../runtime/captureSource";
 import { ackFrames, isDesktop, onFrameBatch } from "../runtime/desktop";
+import {
+  captureTraceExpansion,
+  rowMatchesExpansion,
+  type TraceExpansion,
+} from "../runtime/frameDetail";
 import { sessionStore } from "../runtime/sessionStore";
 import {
   DEFAULT_HISTORY_WINDOW,
@@ -141,6 +147,17 @@ const TABLE_WRAP_SX: SxProps = {
   },
   // Hover wash only — no zebra, no transition (VU-019).
   "& tbody tr:hover td": { backgroundColor: "var(--fill-subtle)" },
+  // Expansion detail sits in a second <tr>; unlock height / wrapping.
+  "& td.trace-detail-cell": {
+    height: "auto",
+    whiteSpace: "normal",
+    overflow: "visible",
+    textOverflow: "clip",
+    padding: 0,
+    verticalAlign: "top",
+    borderBottom: "1px solid var(--border)",
+  },
+  "& tbody tr:hover td.trace-detail-cell": { backgroundColor: "transparent" },
 };
 
 // ---------------------------------------------------------------------------
@@ -152,10 +169,13 @@ interface TraceTableContext {
   mode: TraceDisplayMode;
   pinned: ReadonlySet<string>;
   onTogglePin: (key: string) => void;
+  expansion: TraceExpansion | null;
+  onToggleExpand: (frame: TraceFrame) => void;
 }
 
 function makeTableComponents(columns: ColumnDef[]): TableComponents<TraceFrame, TraceTableContext> {
   const minWidth = columns.reduce((sum, c) => sum + c.width, 0);
+  const colCount = columns.length;
   return {
     Table: ({ style, children, context: _context, ...rest }) => (
       <table
@@ -176,6 +196,28 @@ function makeTableComponents(columns: ColumnDef[]): TableComponents<TraceFrame, 
         {children}
       </table>
     ),
+    // Second <tr> for the dissection panel; omit fixedItemHeight so Virtuoso measures.
+    TableRow: ({ children, style, item, context, ...rest }) => {
+      const expanded =
+        context.expansion !== null && rowMatchesExpansion(context.mode, item, context.expansion);
+      return (
+        <>
+          <tr {...rest} style={style}>
+            {children}
+          </tr>
+          {expanded && context.expansion ? (
+            <tr data-testid={`trace-detail-row-${context.expansion.idx}`}>
+              <td colSpan={colCount} className="trace-detail-cell">
+                <TraceDetailPanel
+                  idx={context.expansion.idx}
+                  showCapturedIdx={context.expansion.showCapturedIdx}
+                />
+              </td>
+            </tr>
+          ) : null}
+        </>
+      );
+    },
   };
 }
 
@@ -224,17 +266,28 @@ function rowContent(
 ): ReactNode {
   const key = fixedDisplayKey(f);
   const pinned = context?.pinned.has(key) ?? false;
+  const expanded =
+    context?.expansion != null &&
+    rowMatchesExpansion(context.mode, f, context.expansion);
+  const expandLabel = expanded ? "Collapse row" : "Expand row";
   return (
     <>
       <td style={{ textAlign: "center", padding: 0 }}>
-        <Tooltip title="Expand row">
+        <Tooltip title={expandLabel}>
           <IconButton
             size="small"
-            aria-label="Expand row"
+            aria-label={expandLabel}
+            aria-expanded={expanded}
             data-testid={`trace-expand-btn-${f.id}`}
+            onClick={() => context?.onToggleExpand(f)}
             sx={{ p: "2px", color: "text.secondary", transition: "none" }}
           >
-            <ChevronRightIcon sx={{ fontSize: 16 }} />
+            <ChevronRightIcon
+              sx={{
+                fontSize: 16,
+                transform: expanded ? "rotate(90deg)" : "none",
+              }}
+            />
           </IconButton>
         </Tooltip>
       </td>
@@ -294,6 +347,7 @@ export function TraceView() {
   const [historyWindow, setHistoryWindow] = useState<HistoryWindow>(DEFAULT_HISTORY_WINDOW);
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
   const [settingsAnchor, setSettingsAnchor] = useState<HTMLElement | null>(null);
+  const [expansion, setExpansion] = useState<TraceExpansion | null>(null);
 
   const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
   const displayRows = useMemo(
@@ -307,6 +361,7 @@ export function TraceView() {
       columns,
       mode,
       pinned,
+      expansion,
       onTogglePin: (key: string) => {
         setPinned((prev) => {
           const next = new Set(prev);
@@ -315,8 +370,15 @@ export function TraceView() {
           return next;
         });
       },
+      onToggleExpand: (frame: TraceFrame) => {
+        setExpansion((prev) => {
+          const next = captureTraceExpansion(mode, frame);
+          if (prev && prev.slotKey === next.slotKey) return null;
+          return next;
+        });
+      },
     }),
-    [columns, mode, pinned],
+    [columns, mode, pinned, expansion],
   );
 
   // Live pipeline: subscribe to batches while the shared session is running;
@@ -418,7 +480,10 @@ export function TraceView() {
                 </FormLabel>
                 <RadioGroup
                   value={mode}
-                  onChange={(_, value) => setMode(value as TraceDisplayMode)}
+                  onChange={(_, value) => {
+                    setMode(value as TraceDisplayMode);
+                    setExpansion(null);
+                  }}
                   data-testid="trace-mode-group"
                 >
                   <FormControlLabel
@@ -517,6 +582,7 @@ export function TraceView() {
                 onClick={() => {
                   traceStore.clear();
                   setPinned(new Set());
+                  setExpansion(null);
                 }}
                 data-testid="trace-clear-btn"
                 sx={{ color: "text.secondary" }}
@@ -611,7 +677,8 @@ export function TraceView() {
               <TableVirtuoso
                 data={displayRows as TraceFrame[]}
                 context={tableContext}
-                fixedItemHeight={32}
+                // Default 32 px; drop fixed height so an open dissection row can grow.
+                defaultItemHeight={32}
                 components={tableComponents}
                 fixedHeaderContent={() => renderHeader(columns)}
                 itemContent={rowContent}

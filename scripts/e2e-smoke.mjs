@@ -559,6 +559,32 @@ async function main() {
     if (network.sourceAddr && !network.sourceAddr.includes(String(SIM_PORT)))
       fail(`Network addr "${network.sourceAddr}" missing sim port ${SIM_PORT}`);
 
+    // Phase 4 — expanding a live simulator frame dissects it layer by layer.
+    if (!(await session.eval(clickProbe("nav-trace")))) fail("could not return to Trace");
+    await waitFor(
+      () => session.eval(`(() => {
+        const btn = document.querySelector('[data-testid^="trace-expand-btn-"]');
+        if (!btn) return false;
+        btn.click();
+        return true;
+      })()`),
+      5_000,
+      "an expandable trace row",
+    );
+    const detail = await waitFor(async () => {
+      const d = await session.eval(`(() => {
+        const panel = document.querySelector('[data-testid^="trace-detail-"]');
+        if (!panel) return null;
+        const text = panel.textContent || "";
+        return {
+          hasEthernet: text.includes("Ethernet II"),
+          layerCount: panel.querySelectorAll('[data-testid^="trace-detail-layer-"]').length,
+        };
+      })()`);
+      return d && d.hasEthernet && d.layerCount >= 2 ? d : null;
+    }, 10_000, "dissection panel with Ethernet II + at least 2 layers");
+    console.log("dissection:", JSON.stringify(detail));
+
     console.log(
       `PASS — devgen ${trace.rowCount} rows (Fixed→Sequential); simulator link ${sim.rowCount} rows, ` +
         `degraded chip absent, protocols [${[...protocolsRendered].join(", ")}], ` +

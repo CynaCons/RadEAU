@@ -226,3 +226,44 @@ export function onCaptureLink(cb: (status: CaptureLinkStatus) => void): () => vo
   if (!isDesktop()) return mirror.subscribeLink(cb);
   return listenEvent<CaptureLinkStatus>(LINK_EVENT, cb);
 }
+
+// ---------------------------------------------------------------------------
+// Frame dissection (cold path). Desktop invokes `frame_detail`; browser mode
+// rejects so the UI can show an honest empty state (SRS_visual_ui.md §5.2).
+// ---------------------------------------------------------------------------
+
+export interface FrameField {
+  name: string;
+  value: string;
+  offset: number;
+  len: number;
+}
+
+export interface FrameLayer {
+  protocol: string;
+  summary: string;
+  fields: FrameField[];
+}
+
+export interface FrameDetail {
+  idx: number;
+  tS: number;
+  wireLen: number;
+  payloadOffset: number;
+  /** Wire order: Ethernet II → IPv4 → UDP → SOME/IP → SOME/IP-SD, or Ethernet II → gPTP. */
+  layers: FrameLayer[];
+  /** Full frame, uppercase hex, no separators. */
+  bytes: string;
+}
+
+/**
+ * Fetches a Wireshark-style layer dissection for one buffered frame.
+ * Browser mode rejects with `"desktop app only"`. Core may reject with
+ * `"frame no longer buffered"` or `"unknown frame"`.
+ */
+export function fetchFrameDetail(idx: number): Promise<FrameDetail> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<FrameDetail>("frame_detail", { idx });
+}

@@ -45,6 +45,20 @@ wraps to 1); Protocol Version (0x01); Interface Version; Message Type (0x00
 REQUEST, 0x01 REQUEST_NO_RETURN, 0x02 NOTIFICATION, 0x80 RESPONSE, 0x81 ERROR);
 Return Code (0x00 E_OK, …). All multi-byte fields big-endian.
 
+## 3b. Frame dissection service (cold path)
+
+The core retains recent raw frames in a **bounded frame buffer** (capped by
+frame count and total bytes, drop-oldest, kept across session stop until the
+next start so a stopped trace stays inspectable). On demand — never on the
+streaming path — the core dissects one buffered frame into an ordered layer
+tree: per layer, the protocol name, a one-line summary, and the header fields
+(name, display value, byte offset, length) exactly as the shared codecs parse
+them, plus the full frame bytes. Malformed regions dissect as far as the
+codecs reach and state the failure per layer; an evicted frame returns a
+distinct "no longer buffered" error. One dissector, core-side, built on the
+same codecs as classification (decision D9) — the UI never re-parses wire
+bytes.
+
 ## 4. Service catalog
 
 The service catalog (native YAML, versioned schema) defines services (id, name,

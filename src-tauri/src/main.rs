@@ -12,6 +12,7 @@
 // capture profile, and superseded as the default source by ecu-netsim (v0.4).
 mod capture;
 mod devgen;
+mod dissect;
 mod simlink;
 
 fn main() {
@@ -25,6 +26,7 @@ fn main() {
             capture::capture_start,
             capture::capture_stop,
             capture::ack_frames,
+            dissect::frame_detail,
         ])
         .run(tauri::generate_context!())
         .expect("error while running RadEAU");

@@ -59,6 +59,8 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Product mark: real RadEAU logo (R + wave + raft emblem) cropped/masked from the original, wired into app bar, startup overlay, About dialog, and the full Tauri icon set; original kept in design-reference/ (untracked)
 - [x] Trace table modes per SRS_visual_ui §5.2: Fixed (default — rewrite-in-place per (service,method) key, (protocol,source) for SD/gPTP; pinned-first ordering; pin column; per-key delta as live cycle time) + Sequential (append, follow tail); mode + history window in the display-settings popover [delegated: Grok]
 - [x] Global run gate per SRS_visual_ui §4.3: the app-bar run control owns the capture session (starts reading from the selected interface, stops it everywhere); Trace rail capture button becomes a mirror; source selection shared session config editable only while stopped; nothing renders dynamically while stopped (browser devgen mirror included); E2E asserts the stopped-state stillness [delegated: Grok]
+- [x] Frame dissection, core side (SRS_protocols §3b): bounded raw-frame buffer in the capture reader (both sources), frame_detail command returning the ordered layer tree + full bytes via radeau-proto codecs [delegated: Codex]
+- [x] Trace row expansion = Wireshark-style layer dissection (SRS_visual_ui §5.2): collapsible per-protocol sections with field rows, hex payload with offsets, on-demand fetch, honest evicted/browser states [delegated: Grok]
 
 ## v0.2 — Graphing
 

@@ -400,10 +400,19 @@ select-all/deselect-all button paired with a `selected / total` count, a
 checkbox list capped at 250 px, and Cancel/Apply. Selecting everything clears
 the filter rather than storing a no-op.
 
-Any row expands to a nested detail table on `fill-subtle`, indented 48 px at
-28 px row height, five columns proportioned 32 / 18 / 18 / 22 / 10% — name,
-raw hex, raw decimal, scaled value, unit — the four data columns right-aligned
-`font-mono`.
+Any row expands to a **protocol-layer dissection** on `fill-subtle`, indented
+48 px — the Wireshark model. One collapsible section per layer in wire order
+(Ethernet II → IPv4 → UDP → SOME/IP → SOME/IP-SD entries, or
+Ethernet II → gPTP), each headed by the protocol name and a one-line summary,
+its fields as name/value rows at 28 px in `font-mono` values, ordered as on
+the wire. The final section is the payload: hex bytes in 16-byte rows with
+offsets. When the service catalog is loaded (v0.5), the SOME/IP payload
+section becomes the decoded five-column table — name, raw hex, raw decimal,
+scaled value, unit, proportioned 32 / 18 / 18 / 22 / 10%, data columns
+right-aligned `font-mono`. Dissection is fetched from the core on demand when
+a row expands (a cold path — never part of the streaming batch); a frame
+evicted from the core's bounded frame buffer states that honestly ("frame no
+longer buffered") instead of showing a partial view.
 
 The paused state shall show three simultaneous changes: the rail button swaps
 glyph and takes the `warning` tint, a `warning`-outlined chip reading
