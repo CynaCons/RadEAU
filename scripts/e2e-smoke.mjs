@@ -11,9 +11,11 @@
  *   4. Over CDP: asserts the shell (app bar + nav rail) is rendered inside
  *      the viewport, navigates to Trace, starts the capture, and asserts
  *      frames are flowing through the real Rust pipeline.
- *   5. Launches `ecu-netsim` on a random monitor port, switches the Trace
- *      source to the simulator link, and asserts live simulator frames
- *      (with handshake-derived endpoint names) render end to end.
+ *   5. Launches `ecu-netsim` on a random monitor port, switches the capture
+ *      source via Settings to the simulator link, asserts live simulator
+ *      frames (with handshake-derived endpoint names) render end to end,
+ *      the degraded Trace link chip is absent once Connected, and the
+ *      Network Connection panel shows the sim source + Connected.
  *   6. Cleans up every process and the temp profile; exits non-zero on any
  *      failed assertion.
  *
@@ -279,14 +281,22 @@ const CLICK_SEQUENTIAL_MODE_PROBE = `(() => {
   return true;
 })()`;
 
+const CLICK_FIXED_MODE_PROBE = `(() => {
+  const radio = document.querySelector('[data-testid="trace-mode-fixed"]');
+  if (!radio) return false;
+  const input = radio.matches("input") ? radio : radio.querySelector("input");
+  (input || radio).click();
+  return true;
+})()`;
+
 const TRACE_MODE_PROBE = `(() => {
   const table = document.querySelector('[data-testid="trace-table"]');
   return table ? table.getAttribute("data-trace-mode") : null;
 })()`;
 
 // MUI Select opens on mousedown of its combobox; options render in a portal.
-const OPEN_SOURCE_SELECT_PROBE = `(() => {
-  const root = document.querySelector('[data-testid="trace-source-select"]');
+const OPEN_SETTINGS_SOURCE_SELECT_PROBE = `(() => {
+  const root = document.querySelector('[data-testid="settings-source-select"]');
   const combo = root ? root.querySelector('[role="combobox"]') : null;
   if (!combo) return false;
   combo.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -296,7 +306,7 @@ const OPEN_SOURCE_SELECT_PROBE = `(() => {
 // React-controlled input: use the native value setter so the change is seen.
 function setSimAddrProbe(addr) {
   return `(() => {
-    const root = document.querySelector('[data-testid="trace-sim-addr"]');
+    const root = document.querySelector('[data-testid="settings-sim-addr"]');
     const input = root ? root.querySelector("input") : null;
     if (!input) return false;
     const setter = Object.getOwnPropertyDescriptor(
@@ -317,11 +327,29 @@ const SIM_STATE_PROBE = `(() => {
   const totalAttr = table ? table.getAttribute("data-row-total") : null;
   return {
     rowCount: totalAttr != null ? Number(totalAttr) : (table ? table.querySelectorAll("tbody tr").length : 0),
+    // Healthy Connected link must NOT show the Trace degraded chip (§4.3).
     chipLabel: chip ? chip.textContent : null,
+    chipAbsent: !chip,
     endpointNameSeen: text.some((t) => names.some((n) => t.includes(n))),
     // All three simulated traffic classes must actually render as rows.
     protocolsSeen: ["SOME/IP", "SD", "gPTP"].filter((p) =>
       text.some((t) => t === p)),
+  };
+})()`;
+
+const NETWORK_CONNECTION_PROBE = `(() => {
+  const q = (t) => document.querySelector('[data-testid="' + t + '"]');
+  const panel = q("network-connection-panel");
+  const kind = q("network-source-kind");
+  const addr = q("network-source-addr");
+  const sessionChip = q("network-session-chip");
+  const linkChip = q("network-link-chip");
+  return {
+    panelPresent: !!panel,
+    sourceKind: kind ? kind.textContent : null,
+    sourceAddr: addr ? addr.textContent : null,
+    sessionLabel: sessionChip ? sessionChip.textContent : null,
+    linkLabel: linkChip ? linkChip.textContent : null,
   };
 })()`;
 
@@ -444,31 +472,56 @@ async function main() {
     const trace = seqLater;
 
     // Phase 3 — the simulator link streams real ecu-netsim traffic into Trace.
-    // Stop via the Trace mirror (same session), switch source while stopped.
+    // Stop via the Trace mirror (same session), choose Interface in Settings.
     if (!(await session.eval(clickProbe("trace-capture-btn"))))
       fail("could not stop the devgen capture via Trace mirror");
     // Source controls unlock only while stopped — wait a beat for the stop.
     await sleep(300);
-    if (!(await session.eval(OPEN_SOURCE_SELECT_PROBE)))
-      fail("could not open the source select");
+    if (!(await session.eval(clickProbe("nav-settings"))))
+      fail("could not navigate to Settings");
+    await waitFor(async () => {
+      const ok = await session.eval(
+        `!!document.querySelector('[data-testid="settings-source-select"]')`,
+      );
+      return ok ? true : null;
+    }, 10_000, "settings source select");
+    if (!(await session.eval(OPEN_SETTINGS_SOURCE_SELECT_PROBE)))
+      fail("could not open the Settings source select");
     await waitFor(
-      () => session.eval(clickProbe("trace-source-option-sim")),
+      () => session.eval(clickProbe("settings-source-option-sim")),
       5_000,
-      "sim option in the source menu",
+      "sim option in the Settings source menu",
     );
     await waitFor(
       () => session.eval(setSimAddrProbe(`127.0.0.1:${SIM_PORT}`)),
       5_000,
-      "sim address field",
+      "settings sim address field",
     );
+    if (!(await session.eval(clickProbe("nav-trace"))))
+      fail("could not return to Trace after Settings");
+    await waitFor(async () => {
+      const s = await session.eval(TRACE_STATE_PROBE);
+      return s.viewPresent ? s : null;
+    }, 10_000, "trace view after Settings");
+    // Fixed mode keeps one row per key so SOME/IP + SD + gPTP stay visible.
+    // Switch while the Sequential table is still mounted (empty state has no mode attr).
+    if (!(await session.eval(OPEN_DISPLAY_SETTINGS_PROBE)))
+      fail("could not open display-settings for Fixed before sim");
+    await waitFor(
+      () => session.eval(CLICK_FIXED_MODE_PROBE),
+      5_000,
+      "Fixed mode radio before sim",
+    );
+    await waitFor(async () => {
+      const m = await session.eval(TRACE_MODE_PROBE);
+      return m === "fixed" ? m : null;
+    }, 5_000, "table data-trace-mode=fixed before sim");
     if (!(await session.eval(clickProbe("trace-clear-btn"))))
       fail("could not clear devgen rows before the sim phase");
     // Start sim via the app-bar again (prove both entry points).
     if (!(await session.eval(clickProbe("appbar-run-btn"))))
       fail("could not start the sim capture via appbar-run-btn");
-    // Protocol classes accumulate across polls. Fixed mode keeps one row per
-    // key so all three classes tend to stay visible; Sequential also works
-    // via the cumulative set.
+    // Healthy Connected → Trace degraded chip absent (§4.3).
     let lastSim = null;
     const protocolsRendered = new Set();
     const sim = await waitFor(async () => {
@@ -476,12 +529,12 @@ async function main() {
       lastSim = s;
       for (const p of s.protocolsSeen) protocolsRendered.add(p);
       return s.rowCount > 0 &&
-        s.chipLabel === "Connected" &&
+        s.chipAbsent &&
         s.endpointNameSeen &&
         protocolsRendered.size === 3
         ? s
         : null;
-    }, 20_000, "simulator frames (SOME/IP + SD + gPTP) + Connected chip + endpoint names in Trace").catch((err) => {
+    }, 20_000, "simulator frames (SOME/IP + SD + gPTP) + absent degraded chip + endpoint names in Trace").catch((err) => {
       console.error(
         "last sim state:", JSON.stringify(lastSim),
         "protocols rendered so far:", [...protocolsRendered].join(", ") || "none",
@@ -489,10 +542,27 @@ async function main() {
       throw err;
     });
     console.log("sim:", JSON.stringify(sim));
+
+    // Network Connection panel must show the live sim source + Connected.
+    if (!(await session.eval(clickProbe("nav-network"))))
+      fail("could not navigate to Network");
+    const network = await waitFor(async () => {
+      const n = await session.eval(NETWORK_CONNECTION_PROBE);
+      return n.panelPresent &&
+        n.sourceKind === "Simulator link" &&
+        n.linkLabel === "Connected" &&
+        n.sessionLabel && n.sessionLabel.includes("running")
+        ? n
+        : null;
+    }, 10_000, "Network Connection panel sim source + Connected");
+    console.log("network:", JSON.stringify(network));
+    if (network.sourceAddr && !network.sourceAddr.includes(String(SIM_PORT)))
+      fail(`Network addr "${network.sourceAddr}" missing sim port ${SIM_PORT}`);
+
     console.log(
       `PASS — devgen ${trace.rowCount} rows (Fixed→Sequential); simulator link ${sim.rowCount} rows, ` +
-        `chip "${sim.chipLabel}", protocols [${[...protocolsRendered].join(", ")}], ` +
-        `endpoint names rendered`,
+        `degraded chip absent, protocols [${[...protocolsRendered].join(", ")}], ` +
+        `endpoint names rendered; Network Connection "${network.sourceKind}" / "${network.linkLabel}"`,
     );
   } catch (err) {
     failures += 1;

@@ -4,12 +4,14 @@ import {
   buildCaptureSource,
   captureButtonLabel,
   DEFAULT_SIM_ADDR,
+  interfaceLockedReason,
   linkChipColorVar,
   linkChipLabel,
-  showLinkStatusChip,
+  showDegradedLinkChip,
   showSimAddressField,
   simSourceAvailable,
   sourceControlsDisabled,
+  sourceKindLabel,
 } from "./captureSource";
 
 describe("captureSource picker state", () => {
@@ -29,24 +31,37 @@ describe("captureSource picker state", () => {
     if (blank.kind === "sim") expect(blank.addr).toBe(DEFAULT_SIM_ADDR);
   });
 
-  it("gates sim availability and control enablement", () => {
+  it("gates sim availability and locks Interface controls while running", () => {
     expect(simSourceAvailable(true)).toBe(true);
     expect(simSourceAvailable(false)).toBe(false);
     expect(sourceControlsDisabled(false)).toBe(false);
     expect(sourceControlsDisabled(true)).toBe(true);
+    expect(interfaceLockedReason(false)).toBeNull();
+    expect(interfaceLockedReason(true)).toMatch(/session is running/i);
     expect(showSimAddressField("sim")).toBe(true);
     expect(showSimAddressField("devgen")).toBe(false);
-    expect(showLinkStatusChip("sim")).toBe(true);
-    expect(showLinkStatusChip("devgen")).toBe(false);
   });
 
-  it("maps link chip labels and token color vars", () => {
+  it("shows the Trace link chip only for degraded running sim links", () => {
+    expect(showDegradedLinkChip(true, "sim", "connecting")).toBe(true);
+    expect(showDegradedLinkChip(true, "sim", "reconnecting")).toBe(true);
+    expect(showDegradedLinkChip(true, "sim", "error")).toBe(true);
+    expect(showDegradedLinkChip(true, "sim", "connected")).toBe(false);
+    expect(showDegradedLinkChip(true, "sim", "closed")).toBe(false);
+    expect(showDegradedLinkChip(true, "devgen", "reconnecting")).toBe(false);
+    expect(showDegradedLinkChip(false, "sim", "reconnecting")).toBe(false);
+    expect(showDegradedLinkChip(true, "sim", null)).toBe(false);
+  });
+
+  it("maps link chip labels, source labels, and token color vars", () => {
     expect(linkChipLabel("connected")).toBe("Connected");
     expect(linkChipLabel("reconnecting")).toBe("Reconnecting");
     expect(linkChipColorVar("connected")).toBe("var(--success)");
     expect(linkChipColorVar("error")).toBe("var(--error)");
     expect(linkChipColorVar("connecting")).toBe("var(--warning)");
     expect(linkChipColorVar("closed")).toBe("var(--text-secondary)");
+    expect(sourceKindLabel("devgen")).toBe("Dev generator");
+    expect(sourceKindLabel("sim")).toBe("Simulator link");
   });
 
   it("labels the capture button from source kind", () => {

@@ -1,6 +1,7 @@
 /**
- * Capture source picker helpers — pure state logic shared by TraceView and
- * tests. Mirrors the Rust `SourceSpec` tagged union.
+ * Capture source picker helpers — pure state logic shared by Settings (choice),
+ * Trace (degraded link chip), Network (connection truth), and tests. Mirrors
+ * the Rust `SourceSpec` tagged union.
  */
 
 import type { RateProfile } from "./devGenMirror";
@@ -33,6 +34,13 @@ export interface CaptureSessionInfo {
 export const DEFAULT_SIM_ADDR = "127.0.0.1:5560";
 export const DEFAULT_DEVGEN_PROFILE: RateProfile = "normal";
 
+/** Link states that count as degraded for Trace's status chip (§4.3). */
+const DEGRADED_LINK_STATES: ReadonlySet<LinkState> = new Set([
+  "connecting",
+  "reconnecting",
+  "error",
+]);
+
 /** Simulator link is a desktop-only source; browser mode keeps it disabled. */
 export function simSourceAvailable(desktop: boolean): boolean {
   return desktop;
@@ -53,14 +61,31 @@ export function showSimAddressField(kind: SourceKind): boolean {
   return kind === "sim";
 }
 
-/** Link-status chip is hidden for the in-process dev generator. */
-export function showLinkStatusChip(kind: SourceKind): boolean {
-  return kind === "sim";
+/**
+ * Trace shows a link chip only while a session runs on a degraded sim link
+ * (connecting / reconnecting / error). Healthy connected and devgen: hidden.
+ */
+export function showDegradedLinkChip(
+  running: boolean,
+  kind: SourceKind,
+  state: LinkState | null | undefined,
+): boolean {
+  if (!running || kind !== "sim" || !state) return false;
+  return DEGRADED_LINK_STATES.has(state);
 }
 
 /** Controls that choose the source are locked while a capture is live. */
 export function sourceControlsDisabled(capturing: boolean): boolean {
   return capturing;
+}
+
+/** Tooltip when Interface controls are locked (§5.7 — never silently ignored). */
+export function interfaceLockedReason(capturing: boolean): string | null {
+  return capturing ? "Interface cannot change while a session is running" : null;
+}
+
+export function sourceKindLabel(kind: SourceKind): string {
+  return kind === "sim" ? "Simulator link" : "Dev generator";
 }
 
 export function linkChipLabel(state: LinkState): string {

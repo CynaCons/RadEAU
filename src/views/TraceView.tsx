@@ -10,6 +10,7 @@ import {
   Popover,
   Radio,
   RadioGroup,
+  Stack,
   TextField,
   Tooltip,
   Typography,
@@ -34,11 +35,7 @@ import {
   captureButtonLabel,
   linkChipColorVar,
   linkChipLabel,
-  showLinkStatusChip,
-  showSimAddressField,
-  simSourceAvailable,
-  sourceControlsDisabled,
-  type SourceKind,
+  showDegradedLinkChip,
 } from "../runtime/captureSource";
 import { ackFrames, isDesktop, onFrameBatch } from "../runtime/desktop";
 import { sessionStore } from "../runtime/sessionStore";
@@ -144,24 +141,6 @@ const TABLE_WRAP_SX: SxProps = {
   },
   // Hover wash only — no zebra, no transition (VU-019).
   "& tbody tr:hover td": { backgroundColor: "var(--fill-subtle)" },
-};
-
-const SOURCE_BAR_SX: SxProps = {
-  display: "flex",
-  alignItems: "center",
-  gap: 1,
-  px: 1,
-  py: 0.75,
-  minHeight: 40,
-  backgroundColor: "var(--surface-raised)",
-  borderBottom: "1px solid var(--border)",
-  flexShrink: 0,
-};
-
-const COMPACT_FIELD_SX: SxProps = {
-  minWidth: 150,
-  "& .MuiInputBase-root": { fontSize: 13, height: 32 },
-  "& .MuiInputLabel-root": { fontSize: 13 },
 };
 
 // ---------------------------------------------------------------------------
@@ -304,11 +283,9 @@ function rowContent(
 
 export function TraceView() {
   useViewLifecycle("trace", {});
-  const desktop = isDesktop();
   const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
   const capturing = session.running;
   const sourceKind = session.sourceKind;
-  const simAddr = session.simAddr;
   const linkStatus = session.linkStatus;
 
   const [paused, setPaused] = useState(false);
@@ -341,9 +318,6 @@ export function TraceView() {
     }),
     [columns, mode, pinned],
   );
-
-  const controlsLocked = sourceControlsDisabled(capturing);
-  const simOk = simSourceAvailable(desktop);
 
   // Live pipeline: subscribe to batches while the shared session is running;
   // restore exactly one backpressure credit per animation frame on desktop.
@@ -381,6 +355,7 @@ export function TraceView() {
   const pauseLabel = paused ? "Resume" : "Pause";
   const catalogLabel = catalogLoaded ? "Unload service catalog" : "Load service catalog";
   const clearLabel = displayRows.length > 0 ? "Clear trace" : "Trace is already empty";
+  const showLinkChip = showDegradedLinkChip(capturing, sourceKind, linkStatus?.state);
   const chipColor = linkStatus ? linkChipColorVar(linkStatus.state) : "var(--text-secondary)";
 
   return (
@@ -553,7 +528,7 @@ export function TraceView() {
         </Box>
       </Box>
 
-      {/* Table region + compact source strip */}
+      {/* Table region — interface *choice* lives in Settings (§4.3 / §5.7). */}
       <Box
         sx={{
           flex: 1,
@@ -564,103 +539,62 @@ export function TraceView() {
           flexDirection: "column",
         }}
       >
-        <Box sx={SOURCE_BAR_SX} data-testid="trace-source-bar">
-          <TextField
-            select
-            size="small"
-            label="Source"
-            value={sourceKind}
-            disabled={controlsLocked}
-            onChange={(e) => {
-              const next = e.target.value as SourceKind;
-              if (next === "sim" && !simOk) return;
-              sessionStore.setSourceKind(next);
-            }}
-            sx={COMPACT_FIELD_SX}
-            data-testid="trace-source-select"
-          >
-            <MenuItem value="devgen" data-testid="trace-source-option-devgen">
-              Dev generator
-            </MenuItem>
-            <MenuItem
-              value="sim"
-              disabled={!simOk}
-              title={simOk ? undefined : "desktop app only"}
-              data-testid="trace-source-option-sim"
-            >
-              Simulator link
-            </MenuItem>
-          </TextField>
-          {showSimAddressField(sourceKind) ? (
-            <TextField
-              size="small"
-              label="Address"
-              value={simAddr}
-              disabled={controlsLocked}
-              onChange={(e) => sessionStore.setSimAddr(e.target.value)}
-              sx={{ ...COMPACT_FIELD_SX, minWidth: 180, flex: "0 1 220px" }}
-              inputProps={{
-                "aria-label": "Simulator monitor address",
-                style: { fontFamily: "var(--font-mono)", fontSize: 13 },
-              }}
-              data-testid="trace-sim-addr"
-            />
-          ) : null}
-          {showLinkStatusChip(sourceKind) && linkStatus ? (
-            <Tooltip title={linkStatus.detail ?? linkChipLabel(linkStatus.state)}>
-              <Chip
-                size="small"
-                variant="outlined"
-                label={linkChipLabel(linkStatus.state)}
-                data-testid="trace-link-chip"
-                sx={{
-                  height: 22,
-                  fontSize: 12,
-                  color: chipColor,
-                  borderColor: chipColor,
-                  backgroundColor: "var(--surface-raised-2)",
-                }}
-              />
-            </Tooltip>
-          ) : null}
-        </Box>
-
         <Box sx={{ flex: 1, minHeight: 0, position: "relative" }}>
           {paused ? (
-            <>
-              {/* Paused tri-indicator, parts 2 and 3 (VU-015): warning rule along
-                  the table's top edge + warning-outlined chip at its top-right. */}
-              <Box
-                data-testid="trace-paused-rule"
-                sx={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: "2px",
-                  backgroundColor: "var(--warning)",
-                  zIndex: 3,
-                  pointerEvents: "none",
-                }}
-              />
-              <Chip
-                size="small"
-                variant="outlined"
-                label={`Paused · ${snap.pausedBuffered} buffered`}
-                data-testid="trace-paused-chip"
-                sx={{
-                  position: "absolute",
-                  top: 10,
-                  right: 20,
-                  zIndex: 3,
-                  height: 22,
-                  fontSize: 12,
-                  color: "var(--warning)",
-                  borderColor: "var(--warning)",
-                  backgroundColor: "var(--surface-raised-2)",
-                }}
-              />
-            </>
+            <Box
+              data-testid="trace-paused-rule"
+              sx={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                height: "2px",
+                backgroundColor: "var(--warning)",
+                zIndex: 3,
+                pointerEvents: "none",
+              }}
+            />
+          ) : null}
+          {/* Top-right status chips: Paused + degraded link (§4.3 / VU-015). */}
+          {paused || showLinkChip ? (
+            <Stack
+              spacing={1}
+              alignItems="flex-end"
+              sx={{ position: "absolute", top: 10, right: 20, zIndex: 3 }}
+            >
+              {paused ? (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`Paused · ${snap.pausedBuffered} buffered`}
+                  data-testid="trace-paused-chip"
+                  sx={{
+                    height: 22,
+                    fontSize: 12,
+                    color: "var(--warning)",
+                    borderColor: "var(--warning)",
+                    backgroundColor: "var(--surface-raised-2)",
+                  }}
+                />
+              ) : null}
+              {showLinkChip && linkStatus ? (
+                <Tooltip title={linkStatus.detail ?? linkChipLabel(linkStatus.state)}>
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={linkChipLabel(linkStatus.state)}
+                    data-testid="trace-link-chip"
+                    sx={{
+                      height: 22,
+                      fontSize: 12,
+                      color: chipColor,
+                      borderColor: chipColor,
+                      backgroundColor: "var(--surface-raised-2)",
+                    }}
+                  />
+                </Tooltip>
+              ) : null}
+            </Stack>
           ) : null}
           {displayRows.length === 0 ? (
             <EmptyState

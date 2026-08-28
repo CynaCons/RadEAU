@@ -1,3 +1,8 @@
+/**
+ * Settings view (SRS_visual_ui.md §5.7): Interface is the only place the
+ * capture source is chosen; other groups remain local until their cores land.
+ */
+
 import {
   Box,
   Button,
@@ -19,25 +24,23 @@ import CodeIcon from "@mui/icons-material/Code";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import MemoryIcon from "@mui/icons-material/Memory";
-import SensorsIcon from "@mui/icons-material/Sensors";
 import SettingsEthernetIcon from "@mui/icons-material/SettingsEthernet";
 import SpeedIcon from "@mui/icons-material/Speed";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { RaisedPanel } from "../components/RaisedPanel";
+import {
+  interfaceLockedReason,
+  showSimAddressField,
+  simSourceAvailable,
+  sourceControlsDisabled,
+  type SourceKind,
+} from "../runtime/captureSource";
+import { isDesktop } from "../runtime/desktop";
+import { sessionStore } from "../runtime/sessionStore";
 import { useViewLifecycle } from "../shell/viewLifecycle";
 
-// ── Mock data — replaced by live settings state when the core lands (PRD §6). ──
-
-/** Deterministic mock: a session is running, so session-bound settings are
- *  disabled with a tooltip naming why (SRS_visual_ui.md §5.7). */
-const SESSION_RUNNING = true;
-
-const CHANNEL_OPTIONS = [
-  { value: "simulator", label: "Simulator link — scenario: sensor-fusion" },
-  { value: "loopback", label: "Loopback (in-process)" },
-  { value: "stub", label: "Stub" },
-];
+// ── Local mock state for groups not yet wired to the core (PRD §6). ──
 
 const REFRESH_OPTIONS = [
   { value: 16, label: "16 ms (60 Hz)" },
@@ -47,24 +50,17 @@ const REFRESH_OPTIONS = [
 
 const DIAG_REPORT = [
   "RadEAU diagnostic report",
-  "generated   2026-08-26 14:52:07.4180",
-  "build       0.1.3+dev.4021 (8c41f2ea)",
-  "channel     Simulator link — scenario: sensor-fusion",
-  "uptime      2477.2148 s    frames 1284502    drops 0",
+  "generated   —",
+  "build       —",
+  "channel     —",
+  "uptime      —",
   "",
-  "service  0x1101 CameraObjects    10.42.0.11:30501  cycle  16.6671 ms",
-  "service  0x1102 RadarTargets     10.42.0.12:30502  cycle  20.0004 ms",
-  "service  0x1103 LidarClusters    10.42.0.13:30503  cycle 100.0018 ms",
-  "service  0x1104 VehicleDynamics  10.42.0.14:30504  cycle  10.0001 ms",
-  "service  0x1201 FusedObjects     10.42.0.20:30512  cycle  40.0009 ms",
-  "",
-  "sd       offers 5    subscriptions 7    ttl expiries 0",
-  "gptp     offset +0.0002 ms    rate ratio 1.0000",
+  "(live diagnostic collection arrives with the diagnostics core)",
 ].join("\n");
 
 const MEMORY_POOLS = [
-  { id: "ring", label: "Ring buffers — 412 MB" },
-  { id: "decode", label: "Decode cache — 96 MB" },
+  { id: "ring", label: "Ring buffers — —" },
+  { id: "decode", label: "Decode cache — —" },
 ];
 
 const MONO_SX = {
@@ -114,8 +110,12 @@ function DisabledReason(props: { reason: string; disabled: boolean; children: Re
 
 export function SettingsView() {
   useViewLifecycle("settings", {});
+  const desktop = isDesktop();
+  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const controlsLocked = sourceControlsDisabled(session.running);
+  const lockReason = interfaceLockedReason(session.running) ?? "";
+  const simOk = simSourceAvailable(desktop);
 
-  const [channel, setChannel] = useState("simulator");
   const [transmitOnly, setTransmitOnly] = useState(false);
   const [refreshMs, setRefreshMs] = useState(33);
   const [lowOverhead, setLowOverhead] = useState(false);
@@ -136,43 +136,55 @@ export function SettingsView() {
       <RaisedPanel
         icon={<SettingsEthernetIcon sx={{ color: "var(--accent-primary)" }} />}
         title="Interface"
-        subtitle="Selects the channel RadEAU attaches to and how frames may leave the tool."
+        subtitle="Selects the capture source RadEAU attaches to and how frames may leave the tool."
         testId="settings-interface-panel"
       >
         <Stack spacing={2}>
-          {SESSION_RUNNING ? (
-            <Box>
-              <Chip
-                size="small"
-                variant="outlined"
-                color="success"
-                icon={<SensorsIcon />}
-                label="Session running — sensor-fusion"
-                data-testid="settings-session-chip"
-              />
-            </Box>
-          ) : null}
-          <DisabledReason
-            disabled={SESSION_RUNNING}
-            reason="Channel cannot change while a session is running"
-          >
+          <DisabledReason disabled={controlsLocked} reason={lockReason}>
             <TextField
               select
               size="small"
               fullWidth
-              label="Channel"
-              value={channel}
-              onChange={(e) => setChannel(e.target.value)}
-              disabled={SESSION_RUNNING}
-              data-testid="settings-channel-select"
+              label="Capture source"
+              value={session.sourceKind}
+              disabled={controlsLocked}
+              onChange={(e) => {
+                const next = e.target.value as SourceKind;
+                if (next === "sim" && !simOk) return;
+                sessionStore.setSourceKind(next);
+              }}
+              data-testid="settings-source-select"
             >
-              {CHANNEL_OPTIONS.map((o) => (
-                <MenuItem key={o.value} value={o.value} data-testid={`settings-channel-option-${o.value}`}>
-                  {o.label}
-                </MenuItem>
-              ))}
+              <MenuItem value="devgen" data-testid="settings-source-option-devgen">
+                Dev generator
+              </MenuItem>
+              <MenuItem
+                value="sim"
+                disabled={!simOk}
+                title={simOk ? undefined : "desktop app only"}
+                data-testid="settings-source-option-sim"
+              >
+                Simulator link
+              </MenuItem>
             </TextField>
           </DisabledReason>
+          {showSimAddressField(session.sourceKind) ? (
+            <DisabledReason disabled={controlsLocked} reason={lockReason}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Address"
+                value={session.simAddr}
+                disabled={controlsLocked}
+                onChange={(e) => sessionStore.setSimAddr(e.target.value)}
+                inputProps={{
+                  "aria-label": "Simulator monitor address",
+                  sx: MONO_SX,
+                }}
+                data-testid="settings-sim-addr"
+              />
+            </DisabledReason>
+          ) : null}
           <SwitchRow
             label="Transmit-only mode"
             caption="Disables the receive path — the channel carries only frames generated by Simulation and Automation."
@@ -225,7 +237,7 @@ export function SettingsView() {
         <Stack spacing={2}>
           <Stack direction="row" spacing={2}>
             <DisabledReason
-              disabled={SESSION_RUNNING}
+              disabled={session.running}
               reason="Stop the session to change the automation server port"
             >
               <TextField
@@ -233,14 +245,14 @@ export function SettingsView() {
                 label="Port"
                 value={port}
                 onChange={(e) => setPort(e.target.value)}
-                disabled={SESSION_RUNNING}
+                disabled={session.running}
                 sx={{ width: 96 }}
                 inputProps={{ sx: MONO_SX }}
                 data-testid="settings-automation-port-field"
               />
             </DisabledReason>
             <DisabledReason
-              disabled={SESSION_RUNNING}
+              disabled={session.running}
               reason="Stop the session to change the automation server bind host"
             >
               <TextField
@@ -248,7 +260,7 @@ export function SettingsView() {
                 label="Bind host"
                 value={bindHost}
                 onChange={(e) => setBindHost(e.target.value)}
-                disabled={SESSION_RUNNING}
+                disabled={session.running}
                 sx={{ width: 160 }}
                 inputProps={{ sx: MONO_SX }}
                 data-testid="settings-automation-host-field"
