@@ -10,6 +10,7 @@ import {
   applyFilter,
   EMPTY_FILTER,
   isFilterActive,
+  type FilterVisitOpts,
   type TraceFilter,
   windowSequentialFiltered,
 } from "./traceFilter";
@@ -71,6 +72,7 @@ export function windowSequential(
  * When a filter is active it runs first: Fixed shows the latest *matching*
  * frame per key; Sequential's history window holds the last N *matching* rows
  * (backward tail scan — no full-ring allocation when the tail fills the window).
+ * Optional `opts.onVisit` instruments Sequential filtered scans (perf tests).
  */
 export function projectDisplayRows(
   rows: readonly TraceFrame[],
@@ -78,6 +80,7 @@ export function projectDisplayRows(
   pinned: ReadonlySet<string>,
   historyWindow: number,
   filter: TraceFilter = EMPTY_FILTER,
+  opts?: FilterVisitOpts,
 ): readonly TraceFrame[] {
   if (!isFilterActive(filter)) {
     if (mode === "fixed") return collapseFixed(rows, pinned);
@@ -86,5 +89,5 @@ export function projectDisplayRows(
   if (mode === "fixed") {
     return collapseFixed(applyFilter(rows, filter) as TraceFrame[], pinned);
   }
-  return windowSequentialFiltered(rows, historyWindow, filter);
+  return windowSequentialFiltered(rows, historyWindow, filter, opts);
 }

@@ -1,6 +1,8 @@
 import {
+  Alert,
   Badge,
   Box,
+  Button,
   Chip,
   FormControl,
   FormControlLabel,
@@ -11,6 +13,7 @@ import {
   Radio,
   RadioGroup,
   Stack,
+  Switch,
   TextField,
   Tooltip,
   Typography,
@@ -47,6 +50,15 @@ import {
   rowMatchesExpansion,
   type TraceExpansion,
 } from "../runtime/frameDetail";
+import {
+  catalogBadgeTone,
+  catalogCountsLabel,
+  catalogDiagCountLabel,
+  catalogLastErrorMessage,
+  catalogSeverityGlyph,
+  catalogSourceLabel,
+  CATALOG_NO_DIAGNOSTICS,
+} from "../runtime/catalogDisplay";
 import { catalogStore } from "../runtime/catalogStore";
 import { runExportRing } from "../runtime/ringExport";
 import { sessionStore } from "../runtime/sessionStore";
@@ -438,6 +450,7 @@ export function TraceView() {
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
   const [filter, setFilter] = useState<TraceFilter>(EMPTY_FILTER);
   const [settingsAnchor, setSettingsAnchor] = useState<HTMLElement | null>(null);
+  const [catalogAnchor, setCatalogAnchor] = useState<HTMLElement | null>(null);
   const [expansion, setExpansion] = useState<TraceExpansion | null>(null);
   const [filterAnchor, setFilterAnchor] = useState<HTMLElement | null>(null);
   const [filterColumn, setFilterColumn] = useState<TraceFilterColumn | null>(null);
@@ -567,6 +580,18 @@ export function TraceView() {
   const pauseLabel = paused ? "Resume" : "Pause";
   const catalogActionLabel = catalogStore.railActionLabel();
   const catalogTooltip = catalogStore.railTooltip();
+  const badgeTone = catalogBadgeTone({
+    loaded: catalog.loaded,
+    errors: catalog.errors,
+    warnings: catalog.warnings,
+    lastError: catalog.lastError,
+  });
+  const badgeColorVar =
+    badgeTone === "error"
+      ? "var(--error)"
+      : badgeTone === "warning"
+        ? "var(--warning)"
+        : "var(--success)";
   const clearLabel =
     snap.rows.length > 0 ? "Clear trace" : "Trace is already empty";
   const exportLabel =
@@ -753,20 +778,20 @@ export function TraceView() {
               size="small"
               aria-label={catalogActionLabel}
               aria-pressed={catalogLoaded}
-              onClick={() => {
-                void catalogStore.toggle();
-              }}
+              aria-haspopup="dialog"
+              aria-expanded={Boolean(catalogAnchor)}
+              onClick={(e) => setCatalogAnchor(e.currentTarget)}
               data-testid="trace-catalog-btn"
               sx={{ color: "text.secondary" }}
             >
               <Badge
                 variant="dot"
                 overlap="circular"
-                invisible={!catalogLoaded}
+                invisible={badgeTone === "hidden"}
                 data-testid="trace-catalog-badge"
                 sx={{
                   "& .MuiBadge-badge": {
-                    backgroundColor: "var(--success)",
+                    backgroundColor: badgeColorVar,
                     minWidth: "6px",
                     width: "6px",
                     height: "6px",
@@ -778,6 +803,141 @@ export function TraceView() {
               </Badge>
             </IconButton>
           </Tooltip>
+          <Popover
+            open={Boolean(catalogAnchor)}
+            anchorEl={catalogAnchor}
+            onClose={() => setCatalogAnchor(null)}
+            anchorOrigin={{ vertical: "center", horizontal: "right" }}
+            transformOrigin={{ vertical: "center", horizontal: "left" }}
+          >
+            <Box sx={{ width: 300, p: "12px" }} data-testid="trace-catalog-popover">
+              <Stack spacing={1.5}>
+                <Typography
+                  data-testid="trace-catalog-source"
+                  sx={{ fontSize: 13, color: "text.primary" }}
+                >
+                  {catalogSourceLabel(catalog.source, catalog.sourceKind)}
+                </Typography>
+                <Typography
+                  data-testid="trace-catalog-counts"
+                  sx={{ fontSize: 12, color: "text.secondary" }}
+                >
+                  {catalogCountsLabel(catalog.serviceCount, catalog.signalCount)}
+                </Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      void catalogStore.importArxml();
+                    }}
+                    data-testid="trace-catalog-import"
+                  >
+                    Import ARXML…
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={catalog.sourceKind === "embedded" || !catalog.source}
+                    onClick={() => {
+                      void catalogStore.reload();
+                    }}
+                    data-testid="trace-catalog-reload"
+                  >
+                    Reload
+                  </Button>
+                </Stack>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      size="small"
+                      checked={catalogLoaded}
+                      onChange={() => {
+                        void catalogStore.toggleDecode();
+                      }}
+                      inputProps={{ "aria-label": "Decode" }}
+                      data-testid="trace-catalog-decode"
+                    />
+                  }
+                  label={<Typography sx={{ fontSize: 14 }}>Decode</Typography>}
+                />
+                <Box>
+                  <Typography
+                    sx={{ fontSize: 12, color: "text.secondary", mb: 0.5 }}
+                  >
+                    {catalogDiagCountLabel(catalog.errors, catalog.warnings)}
+                  </Typography>
+                  <Box
+                    data-testid="trace-catalog-diagnostics"
+                    sx={{
+                      maxHeight: 250,
+                      overflowY: "auto",
+                      border: "1px solid var(--border)",
+                      borderRadius: 1,
+                      bgcolor: "var(--fill-subtle)",
+                      p: "8px",
+                    }}
+                  >
+                    {catalog.diagnostics.length === 0 ? (
+                      <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
+                        {CATALOG_NO_DIAGNOSTICS}
+                      </Typography>
+                    ) : (
+                      catalog.diagnostics.map((d, i) => (
+                        <Stack
+                          key={`${d.path}-${i}`}
+                          direction="row"
+                          spacing={1}
+                          alignItems="flex-start"
+                          sx={{
+                            mb: i < catalog.diagnostics.length - 1 ? 0.75 : 0,
+                          }}
+                        >
+                          <Box
+                            component="span"
+                            sx={{
+                              fontSize: 12,
+                              color:
+                                d.severity === "error"
+                                  ? "var(--error)"
+                                  : d.severity === "warn"
+                                    ? "var(--warning)"
+                                    : "var(--info)",
+                              flexShrink: 0,
+                              lineHeight: 1.4,
+                            }}
+                            aria-label={d.severity}
+                          >
+                            {catalogSeverityGlyph(d.severity)}
+                          </Box>
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography
+                              sx={{
+                                fontFamily: "var(--font-mono)",
+                                fontSize: 11,
+                                color: "text.secondary",
+                                wordBreak: "break-all",
+                              }}
+                            >
+                              {d.path}
+                            </Typography>
+                            <Typography sx={{ fontSize: 12, color: "text.primary" }}>
+                              {d.message}
+                            </Typography>
+                          </Box>
+                        </Stack>
+                      ))
+                    )}
+                  </Box>
+                </Box>
+                {catalog.lastError ? (
+                  <Alert severity="error" data-testid="trace-catalog-error">
+                    {catalogLastErrorMessage(catalog.lastError)}
+                  </Alert>
+                ) : null}
+              </Stack>
+            </Box>
+          </Popover>
         </Box>
         <Box sx={RAIL_SLOT_SX}>
           <Tooltip title={pauseLabel} placement="right">

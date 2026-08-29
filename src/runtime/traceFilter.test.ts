@@ -303,6 +303,79 @@ describe("projectDisplayRows + filter", () => {
   });
 });
 
+describe("projectDisplayRows filter perf guardrail (v0.1.7)", () => {
+  const RING = 200_000;
+  const WINDOW = 10_000;
+
+  function buildRing(n: number): TraceFrame[] {
+    // Every 10th row is gPTP (match); the rest SOME/IP (miss) — dense enough
+    // that a full-ring scan would visit 200k, but the tail fills WINDOW early.
+    const rows: TraceFrame[] = new Array(n);
+    for (let i = 0; i < n; i += 1) {
+      const gptp = i % 10 === 0;
+      rows[i] = row({
+        id: i + 1,
+        protocol: gptp ? "gPTP" : "SOME/IP",
+        source: "a",
+        key: gptp ? `2:${i}:0` : `0:4353:${i}`,
+        proto: gptp ? PROTO_GPTP : PROTO_SOMEIP,
+      });
+    }
+    return rows;
+  }
+
+  it("Sequential with Protocol filter visits at most window + non-matches in the scanned tail", () => {
+    const rows = buildRing(RING);
+    const f: TraceFilter = {
+      ...EMPTY_FILTER,
+      protocols: new Set([PROTO_GPTP]),
+    };
+    let visits = 0;
+    let nonMatches = 0;
+    const out = projectDisplayRows(rows, "sequential", new Set(), WINDOW, f, {
+      onVisit: (r) => {
+        visits += 1;
+        if (r.proto !== PROTO_GPTP) nonMatches += 1;
+      },
+    });
+    expect(out).toHaveLength(WINDOW);
+    // Algorithmic bound: stop once WINDOW matches are collected.
+    expect(visits).toBeLessThanOrEqual(WINDOW + nonMatches);
+    expect(visits).toBe(WINDOW + nonMatches);
+    // Must not scan the whole 200k ring when the tail already fills the window.
+    expect(visits).toBeLessThan(RING);
+    // 1-in-10 match density → ~10× WINDOW visits to collect WINDOW matches.
+    expect(visits).toBe(WINDOW * 10);
+  });
+
+  it("unfiltered path returns the same array reference on a full-size ring", () => {
+    const rows = buildRing(RING);
+    expect(projectDisplayRows(rows, "sequential", new Set(), RING, EMPTY_FILTER)).toBe(
+      rows,
+    );
+  });
+
+  it("measures Fixed and Sequential filtered cost on 200k rows (reported, not asserted)", () => {
+    const rows = buildRing(RING);
+    const f: TraceFilter = {
+      ...EMPTY_FILTER,
+      protocols: new Set([PROTO_GPTP]),
+    };
+    const t0 = performance.now();
+    const fixed = projectDisplayRows(rows, "fixed", new Set(), RING, f);
+    const fixedMs = performance.now() - t0;
+    const t1 = performance.now();
+    const seq = projectDisplayRows(rows, "sequential", new Set(), WINDOW, f);
+    const seqMs = performance.now() - t1;
+    // Sanity: both paths produce matching rows; timings go to the final report.
+    expect(fixed.length).toBeGreaterThan(0);
+    expect(seq).toHaveLength(WINDOW);
+    console.log(
+      `[filter-perf] 200k rows: Fixed=${fixedMs.toFixed(1)}ms Sequential(window=${WINDOW})=${seqMs.toFixed(1)}ms fixedRows=${fixed.length}`,
+    );
+  });
+});
+
 describe("serviceMethodId", () => {
   it("formats sv:m as decimal id pair", () => {
     expect(

@@ -157,20 +157,29 @@ export function distinctValues(
   return options;
 }
 
+export interface FilterVisitOpts {
+  /** Called once per row visited during a Sequential filtered scan. */
+  onVisit?: (row: TraceFrame) => void;
+}
+
 /**
  * Sequential history window over matching rows only: scan the ring tail
  * backward, collect up to `window` matches, reverse. Avoids allocating a
  * full-ring filtered copy when the tail already fills the window.
+ * Visits at most `window + (non-matching rows in the scanned tail)`.
  */
 export function windowSequentialFiltered(
   rows: readonly TraceFrame[],
   window: number,
   f: TraceFilter,
+  opts?: FilterVisitOpts,
 ): TraceFrame[] {
   if (window <= 0) return [];
   const out: TraceFrame[] = [];
+  const onVisit = opts?.onVisit;
   for (let i = rows.length - 1; i >= 0 && out.length < window; i -= 1) {
     const row = rows[i];
+    onVisit?.(row);
     if (matches(row, f)) out.push(row);
   }
   out.reverse();

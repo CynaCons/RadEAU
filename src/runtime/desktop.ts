@@ -357,9 +357,10 @@ export function fetchFrameDetail(idx: number): Promise<FrameDetail> {
 }
 
 // ---------------------------------------------------------------------------
-// Service catalog. Desktop: catalog_model / catalog_load / catalog_unload +
-// catalog:state. Browser: every command rejects; the UI stays unloaded and
-// uses the static SERVICES fallback in frameModel.
+// Service catalog. Desktop: catalog_model / catalog_load / catalog_unload /
+// catalog_import / catalog_reload / catalog_diagnostics + catalog:state.
+// Browser: every command rejects; the UI stays unloaded and uses the static
+// SERVICES fallback in frameModel.
 // ---------------------------------------------------------------------------
 
 const CATALOG_STATE_EVENT = "catalog:state";
@@ -399,9 +400,34 @@ export interface CatalogModel {
   services: CatalogService[];
 }
 
+export type CatalogSourceKind = "embedded" | "file" | "env";
+
+export type CatalogDiagnosticSeverity = "error" | "warn" | "info";
+
+/** Per-element import diagnostic (SRS_protocols.md §4). */
+export interface CatalogDiagnostic {
+  severity: CatalogDiagnosticSeverity;
+  path: string;
+  message: string;
+}
+
+/** Successful catalog_import / catalog_reload summary. */
+export interface CatalogImportSummary {
+  source: string;
+  services: number;
+  signals: number;
+  diagnostics: CatalogDiagnostic[];
+}
+
 export interface CatalogStateEvent {
   loaded: boolean;
   serviceCount: number;
+  signalCount: number;
+  source: string;
+  sourceKind: CatalogSourceKind;
+  errors: number;
+  warnings: number;
+  lastError: string | null;
 }
 
 export function fetchCatalogModel(): Promise<CatalogModel> {
@@ -425,7 +451,57 @@ export function catalogUnload(): Promise<void> {
   return invoke<void>("catalog_unload");
 }
 
-/** Fires at startup and on each load/unload; no-op-safe in browser mode. */
+/**
+ * Imports an ARXML extract. On success replaces the active catalog; on fatal
+ * error rejects with the message and keeps the previous catalog.
+ */
+export function catalogImport(path: string): Promise<CatalogImportSummary> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<CatalogImportSummary>("catalog_import", { path });
+}
+
+/** Re-imports the current source. Rejects for embedded / browser. */
+export function catalogReload(): Promise<CatalogImportSummary> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<CatalogImportSummary>("catalog_reload");
+}
+
+/** Last import's diagnostics list. */
+export function catalogDiagnostics(): Promise<CatalogDiagnostic[]> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<CatalogDiagnostic[]>("catalog_diagnostics");
+}
+
+/**
+ * Native open dialog for `.arxml`. Returns null on cancel; rejects when the
+ * dialog cannot run (browser / plugin unavailable).
+ */
+export async function pickArxmlFile(): Promise<string | null> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "AUTOSAR", extensions: ["arxml"] }],
+    });
+    if (typeof selected === "string") return selected;
+    return null;
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+    return Promise.reject(new Error(msg || "open dialog unavailable"));
+  }
+}
+
+/** Fires at startup and on each load/unload/import; no-op-safe in browser mode. */
 export function onCatalogState(cb: (state: CatalogStateEvent) => void): () => void {
   return listenEvent<CatalogStateEvent>(CATALOG_STATE_EVENT, cb);
 }

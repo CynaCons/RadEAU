@@ -7,11 +7,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  catalogDiagnostics,
+  catalogImport,
+  catalogReload,
   dependencyProbe,
   diagnosticsReport,
   exportRing,
   isDesktop,
   logPath,
+  pickArxmlFile,
   pickPcapFile,
   pickSavePath,
 } from "./desktop";
@@ -51,5 +55,17 @@ describe("desktop browser fallbacks (v0.1.6)", () => {
 
   it("pickSavePath rejects honestly", async () => {
     await expect(pickSavePath("radeau-test.pcap")).rejects.toThrow(/desktop app only/i);
+  });
+});
+
+describe("desktop browser fallbacks (v0.1.8 catalog)", () => {
+  it("catalogImport / catalogReload / catalogDiagnostics reject honestly", async () => {
+    await expect(catalogImport("/tmp/x.arxml")).rejects.toThrow(/desktop app only/i);
+    await expect(catalogReload()).rejects.toThrow(/desktop app only/i);
+    await expect(catalogDiagnostics()).rejects.toThrow(/desktop app only/i);
+  });
+
+  it("pickArxmlFile rejects honestly", async () => {
+    await expect(pickArxmlFile()).rejects.toThrow(/desktop app only/i);
   });
 });
