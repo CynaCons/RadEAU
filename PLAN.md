@@ -330,13 +330,13 @@ release.
 - [ ] Hardware verification protocol on the work laptop: scripted checklist (driver version, channel list, first frames, timestamp sanity against gPTP cadence, direction, VLAN visibility, stats) + ring→pcap export of the session brought back as a replay fixture; first hardware defects fixed against those fixtures on the dev laptop
 - [ ] Transmit entry point (xlNetEthSend) reserved behind the Channel capability flag for v0.7 — declared, not wired, documented
 
-### v0.1.11 — Bench kit — portable build, pcap recording, bench-day polish (current) (ACTIVE)
+### v0.1.11 — Bench kit — portable build, pcap recording, bench-day polish (2026-08-29 — portable zip + release smoke + recording E2E green) (COMPLETE)
 **Goal:** Everything the work-laptop test needs in one zip and one page: a portable release build (embedded frontend, no dev server, devgen absent, sensible default source), a release-bundle E2E smoke, continuous pcap recording while capturing (the honest replacement for the disabled record switch until JSONL recording lands in v0.6), and the small bench-day items the audit flagged. Added 2026-08-29 while the user was away; v0.1.10 (Vector XL) stays blocked on the XL Driver Library header.
 - [x] Portable build: `npm run build:portable` → dist-portable/RadEAU-<version>-win64.zip (release radeau.exe with embedded frontend, ecu-netsim.exe, fixture pcap, extract, README-portable.md); app_info command drives devgen hiding + default source (live when Npcap is installed, else pcap) in release builds; About shows version/profile [delegated: Grok]
 - [x] Release-bundle E2E smoke (`npm run test:e2e:release`): launches the zipped release exe with no dev server, asserts shell, no Dev generator option, About profile release, fixture replay with a DoIP row, Dependencies rows [delegated: Grok]
 - [x] README § Bench test on another machine: build, zip contents, prerequisites, first-run checklist, problem-report recipe (Diagnostics report + radeau.log + pcap export) [delegated: Grok]
-- [ ] Continuous pcap recording while capturing (SRS_capture §7, CP-014..016): record switch armed → every classified frame is appended to a pcap file by a buffered writer thread with drop-oldest queue and counters; filename from session start; recording indicator truthful (error face only while bytes are being written); Recorder panel shows path, frames, bytes live [Codex + Grok]
-- [ ] Bench-day polish: Windows NIC VLAN-stripping note in the Npcap dependency detail; final stats logged at session end; capture:stats includes `recordingDropped`; Trace 'Recording' chip while recording
+- [x] Continuous pcap recording while capturing (SRS_capture §7, CP-014..016): record switch armed → every classified frame is appended to a pcap file by a buffered writer thread with drop-oldest queue and counters; filename from session start; recording indicator truthful (error face only while bytes are being written); Recorder panel shows path, frames, bytes live [Codex + Grok]
+- [x] Bench-day polish: Windows NIC VLAN-stripping note in the Npcap dependency detail; final stats logged at session end; capture:stats includes `recordingDropped`; Trace 'Recording' chip while recording
 
 ## Backlog
 - [ ] CAN / CAN FD backend behind the channel abstraction + DBC schema pipeline (dual bit-walk decoders, shared vectors)
