@@ -30,11 +30,64 @@ Two frame representations, never conflated:
 
 ## 2. Protocol classification
 
-Performed once, in the reader: EtherType (0x0800 IPv4, 0x88F7 gPTP, 0x0806
-ARP), optional 802.1Q tag, IPv4 + UDP headers, SD by its fixed service/method
-identity (0xFFFF / 0x8100), SOME/IP by catalog port and header plausibility.
-Malformed frames classify as `other` with a per-frame diagnostic — never a
-panic, never a silent drop.
+Performed once, in the reader, for every frame a source delivers.
+Classification **never drops** (SP-006): each frame receives exactly one
+protocol class and is retained in the frame buffer (§3b) so it can be
+dissected. Order:
+
+1. Ethernet II header — fewer than 14 bytes → `Malformed` (the frame is still
+   retained and shown).
+2. 802.1Q / 802.1ad tags peeled, one or two (SP-007): the outer VLAN id is
+   carried; the inner EtherType classifies.
+3. EtherType 0x88F7 → `gPTP`, message type from the PTP header (Sync,
+   Follow_Up, Pdelay_Req/Resp/Resp_Follow_Up, Announce, Signaling);
+   0x0806 → `ARP` (opcode); 0x86DD → `IPv6` (next header); 0x0800 → IPv4
+   by protocol: 17 → UDP (step 4), 6 → `TCP` (ports, flags), 1 → `ICMP`
+   (type, code), anything else → `IPv4` (protocol number); any other
+   EtherType → `Other` (EtherType carried).
+4. UDP: `SD` by the fixed identity 0xFFFF / 0x8100; otherwise `SOME/IP` when
+   the payload is **plausible** on **any** port (SP-008) — at least 16 bytes,
+   protocol version 0x01, Length between 8 and (datagram payload − 8), message
+   type in {0x00, 0x01, 0x02, 0x80, 0x81}; port 30490 is a fast path, never a
+   gate, because real stacks carry events on SD-announced ports. Anything else
+   → `UDP` (ports). Port 13400 is reserved for `DoIP` (v0.1.9).
+
+A failure inside an upper header keeps the outer class (an unparseable
+SOME/IP header on UDP classifies as `UDP`) and the dissection states where
+parsing stopped. Several SOME/IP messages in one datagram classify on the
+first; the dissector walks the rest.
+
+**Direction** is relative to RadEAU's host (SP-009): **Rx** — observed on the
+wire and not originated here (every frame on a mirror port, a tap, or the
+simulator monitor link); **Tx** — originated by RadEAU (injection/transmit,
+and the dev generator's synthesized transmit share); **unknown** — the source
+cannot say (a pcap file without direction metadata). The UI renders unknown
+as "—", never as a guessed Rx. The simulator monitor record's direction byte
+describes the virtual switch's port side, not RadEAU; every monitor frame is
+Rx until RadEAU injects (v0.7).
+
+**Endpoint identity** is by address: the reader keeps a per-session endpoint
+table keyed by source IPv4 (IP frames) or source MAC (non-IP frames),
+assigning indexes on first sight and re-emitting `capture:session` whenever
+the table grows; the last index is an overflow bucket once the table is full.
+Names come from the source when it knows them (simulator handshake port
+names), otherwise the address itself. The dev generator keeps its fixed table.
+
+### 2b. Wire columns (IPC contract)
+
+The columnar `frames:batch` event, the per-class meaning of the identity
+columns, and every code table are pinned in `src-tauri/src/codes.rs`,
+mirrored byte-for-byte by `src/runtime/wireCodes.ts`; a unit test reads the
+Rust file and pins both sides. Beyond the original columns the batch carries
+source/destination IPv4, source MAC, VLAN id, and the payload offset, so the
+UI never re-derives header lengths.
+
+**Capture statistics** (SP-010): a `capture:stats` event at 1 Hz while a
+session runs and once at stop — frames received from the source, emitted to
+the UI, dropped by the bounded accumulator, gap records and frames lost in
+gaps, malformed frames, kernel-side drops (0 until the live backend), and a
+per-class count vector — so a quiet bus and a discarding tool can never be
+confused. Reader diagnostics never rely on stdout (the binary has no console).
 
 ## 3. SOME/IP header (normative)
 

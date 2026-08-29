@@ -103,6 +103,17 @@ The fusion model is deliberately simple and deterministic: PTP-time alignment,
 nearest-neighbor association, alpha-beta filtering. It exists to generate
 truthful, correlated traffic — not to advance the state of the art.
 
+**Background traffic realism.** The live scenario also carries what a real
+bench carries, on a fixed schedule so it stays deterministic under `--seed`:
+each ECU in turn sends an ARP request for the fusion ECU and receives its
+reply (one pair every 2 s, rotating through the nodes); LidarECU's traffic is
+802.1Q-tagged (VLAN 10, PCP 5) and its ClusterList events use UDP port 30501
+while its SD offers stay on 30490 — a tagged, off-port SOME/IP source;
+FusionECU sends an ICMPv6 Router Solicitation (EtherType 0x86DD) every 5 s;
+VehicleDynECU emits one 10-byte runt frame every 10 s. Together they make the
+honest-classification path (SP-006..SP-008) observable in the default demo
+and assertable by the E2E.
+
 ## 7. Fault injection
 
 Verbs, all via the control channel, all deterministic under seed + accelerated
@@ -135,6 +146,11 @@ its consequence.
 | SP-003 | Session ids increment 1→0xFFFF per client and wrap to 1; 0 never emitted | Must | Planned | Wrap observed in a > 65,535-request soak; monotonic per client between wraps |
 | SP-004 | Payload decode against the catalog: big-endian default with per-service override, base types at fixed offsets, MSB0 bit slices, physical = raw × factor + offset in f64 | Must | Planned | Core and UI decoders agree bit-for-bit on the shared vector corpus (floats, signed widths, bit slices, byte straddles) |
 | SP-005 | Payload shorter than a field's extent → signal missing; never partial, never panic | Must | Planned | Truncated vectors decode with the field absent; no NaN leaks into signal rings |
+| SP-006 | Classification never drops: every delivered frame gets exactly one protocol class (SOME/IP, SD, gPTP, ARP, UDP, TCP, ICMP, IPv6, IPv4, Other, Malformed) and is retained for dissection | Must | Planned | A mixed fixture (ARP, VLAN-tagged, IPv6, TCP, runt) renders one Trace row per frame with the expected class; the skip counter stays 0 |
+| SP-007 | 802.1Q / 802.1ad tags are peeled (one or two); outer VLAN id carried, inner EtherType classified; dissection shows the tag layer with correct downstream offsets | Must | Planned | A tagged SOME/IP frame classifies as SOME/IP with its VLAN id; field offsets in the dissection point at the right bytes |
+| SP-008 | SOME/IP is recognized by header plausibility on any UDP port; 30490 is a fast path, never a gate | Must | Planned | Events on a non-30490 port classify as SOME/IP; a random 16-byte UDP payload does not |
+| SP-009 | Direction is relative to RadEAU's host: Rx observed, Tx originated by RadEAU, unknown when the source cannot say — never guessed | Must | Planned | Simulator frames render Rx; a source without direction metadata renders "—" |
+| SP-010 | Capture statistics (received, emitted, accumulator drops, gaps, malformed, kernel drops, per-class counts) are emitted at 1 Hz and at stop, and rendered in the UI | Must | Planned | A forced accumulator overflow shows a non-zero drop count in the Trace chip and the Network connection panel |
 | SD-001 | Server lifecycle: initial delay → doubling repetition → cyclic main phase; StopOffer via TTL 0 | Must | Planned | Offer cadence on the monitor stream matches configured phases within jitter bounds |
 | SD-002 | TTL bookkeeping: no re-offer within TTL → service down | Must | Planned | Killing a node marks its services down within TTL + one cycle in the Network view |
 | SD-003 | Subscribe / Ack handshake precedes event flow; Nack surfaces as an error state | Must | Planned | No event frames toward a subscriber precede its Ack on the monitor stream |

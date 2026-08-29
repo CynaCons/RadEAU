@@ -197,7 +197,7 @@ Contents left to right:
 | 4 | Autosave toggle | Save | `accent-primary` on, `text-secondary` off; tooltip states resulting state |
 | 5 | Session title field | — | Centered in remaining space, 300 px, small outlined, `fill-subtle` interior, placeholder 60% opacity, 300 ms debounce |
 | 6 | Record indicator | RadioButtonChecked | 16 px: `text-secondary` idle, `warning` armed, `error` recording |
-| 7 | Record switch | — | Small, track and thumb `error` when checked, disabled in replay |
+| 7 | Record switch | — | Small, track and thumb `error` when checked, disabled in replay; disabled with the tooltip "Recording arrives with v0.6" until the recording core exists — the indicator never shows `error` for a recording that is not being written |
 | 8 | Run control | PlayArrow / Stop | Filled: `success` live start, `info` replay start, `error` running; icon and label both change; 60% opacity disabled |
 | 9 | Window controls | Remove / CropSquare / Close | As §4.1 |
 
@@ -380,15 +380,39 @@ rule only, because striping fights the state coloring; hover applies a
 with 8 px padding. Each column has a 4 px right-edge drag handle, `col-resize`
 cursor, `accent-primary` on hover, 50 px minimum; widths persist. Direction
 carries a text token as well as a color — `info` received, `accent-secondary`
-transmitted. Malformed frames set the offending cells to `error`.
+transmitted, and "—" in `text-secondary` when the source cannot know the
+direction (never a guessed Rx). Malformed frames set the offending cells to
+`error`.
+
+**Every frame is a row** (SRS_protocols §2): the Protocol column carries one
+of the tokens `SOME/IP`, `SD`, `gPTP`, `ARP`, `UDP`, `TCP`, `ICMP`, `IPv6`,
+`IPv4`, `Other`, `DoIP`, `Malformed` — an unknown class code renders
+`Unknown (n)`, never a default protocol. Per class, Name and Type read:
+SOME/IP — catalog name, Type Notification / Request / Request-no-return /
+Response / Error; SD — the first entry kind (Offer, Find, StopOffer,
+Subscribe, StopSubscribe, SubscribeAck, SubscribeNack), Name
+`<kind> · <source>`; gPTP — Type Sync / Follow_Up / Pdelay_Req / Pdelay_Resp /
+Pdelay_Resp_Follow_Up / Announce / Signaling, Name `<Type> · <source>`;
+ARP — Type Request / Reply, Name `who-has <ip>` / `<ip> is-at`; UDP and TCP —
+Name `<src ip>:<port> → <dst ip>:<port>`; ICMP — Name `type <t> code <c>`;
+IPv6 — Name `next header <n>`; IPv4 — Name `protocol <n>`; Other — Name
+`EtherType 0x….`; Malformed — Name `runt · <n> bytes`, Protocol cell in
+`error`. Service:Method shows the SOME/IP pair for SOME/IP and SD, ports for
+UDP/TCP, and `--` otherwise. The Payload column previews from the payload
+offset the core supplies (VLAN tags never shift it).
 
 Two modes share the table. **Sequential** appends chronologically and
 auto-follows the tail while scrolled to the bottom. **Fixed** collapses to one
 row per (service, method) key — pinned first, then key ascending — rewriting
 rows in place, so the per-key delta becomes a live cycle-time readout and a pin
 column appears. Rows without a service identity key by (protocol, source
-node) instead — SD offers and gPTP messages keep one row per emitting node
-rather than fighting over a single row. **Fixed is the default mode**: the
+address) instead — SD offers keep one row per emitting node, gPTP one row per
+(node, message type) so Sync and Announce show their own cadences, ARP one row
+per node, UDP and TCP one row per flow (src address:port → dst address:port),
+ICMP one per (src, dst), IPv6 / IPv4 / Other one per (source MAC, next
+header / protocol / EtherType), Malformed one per source MAC — never a single
+row that hides a class. Δ per key follows the same keying. **Fixed is the
+default mode**: the
 steady-state picture of the network is the first thing an operator needs, as
 with a CAN trace keyed by arbitration id. Mode, history window and column
 order live in the settings panel rather than on screen, being set once per
@@ -419,6 +443,12 @@ glyph and takes the `warning` tint, a `warning`-outlined chip reading
 `Paused · n buffered` appears at the table's top-right, and a 2 px `warning`
 rule appears along the table's top edge. Pause is a mode, and modes need an
 indicator inside the region they affect.
+
+The same top-right chip family carries a `warning`-outlined `Dropped · n`
+chip whenever any loss counter of the running session is non-zero
+(accumulator drops, gap-dropped frames, kernel drops — the tooltip breaks
+them down, from `capture:stats`); a session with no loss shows no chip. A
+trace that understates the wire is never silent about it.
 
 ### 5.3 Recorder
 
@@ -483,6 +513,13 @@ low-overhead switch), **Automation** (port, bind host, token, allowlist),
 **Memory** (reclaim controls, anything destructive behind a confirmation
 dialog).
 
+A capture that fails to start (source rejected, link refused, dependency
+missing) renders the rejection message verbatim as an inline `error` alert
+beneath the Interface source select — never swallowed. Groups whose core has
+not landed (Performance, Automation, Diagnostics collection, Memory) render
+their controls disabled with a caption naming the arriving version — never as
+live-looking controls that do nothing (§1 principle 5).
+
 Every control is the small variant; every switch with a consequence carries a
 12 px caption indented 32 px beneath it; read-only diagnostic text uses a
 multiline `font-mono` field at 12.5 px, 8 rows minimum and 16 maximum, with a
@@ -516,7 +553,12 @@ scrolling — the same panel language as Settings/Recorder. Composition:
 - **Connection panel:** everything the core is connected to, live. The active
   capture source (interface kind, address, link state per the session store)
   with a wrapping row of small status chips reporting link state, port and
-  counters; errors appear as inline alerts beneath the row that caused them,
+  counters — from `capture:stats`: `Received n`, `Emitted n`, `Dropped n`
+  (`warning` face when non-zero), `Gaps n`, `Malformed n` — followed by a
+  per-class line listing only the non-zero classes (`SOME/IP 12,340 · SD 51 ·
+  gPTP 800 · ARP 12`); counters reset when a session starts and the final
+  values stay visible after it stops, captioned "last session". Errors appear
+  as inline alerts beneath the row that caused them,
   not as toasts. Beneath it, one row per **attached external node** (node
   plane, PRD §8.3): id, display name, and its session state
   (CONNECTED / DECLARED / ACTIVE / REJECTED / CLOSED, with the reason on the
