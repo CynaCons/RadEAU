@@ -1286,9 +1286,11 @@ async function main() {
             layers,
             layerCount: layers.length,
             empty: false,
-            hasTcp: /\\bTCP\\b/.test(text) || layers.some((l) => /\\bTCP\\b/.test(l)),
+            // Layer titles run straight into their summaries in textContent
+            // ("TCP13400 → …"), so plain prefix/substring checks, not \\b.
+            hasTcp: layers.some((l) => l.startsWith("TCP")) || /TCP\\d/.test(text),
             hasDoip: /DoIP/i.test(text) || layers.some((l) => /DoIP/i.test(l)),
-            hasUds: /\\bUDS\\b/.test(text) || layers.some((l) => /\\bUDS\\b/.test(l)),
+            hasUds: layers.some((l) => l.startsWith("UDS")) || /UDS[A-Z]/.test(text),
             hasTesterPresent: /TesterPresent/i.test(text),
             hasMalformed: /malformed/i.test(text),
           };
