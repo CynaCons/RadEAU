@@ -6,6 +6,23 @@ use std::fmt;
 
 pub const DEFAULT_FILTER: &str = "udp or ether proto 0x88f7 or arp or vlan";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkType {
+    Ethernet,
+    NullLoopback,
+    Other(i32),
+}
+
+impl From<i32> for LinkType {
+    fn from(value: i32) -> Self {
+        match value {
+            1 => Self::Ethernet,
+            0 => Self::NullLoopback,
+            other => Self::Other(other),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Device {
     pub id: String,
@@ -127,18 +144,24 @@ pub fn list_devices() -> Result<Vec<Device>, String> {
 pub struct LiveCapture {
     raw: ffi::RawCapture,
     pub precision_ns: bool,
+    pub link_type: LinkType,
     pub warnings: Vec<String>,
 }
 
 impl LiveCapture {
     pub fn open(id: &str, filter: Option<&str>) -> Result<Self, OpenError> {
-        let (raw, precision_ns, warnings) = ffi::RawCapture::open(id, filter)
+        let (raw, precision_ns, datalink, warnings) = ffi::RawCapture::open(id, filter)
             .map_err(|(message, status)| OpenError::new(message, status))?;
         Ok(Self {
             raw,
             precision_ns,
+            link_type: datalink.into(),
             warnings,
         })
+    }
+
+    pub fn datalink(&self) -> i32 {
+        self.raw.datalink()
     }
 
     pub fn next(&mut self) -> Result<Option<Packet>, String> {
@@ -148,6 +171,25 @@ impl LiveCapture {
     pub fn stats(&mut self) -> Result<Stats, String> {
         self.raw.stats()
     }
+}
+
+/// Converts a DLT_NULL record to the Ethernet II shape consumed downstream.
+/// Records too short to contain the loopback family header remain malformed.
+pub fn null_loopback_to_ethernet(data: Vec<u8>) -> Vec<u8> {
+    let Some(family_bytes) = data.get(..4).and_then(|bytes| bytes.try_into().ok()) else {
+        return data;
+    };
+    let ether_type = match u32::from_ne_bytes(family_bytes) {
+        2 => 0x0800_u16,
+        23 | 24 | 28 | 30 => 0x86dd_u16,
+        _ => 0xffff_u16,
+    };
+    let mut ethernet = Vec::with_capacity(14 + data.len() - 4);
+    ethernet.extend_from_slice(&[0; 6]);
+    ethernet.extend_from_slice(&[0x02, 0, 0, 0, 0, 1]);
+    ethernet.extend_from_slice(&ether_type.to_be_bytes());
+    ethernet.extend_from_slice(&data[4..]);
+    ethernet
 }
 
 #[cfg(test)]
@@ -166,6 +208,44 @@ mod tests {
             remedy_for("Operation not permitted", Some(ffi::PCAP_ERROR_PERM_DENIED)),
             LINUX_CAPS
         );
+    }
+
+    #[test]
+    fn null_loopback_ipv4_becomes_ethernet() {
+        let mut raw = 2_u32.to_ne_bytes().to_vec();
+        raw.extend_from_slice(&[0x45, 0, 0, 20]);
+        let frame = null_loopback_to_ethernet(raw);
+        assert_eq!(&frame[..6], &[0; 6]);
+        assert_eq!(&frame[6..12], &[0x02, 0, 0, 0, 0, 1]);
+        assert_eq!(&frame[12..14], &[0x08, 0x00]);
+        assert_eq!(&frame[14..], &[0x45, 0, 0, 20]);
+    }
+
+    #[test]
+    fn null_loopback_ipv6_families_become_ethernet() {
+        for family in [23_u32, 24, 28, 30] {
+            let mut raw = family.to_ne_bytes().to_vec();
+            raw.extend_from_slice(&[0x60, 0, 0, 0]);
+            let frame = null_loopback_to_ethernet(raw);
+            assert_eq!(&frame[12..14], &[0x86, 0xdd], "family {family}");
+            assert_eq!(&frame[14..], &[0x60, 0, 0, 0]);
+        }
+    }
+
+    #[test]
+    fn unknown_null_loopback_family_becomes_other_ether_type() {
+        let mut raw = 999_u32.to_ne_bytes().to_vec();
+        raw.extend_from_slice(&[1, 2, 3]);
+        let frame = null_loopback_to_ethernet(raw);
+        assert_eq!(&frame[12..14], &[0xff, 0xff]);
+        assert_eq!(&frame[14..], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn short_null_loopback_record_stays_malformed_sized() {
+        for raw in [vec![], vec![2], vec![2, 0], vec![2, 0, 0]] {
+            assert_eq!(null_loopback_to_ethernet(raw.clone()), raw);
+        }
     }
 
     #[test]
@@ -220,6 +300,12 @@ mod tests {
                     error.message()
                 )
             });
+        eprintln!(
+            "loopback datalink={} link_type={:?}",
+            capture.datalink(),
+            capture.link_type
+        );
+        assert_eq!(capture.link_type, LinkType::NullLoopback);
         let socket = UdpSocket::bind("127.0.0.1:0").expect("bind UDP sender");
         socket
             .send_to(b"RadEAU live capture smoke", "127.0.0.1:30490")
@@ -229,7 +315,14 @@ mod tests {
         while Instant::now() < deadline {
             match capture.next() {
                 Ok(Some(packet)) => {
-                    assert!(!packet.data.is_empty());
+                    let frame = null_loopback_to_ethernet(packet.data);
+                    assert!(
+                        frame.len() >= 34,
+                        "captured frame too short: {}",
+                        frame.len()
+                    );
+                    assert_eq!(&frame[12..14], &[0x08, 0x00]);
+                    assert_eq!(&frame[26..30], &[127, 0, 0, 1]);
                     return;
                 }
                 Ok(None) => {}

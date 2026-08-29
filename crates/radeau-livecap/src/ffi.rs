@@ -89,6 +89,7 @@ type FreeAllDevs = unsafe extern "C" fn(*mut PcapIf);
 type Create = unsafe extern "C" fn(*const c_char, *mut c_char) -> *mut Pcap;
 type SetInt = unsafe extern "C" fn(*mut Pcap, c_int) -> c_int;
 type Activate = unsafe extern "C" fn(*mut Pcap) -> c_int;
+type Datalink = unsafe extern "C" fn(*mut Pcap) -> c_int;
 type NextEx = unsafe extern "C" fn(*mut Pcap, *mut *const PcapPkthdr, *mut *const c_uchar) -> c_int;
 type GetStats = unsafe extern "C" fn(*mut Pcap, *mut PcapStat) -> c_int;
 type Compile =
@@ -111,6 +112,7 @@ struct Api {
     set_immediate_mode: SetInt,
     set_tstamp_precision: SetInt,
     activate: Activate,
+    datalink: Datalink,
     next_ex: NextEx,
     stats: GetStats,
     compile: Compile,
@@ -160,6 +162,7 @@ fn load_api() -> Result<Api, String> {
                 set_immediate_mode: symbol!("pcap_set_immediate_mode", SetInt),
                 set_tstamp_precision: symbol!("pcap_set_tstamp_precision", SetInt),
                 activate: symbol!("pcap_activate", Activate),
+                datalink: symbol!("pcap_datalink", Datalink),
                 next_ex: symbol!("pcap_next_ex", NextEx),
                 stats: symbol!("pcap_stats", GetStats),
                 compile: symbol!("pcap_compile", Compile),
@@ -317,7 +320,7 @@ impl RawCapture {
     pub fn open(
         id: &str,
         filter: Option<&str>,
-    ) -> Result<(Self, bool, Vec<String>), (String, Option<i32>)> {
+    ) -> Result<(Self, bool, i32, Vec<String>), (String, Option<i32>)> {
         let api = api().map_err(|error| (error, None))?;
         let id = CString::new(id).map_err(|_| ("interface id contains NUL".into(), None))?;
         let mut error = [0 as c_char; PCAP_ERRBUF_SIZE];
@@ -343,6 +346,7 @@ impl RawCapture {
         if activation > 0 {
             warnings.push(capture.status_error(activation));
         }
+        let datalink = capture.datalink();
         if let Some(filter) = filter {
             if let Err(error) = capture.apply_filter(filter) {
                 // Npcap's BSD-loopback data link rejects the `vlan` primitive.
@@ -361,7 +365,12 @@ impl RawCapture {
                 }
             }
         }
-        Ok((capture, precision_ns, warnings))
+        Ok((capture, precision_ns, datalink, warnings))
+    }
+
+    pub fn datalink(&self) -> i32 {
+        // SAFETY: pcap_datalink is valid on an activated live handle.
+        unsafe { (self.api.datalink)(self.handle) }
     }
 
     fn configure(

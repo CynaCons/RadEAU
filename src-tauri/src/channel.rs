@@ -638,6 +638,7 @@ impl PcapStreamSource {
 
 pub struct LiveSource {
     capture: radeau_livecap::LiveCapture,
+    link_type: radeau_livecap::LinkType,
     epoch_ns: u64,
     status: ChannelStatus,
     failed: bool,
@@ -648,6 +649,10 @@ impl LiveSource {
         let filter = filter.unwrap_or(radeau_livecap::DEFAULT_FILTER);
         let capture = radeau_livecap::LiveCapture::open(interface_id, Some(filter))
             .map_err(|error| error.to_string())?;
+        let link_type = capture.link_type;
+        if let radeau_livecap::LinkType::Other(value) = link_type {
+            return Err(format!("unsupported data link {value} on this interface"));
+        }
         crate::log::log(
             crate::log::Level::Info,
             "link",
@@ -655,12 +660,14 @@ impl LiveSource {
             serde_json::json!({
                 "interfaceId": interface_id,
                 "filter": filter,
+                "linkType": capture.datalink(),
                 "timestampPrecision": if capture.precision_ns { "ns" } else { "us" },
                 "warnings": capture.warnings,
             }),
         );
         Ok(Self {
             capture,
+            link_type,
             epoch_ns: now_ns(),
             status: ChannelStatus::Up,
             failed: false,
@@ -684,11 +691,22 @@ impl LiveSource {
             return ChannelRead::Idle;
         }
         match self.capture.next() {
-            Ok(Some(packet)) => ChannelRead::Frame {
-                ts_ns: packet.ts_ns,
-                dir: crate::codes::DIR_RX,
-                wire: packet.data,
-            },
+            Ok(Some(packet)) => {
+                let wire = match self.link_type {
+                    radeau_livecap::LinkType::Ethernet => packet.data,
+                    radeau_livecap::LinkType::NullLoopback => {
+                        radeau_livecap::null_loopback_to_ethernet(packet.data)
+                    }
+                    radeau_livecap::LinkType::Other(_) => unreachable!(
+                        "unsupported live-capture data links are rejected while opening"
+                    ),
+                };
+                ChannelRead::Frame {
+                    ts_ns: packet.ts_ns,
+                    dir: crate::codes::DIR_RX,
+                    wire,
+                }
+            }
             Ok(None) => ChannelRead::Idle,
             Err(error) => {
                 self.fail(error);
