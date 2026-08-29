@@ -132,6 +132,39 @@ in-memory catalog model that native YAML targets, so downstream consumers
 Import diagnostics are per-element (skipped-with-reason), never
 all-or-nothing. FIBEX remains a backlog importer against the same model.
 
+**Runtime import.** The core owns one active catalog. `catalog_import(path)`
+parses the file on a worker thread and, on success, replaces the active
+catalog and returns `{source, services, signals, diagnostics}`; on a fatal
+error (unreadable file, XML syntax error, an extract that yields zero
+services) it returns the error and **keeps the previous catalog** — it never
+silently substitutes the embedded demo. `catalog_reload()` re-imports the
+current source; `catalog_unload()` / `catalog_load()` switch decoding off and
+on without discarding the parsed model; `catalog_diagnostics()` returns the
+last import's diagnostics. Every diagnostic is `{severity: "error" | "warn" |
+"info", path, message}` where `path` is the AUTOSAR element path
+(`/Pkg/Sub/Element`) when known and the element name otherwise; the importer
+never drops silently — every skipped element yields one diagnostic. The
+`catalog:state` event carries `{loaded, serviceCount, signalCount, source,
+sourceKind: "embedded" | "file" | "env", errors, warnings, lastError}`; the
+UI labels `sourceKind: "embedded"` as the demo catalog. Classic-platform
+System Description markers (SERVICE-INSTANCE-COLLECTION-SET, SOCKET-ADDRESS,
+PDU-TRIGGERING) produce one error-severity diagnostic naming the variant; the
+extract flavour and the counts appear in the Diagnostics report.
+
+**Real-extract conformance.** The importer reads schema-valid AUTOSAR 4.x:
+XML attributes (`DEST`, byte-order attributes), references resolved by
+absolute path with cross-package short-name collisions diagnosed rather than
+last-write-wins, `EVENT-REF` / `FIELD-REF`-based deployment matching with a
+diagnosed short-name fallback, decimal / `0x` / `0b` numerals, COMPU-METHODs
+in their real `COMPU-INTERNAL-TO-PHYS` / `COMPU-SCALES` /
+`COMPU-RATIONAL-COEFFS` form for LINEAR and SCALE_LINEAR (single scale;
+multi-scale diagnosed) plus TEXTTABLE value tables, `UNIT-REF` resolved to
+UNIT display names, base types keyed on `BASE-TYPE-SIZE` +
+`BASE-TYPE-ENCODING` (u8–u64, i8–i64, f32, f64, boolean) instead of names,
+FIELDS with their deployments (notifier → event, getter/setter → methods),
+BOM / UTF-16 detection, CDATA, a file-size threshold with a clear diagnostic,
+and import off the startup path with a progress event.
+
 ## 5. Payload decode and the dual-decoder contract
 
 Payload decode is specified exactly because **two independent decoders must

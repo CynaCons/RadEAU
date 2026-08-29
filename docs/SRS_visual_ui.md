@@ -355,6 +355,17 @@ and export buffered frames as pcap (Download glyph; disabled with the reason
 to `radeau-<session start>.pcap`; SRS_capture §3). There is no horizontal
 toolbar; filtering is per column.
 
+The catalog rail button opens a 300 px popover: the active source (file name,
+or "embedded demo catalog"), service and signal counts, the actions **Import
+ARXML…** (file dialog, `.arxml`), **Reload**, and a **Decode** switch (the
+former load/unload toggle), then the import diagnostics list — severity glyph,
+element path in `font-mono`, message — capped at 250 px with an
+`errors / warnings` count and an honest "no diagnostics" line. The badge dot
+is `success` when the catalog decodes cleanly, `warning` when it decodes with
+diagnostics, and `error` when the last import failed — in which case the
+popover states that the previous catalog stays active and shows the error
+verbatim (SRS_protocols §4).
+
 Columns (formatting rules — zero-padded uppercase hex, 4-decimal seconds,
 right-aligned numerics, mono for machine data — are inherited unchanged; the
 column set serves the Ethernet frame model of PRD §3.4):
@@ -502,6 +513,10 @@ numeric field, the field authoritative and the slider a coarse input; slider
 value tooltips are prohibited and the thumb, track and rail carry no
 transitions (§8).
 
+Until the simulation core lands (v0.7) the view keeps its secondary rail and
+shows an honest empty state per entry ("node simulation arrives v0.7", and so
+on) — no mock signal controls that do nothing (§1 principle 5).
+
 ### 5.5 Automation
 
 Two panels side by side, 16 px gap and 16 px outer padding: a 300 px script
@@ -513,6 +528,10 @@ title and a clear button; output is `font-mono` at 14 px, 1.5 line height,
 16 px padding — a non-selectable 12.5 px timestamp in `text-tertiary` with
 16 px right margin, then the message in `text-primary`, or `error` for the
 error stream. Lines wrap, long tokens break, the view follows the tail.
+
+Until the automation surface lands (v0.7.1) the script list is the empty
+state "no scripts — automation surface arrives v0.7" and the console carries
+no fabricated output; the run/stop/delete actions do not appear.
 
 ### 5.6 Protocols
 

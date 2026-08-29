@@ -286,6 +286,7 @@ release.
 - [ ] Recorder view honesty (SRS_visual_ui §5.3): fabricated recent-captures list replaced by the empty state, record controls disabled with the v0.6 caption, Export buffered frames action with count/size, Replay panel opens a .pcap/.pcapng into the pcap source
 - [ ] UI for the file/stream sources: Settings Interface select gains 'pcap file' (path picker via tauri-plugin-dialog, realtime/fast pace toggle) and 'pcap stream' (host:port); a closed link on a running session returns the run control to Start (CP-005); Time column session/wall toggle uses sessionEpochMs (CP-009)
 - [x] docs/SRS_capture.md (CP-001..009) written as the normative spec for the channel layer, pcap sources, export, log, and probes [Claude]
+- [ ] Simulation + Automation views honesty (SRS_visual_ui §5.4/§5.5): mock controls, fabricated scripts and console output replaced by honest empty states naming the arriving version; static mock data removed
 
 ### v0.1.7 — Trace filtering — per-column, spec §5.2
 **Goal:** Filter the trace by Service:Method, Name, Protocol, and Direction through the per-column header-glyph popovers SRS_visual_ui §5.2 already fully specifies (no horizontal toolbar). Pure projection-stage predicates over the untouched ring — filter BEFORE collapse/window so Fixed shows the latest matching frame per key and Sequential windows hold N matching rows — with honest filtered-state display. Needs v0.1.5 (Other classes + real direction) to be meaningful on bench traffic.
