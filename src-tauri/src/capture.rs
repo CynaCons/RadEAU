@@ -11,21 +11,20 @@
 //! - `capture:link` — every link-state transition
 
 use std::collections::VecDeque;
-use std::io::{self, Read};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::devgen::{DevGen, RateProfile};
+pub use crate::channel::SourceSpec;
+use crate::channel::{Capabilities, ChannelRead, ChannelStatus, Source};
+use crate::classify::classify_frame;
 use crate::dissect::{FrameDetail, FrameRing};
-use crate::endpoints::{ipv4_u32, EndpointDto, EndpointTable};
+use crate::endpoints::{EndpointDto, EndpointTable};
 use crate::frame::{GenFrame, SNAP_LEN};
-use crate::simlink::{read_handshake_line, validate_handshake_line, FrameMapper, RecordDeframer};
 
 /// Batch cadence (SRS §1): one event per deadline interval, 16 ms default.
 pub const BATCH_INTERVAL_MS: u64 = 16;
@@ -36,25 +35,11 @@ pub const ACCUMULATOR_CAP: usize = 4_000;
 pub const MAX_CREDITS: u32 = 3;
 const TICK_MS: u64 = 2;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-const READ_TIMEOUT: Duration = Duration::from_millis(100);
-const BACKOFF_START: Duration = Duration::from_millis(250);
-const BACKOFF_MAX: Duration = Duration::from_secs(2);
-
 const EVENT_FRAMES_BATCH: &str = "frames:batch";
 const EVENT_CAPTURE_SESSION: &str = "capture:session";
 const EVENT_CAPTURE_LINK: &str = "capture:link";
 const EVENT_CAPTURE_STATS: &str = "capture:stats";
-
-/// Tagged capture source — mirrors the UI `CaptureSource` union.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind")]
-pub enum SourceSpec {
-    #[serde(rename = "devgen")]
-    Devgen { profile: String },
-    #[serde(rename = "sim")]
-    Sim { addr: String },
-}
+const EVENT_CAPTURE_EXPORT: &str = "capture:export";
 
 /// Pure deadline cadence: due when a full `interval_ms` has passed since the
 /// last emit. Testable without a network.
@@ -154,6 +139,10 @@ struct CaptureSessionEvent {
     source_kind: &'static str,
     scenario: Option<String>,
     endpoints: Vec<EndpointDto>,
+    session_epoch_ms: Option<f64>,
+    timestamp_source: &'static str,
+    direction_known: bool,
+    transmit: bool,
 }
 
 #[derive(Serialize)]
@@ -172,6 +161,8 @@ fn emit_session(
     source_kind: &'static str,
     scenario: Option<String>,
     endpoints: Vec<EndpointDto>,
+    session_epoch_ns: Option<u64>,
+    caps: Capabilities,
 ) {
     let _ = app.emit(
         EVENT_CAPTURE_SESSION,
@@ -179,6 +170,10 @@ fn emit_session(
             source_kind,
             scenario,
             endpoints,
+            session_epoch_ms: session_epoch_ns.map(|ns| ns as f64 / 1_000_000.0),
+            timestamp_source: caps.timestamp_source,
+            direction_known: caps.direction,
+            transmit: caps.transmit,
         },
     );
 }
@@ -271,7 +266,11 @@ fn try_emit_batch(
     last_emit_ms: &mut u64,
     seq: &mut u64,
     stats: &CaptureStats,
+    attached: &AtomicBool,
 ) {
+    if !ui_ready(attached, start) {
+        return;
+    }
     let elapsed_ms = Instant::now().duration_since(start).as_millis() as u64;
     let pending = accumulator.lock().map(|a| !a.is_empty()).unwrap_or(false);
     if pending && deadline_due(elapsed_ms, BATCH_INTERVAL_MS, *last_emit_ms) && take_credit(credits)
@@ -292,35 +291,78 @@ fn try_emit_batch(
     }
 }
 
-fn devgen_endpoints() -> Vec<EndpointDto> {
-    let mut table = EndpointTable::default();
-    for ep in 0..5 {
-        let ip = crate::devgen::endpoint_ip(ep);
-        table.with_hint(
-            ipv4_u32(ip),
-            format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
-        );
+/// End-of-source flush: emits everything still accumulated regardless of the
+/// batch deadline, waiting briefly for a credit so a file that replays in
+/// milliseconds does not end its session with the frames unsent.
+fn flush_remaining(
+    app: &AppHandle,
+    credits: &Arc<AtomicU32>,
+    accumulator: &Arc<Mutex<VecDeque<GenFrame>>>,
+    seq: &mut u64,
+    stats: &CaptureStats,
+) {
+    const CREDIT_WAIT: Duration = Duration::from_millis(10);
+    const CREDIT_ATTEMPTS: u32 = 100;
+    loop {
+        let pending = accumulator.lock().map(|a| !a.is_empty()).unwrap_or(false);
+        if !pending {
+            return;
+        }
+        let mut attempts = 0;
+        while !take_credit(credits) {
+            attempts += 1;
+            if attempts >= CREDIT_ATTEMPTS {
+                return;
+            }
+            std::thread::sleep(CREDIT_WAIT);
+        }
+        let mut batch = FrameBatch::with_capacity(ACCUMULATOR_CAP.min(256));
+        if let Ok(mut acc) = accumulator.lock() {
+            for f in acc.drain(..) {
+                batch.push(&f);
+            }
+        }
+        stats
+            .emitted
+            .fetch_add(batch.i.len() as u64, Ordering::Relaxed);
+        batch.seq = *seq;
+        *seq += 1;
+        let _ = app.emit(EVENT_FRAMES_BATCH, &batch);
     }
-    table.to_dtos()
 }
 
 struct Session {
+    id: u64,
     stop: Arc<AtomicBool>,
     credits: Arc<AtomicU32>,
     accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
+    /// Set by the UI's first ack: batches and the end-of-source transition
+    /// wait for it (bounded by `ATTACH_GRACE`), so a source that finishes in
+    /// milliseconds cannot end before the UI is listening.
+    attached: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
+const ATTACH_GRACE: Duration = Duration::from_secs(5);
+
+fn ui_ready(attached: &AtomicBool, start: Instant) -> bool {
+    attached.load(Ordering::Acquire) || start.elapsed() >= ATTACH_GRACE
+}
+
 pub struct CaptureState {
-    session: Mutex<Option<Session>>,
+    session: Arc<Mutex<Option<Session>>>,
     frame_ring: Arc<Mutex<FrameRing>>,
+    next_session_id: AtomicU64,
+    starting: AtomicBool,
 }
 
 impl Default for CaptureState {
     fn default() -> Self {
         Self {
-            session: Mutex::new(None),
+            session: Arc::new(Mutex::new(None)),
             frame_ring: Arc::new(Mutex::new(FrameRing::default())),
+            next_session_id: AtomicU64::new(1),
+            starting: AtomicBool::new(false),
         }
     }
 }
@@ -361,315 +403,147 @@ fn take_credit(credits: &Arc<AtomicU32>) -> bool {
         .is_ok()
 }
 
-/// Devgen emitter — cadence, accumulator, and credits unchanged byte-for-byte
-/// from the pre-sim path; emits a single `connected` link state for uniformity.
-fn emitter_loop_devgen(
+fn reader_loop(
     app: AppHandle,
+    mut source: Source,
     stop: Arc<AtomicBool>,
     credits: Arc<AtomicU32>,
     accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
     frame_ring: Arc<Mutex<FrameRing>>,
-    profile: RateProfile,
     stats: Arc<CaptureStats>,
-) {
-    emit_session(&app, "devgen", None, devgen_endpoints());
-    emit_link(&app, "connected", None);
-
-    let mut gen = DevGen::new(0x5eed_2026_0001);
-    let mut scratch_out: Vec<(GenFrame, Vec<u8>)> = Vec::new();
-    let start = Instant::now();
-    let mut last_gen = start;
-    let mut carry = 0.0f64;
-    let mut last_emit_ms: u64 = 0;
-    let mut seq: u64 = 0;
-    let mut stats_seq = 0;
-    let mut last_stats = 0u64;
-
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(TICK_MS));
-        let now = Instant::now();
-        let elapsed_s = now.duration_since(start).as_secs_f64();
-        let rate = profile.rate_at(elapsed_s);
-
-        let dt = now.duration_since(last_gen).as_secs_f64();
-        last_gen = now;
-        carry += rate * dt;
-        let n = carry.floor() as usize;
-        carry -= n as f64;
-
-        if n > 0 {
-            scratch_out.clear();
-            gen.gen_frames_with_wire(n, rate, &mut scratch_out);
-            if let Ok(mut acc) = accumulator.lock() {
-                for (f, wire) in scratch_out.drain(..) {
-                    stats.observe(&f);
-                    retain_frame(&frame_ring, &f, wire);
-                    if acc.len() >= ACCUMULATOR_CAP {
-                        acc.pop_front();
-                        stats.accumulator_dropped.fetch_add(1, Ordering::Relaxed);
-                    }
-                    acc.push_back(f);
-                }
-            }
-        }
-
-        try_emit_batch(
-            &app,
-            &credits,
-            &accumulator,
-            start,
-            &mut last_emit_ms,
-            &mut seq,
-            &stats,
-        );
-        let ms = start.elapsed().as_millis() as u64;
-        if ms.saturating_sub(last_stats) >= 1000 {
-            emit_stats(&app, &stats, start, &mut stats_seq);
-            last_stats = ms;
-        }
-    }
-    emit_stats(&app, &stats, start, &mut stats_seq);
-    emit_link(&app, "closed", None);
-}
-
-fn resolve_addr(addr: &str) -> Result<SocketAddr, String> {
-    addr.to_socket_addrs()
-        .map_err(|e| format!("resolve {addr}: {e}"))?
-        .next()
-        .ok_or_else(|| format!("no addresses for {addr}"))
-}
-
-fn connect_sim(addr: &str) -> Result<TcpStream, String> {
-    let sock = resolve_addr(addr)?;
-    TcpStream::connect_timeout(&sock, CONNECT_TIMEOUT).map_err(|e| format!("connect {addr}: {e}"))
-}
-
-fn configure_stream(stream: &TcpStream) -> Result<(), String> {
-    stream
-        .set_read_timeout(Some(READ_TIMEOUT))
-        .map_err(|e| format!("set_read_timeout: {e}"))?;
-    stream
-        .set_nodelay(true)
-        .map_err(|e| format!("set_nodelay: {e}"))?;
-    Ok(())
-}
-
-fn sleep_interruptible(stop: &AtomicBool, total: Duration) {
-    let slice = Duration::from_millis(50);
-    let start = Instant::now();
-    while start.elapsed() < total {
-        if stop.load(Ordering::Relaxed) {
-            return;
-        }
-        std::thread::sleep(slice.min(total.saturating_sub(start.elapsed())));
-    }
-}
-
-/// Simulator monitor-link reader: connect → handshake → records → GenFrame →
-/// the same accumulator / cadence / credits path as devgen. Reconnects with
-/// exponential backoff while the session is active.
-fn emitter_loop_sim(
-    app: AppHandle,
-    stop: Arc<AtomicBool>,
-    credits: Arc<AtomicU32>,
-    accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
-    frame_ring: Arc<Mutex<FrameRing>>,
-    addr: String,
-    stats: Arc<CaptureStats>,
+    attached: Arc<AtomicBool>,
 ) {
     let start = Instant::now();
-    let mut last_emit_ms: u64 = 0;
-    let mut seq: u64 = 0;
-    let mut stats_seq = 0;
-    let mut last_stats = 0u64;
-    let mut mapper = FrameMapper::new();
+    let mut first_ts_ns = None;
+    let mut endpoints = EndpointTable::default();
+    for (address, name) in source.endpoint_hints() {
+        endpoints.with_hint(address, name);
+    }
     let mut session_emitted = false;
-    let mut backoff = BACKOFF_START;
-    let mut scratch = [0u8; 8192];
+    let mut endpoint_count = endpoints.len();
+    let mut previous_status: Option<ChannelStatus> = None;
+    let mut batch_seq = 0;
+    let mut stats_seq = 0;
+    let mut last_emit_ms = 0;
+    let mut last_stats = Instant::now();
+    let source_kind = source.source_kind();
+    let caps = source.capabilities();
 
     while !stop.load(Ordering::Relaxed) {
-        emit_link(&app, "connecting", Some(addr.clone()));
-        let stream = match connect_sim(&addr) {
-            Ok(s) => s,
-            Err(e) => {
-                emit_link(&app, "error", Some(e));
-                if stop.load(Ordering::Relaxed) {
-                    break;
+        let status = source.status();
+        if previous_status.as_ref() != Some(&status) {
+            match &status {
+                ChannelStatus::Up => emit_link(&app, "connected", None),
+                ChannelStatus::Connecting | ChannelStatus::Reconnecting => {
+                    emit_link(&app, "reconnecting", None)
                 }
-                emit_link(
-                    &app,
-                    "reconnecting",
-                    Some(format!("backoff {}ms", backoff.as_millis())),
-                );
-                sleep_interruptible(&stop, backoff);
-                backoff = (backoff * 2).min(BACKOFF_MAX);
-                continue;
+                ChannelStatus::Down(detail) => emit_link(&app, "error", Some(detail.clone())),
+                ChannelStatus::Ended => {}
             }
-        };
-        if let Err(e) = configure_stream(&stream) {
-            emit_link(&app, "error", Some(e));
-            emit_link(&app, "reconnecting", None);
-            sleep_interruptible(&stop, backoff);
-            backoff = (backoff * 2).min(BACKOFF_MAX);
-            continue;
+            previous_status = Some(status);
         }
 
-        let mut stream = stream;
-        let mut line_buf = Vec::new();
-        let handshake = loop {
-            if stop.load(Ordering::Relaxed) {
-                emit_link(&app, "closed", None);
-                return;
+        if !session_emitted && source.metadata_ready() {
+            // Sim hints arrive with the handshake, i.e. only once metadata is
+            // ready — seeding at open time would miss them.
+            for (address, name) in source.endpoint_hints() {
+                endpoints.with_hint(address, name);
             }
-            match read_handshake_line(&mut stream, &mut line_buf, &mut scratch) {
-                Ok(line) => break line,
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
-                {
-                    try_emit_batch(
-                        &app,
-                        &credits,
-                        &accumulator,
-                        start,
-                        &mut last_emit_ms,
-                        &mut seq,
-                        &stats,
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    emit_link(&app, "error", Some(format!("handshake read: {e}")));
-                    break String::new();
-                }
-            }
-        };
-        if handshake.is_empty() {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            emit_link(&app, "reconnecting", None);
-            sleep_interruptible(&stop, backoff);
-            backoff = (backoff * 2).min(BACKOFF_MAX);
-            continue;
-        }
-        let hs = match validate_handshake_line(&handshake) {
-            Ok(h) => h,
-            Err(e) => {
-                emit_link(&app, "error", Some(e));
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                emit_link(&app, "reconnecting", None);
-                sleep_interruptible(&stop, backoff);
-                backoff = (backoff * 2).min(BACKOFF_MAX);
-                continue;
-            }
-        };
-
-        if !session_emitted {
-            let mut ports = hs.ports.clone();
-            ports.sort_by_key(|p| p.id);
-            for p in ports {
-                if let Ok(ip) = p.ip.parse::<std::net::Ipv4Addr>() {
-                    mapper.endpoints.with_hint(u32::from(ip), p.name);
-                }
+            endpoint_count = endpoints.len();
+            let epoch = source.session_epoch_ns().or(first_ts_ns);
+            if let Ok(mut ring) = frame_ring.lock() {
+                ring.set_session_epoch_ns(epoch);
             }
             emit_session(
                 &app,
-                "sim",
-                Some(hs.scenario.clone()),
-                mapper.endpoints.to_dtos(),
+                source_kind,
+                source.scenario(),
+                endpoints.to_dtos(),
+                epoch,
+                caps,
             );
             session_emitted = true;
         }
-        emit_link(&app, "connected", Some(hs.scenario.clone()));
-        backoff = BACKOFF_START;
 
-        let mut deframer = RecordDeframer::new();
-        // Leftover bytes after the handshake newline stay in line_buf.
-        if !line_buf.is_empty() {
-            deframer.push(&line_buf);
-            line_buf.clear();
-        }
-
-        let mut link_failed: Option<String> = None;
-        while !stop.load(Ordering::Relaxed) && link_failed.is_none() {
-            match stream.read(&mut scratch) {
-                Ok(0) => {
-                    link_failed = Some("peer closed".into());
-                }
-                Ok(n) => {
-                    deframer.push(&scratch[..n]);
-                    loop {
-                        match deframer.next_record() {
-                            Ok(Some(rec)) => {
-                                if let crate::simlink::MonitorRecord::Gap {
-                                    dropped_count, ..
-                                } = &rec
-                                {
-                                    stats.gap_records.fetch_add(1, Ordering::Relaxed);
-                                    stats
-                                        .gap_dropped
-                                        .fetch_add(*dropped_count as u64, Ordering::Relaxed);
-                                }
-                                let endpoint_count = mapper.endpoints.len();
-                                if let Some((f, wire)) = mapper.map_record_with_wire(rec) {
-                                    stats.observe(&f);
-                                    retain_frame(&frame_ring, &f, wire);
-                                    push_frame(&accumulator, f, &stats);
-                                    if mapper.endpoints.len() > endpoint_count {
-                                        emit_session(
-                                            &app,
-                                            "sim",
-                                            Some(hs.scenario.clone()),
-                                            mapper.endpoints.to_dtos(),
-                                        );
-                                    }
-                                }
-                            }
-                            Ok(None) => break,
-                            Err(e) => {
-                                link_failed = Some(e);
-                                break;
-                            }
-                        }
-                    }
-                }
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut => {}
-                Err(e) => {
-                    link_failed = Some(format!("read: {e}"));
-                }
-            }
+        if source.fast_replay() && accumulator.lock().map(|a| a.len() > 3_000).unwrap_or(false) {
             try_emit_batch(
                 &app,
                 &credits,
                 &accumulator,
                 start,
                 &mut last_emit_ms,
-                &mut seq,
+                &mut batch_seq,
                 &stats,
+                &attached,
             );
-            let ms = start.elapsed().as_millis() as u64;
-            if ms.saturating_sub(last_stats) >= 1000 {
-                emit_stats(&app, &stats, start, &mut stats_seq);
-                last_stats = ms;
-            }
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
         }
 
-        if stop.load(Ordering::Relaxed) {
-            break;
+        match source.read(Duration::from_millis(TICK_MS)) {
+            ChannelRead::Frame { ts_ns, dir, wire } => {
+                let first = *first_ts_ns.get_or_insert(ts_ns);
+                let idx = stats.received.load(Ordering::Relaxed);
+                let t_s = ts_ns.saturating_sub(first) as f64 / 1_000_000_000.0;
+                let frame = classify_frame(&wire, idx, t_s, dir, &mut endpoints);
+                stats.observe(&frame);
+                retain_frame(&frame_ring, &frame, wire);
+                push_frame(&accumulator, frame, &stats);
+                let grown = endpoints.len();
+                if session_emitted && grown > endpoint_count {
+                    endpoint_count = grown;
+                    emit_session(
+                        &app,
+                        source_kind,
+                        source.scenario(),
+                        endpoints.to_dtos(),
+                        source.session_epoch_ns().or(first_ts_ns),
+                        caps,
+                    );
+                }
+            }
+            ChannelRead::Gap { dropped, span_ns } => {
+                stats.gap_records.fetch_add(1, Ordering::Relaxed);
+                stats
+                    .gap_dropped
+                    .fetch_add(dropped as u64, Ordering::Relaxed);
+                crate::log::log(
+                    crate::log::Level::Warn,
+                    "link",
+                    "gap record",
+                    serde_json::json!({ "dropped": dropped, "spanNs": span_ns }),
+                );
+            }
+            ChannelRead::Idle => {}
+            ChannelRead::Ended { detail } => {
+                while !ui_ready(&attached, start) && !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                flush_remaining(&app, &credits, &accumulator, &mut batch_seq, &stats);
+                emit_stats(&app, &stats, start, &mut stats_seq);
+                crate::log::log(
+                    crate::log::Level::Info,
+                    "link",
+                    "source ended",
+                    serde_json::json!({ "detail": detail }),
+                );
+                emit_link(&app, "closed", Some(detail));
+                return;
+            }
         }
-        if let Some(detail) = link_failed {
-            emit_link(&app, "error", Some(detail));
-            emit_link(&app, "reconnecting", None);
-            sleep_interruptible(&stop, backoff);
-            backoff = (backoff * 2).min(BACKOFF_MAX);
+        try_emit_batch(
+            &app,
+            &credits,
+            &accumulator,
+            start,
+            &mut last_emit_ms,
+            &mut batch_seq,
+            &stats,
+            &attached,
+        );
+        if last_stats.elapsed() >= Duration::from_secs(1) {
+            emit_stats(&app, &stats, start, &mut stats_seq);
+            last_stats = Instant::now();
         }
     }
     emit_stats(&app, &stats, start, &mut stats_seq);
@@ -677,8 +551,19 @@ fn emitter_loop_sim(
 }
 
 fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Result<(), String> {
+    if state.starting.swap(true, Ordering::AcqRel) {
+        return Err("capture is starting".into());
+    }
+    let source = match Source::open(&source) {
+        Ok(source) => source,
+        Err(error) => {
+            state.starting.store(false, Ordering::Release);
+            return Err(error);
+        }
+    };
     let mut guard = state.session.lock().map_err(|_| "capture state poisoned")?;
     if guard.is_some() {
+        state.starting.store(false, Ordering::Release);
         return Err("capture already active".into());
     }
     let stop = Arc::new(AtomicBool::new(false));
@@ -693,53 +578,46 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     let thread_acc = Arc::clone(&accumulator);
     let thread_ring = Arc::clone(&state.frame_ring);
     let thread_stats = Arc::clone(&stats);
-
-    let handle = match source {
-        SourceSpec::Devgen { profile } => {
-            let profile = RateProfile::parse(&profile)
-                .ok_or_else(|| format!("unknown profile '{profile}'"))?;
-            std::thread::Builder::new()
-                .name("devgen-emitter".into())
-                .spawn(move || {
-                    emitter_loop_devgen(
-                        app,
-                        thread_stop,
-                        thread_credits,
-                        thread_acc,
-                        thread_ring,
-                        profile,
-                        thread_stats,
-                    );
-                })
-                .map_err(|e| format!("failed to spawn emitter: {e}"))?
-        }
-        SourceSpec::Sim { addr } => {
-            if addr.trim().is_empty() {
-                return Err("sim addr must not be empty".into());
+    let id = state.next_session_id.fetch_add(1, Ordering::Relaxed);
+    let sessions = Arc::clone(&state.session);
+    let installed = Arc::new(AtomicBool::new(false));
+    let thread_installed = Arc::clone(&installed);
+    let attached = Arc::new(AtomicBool::new(false));
+    let thread_attached = Arc::clone(&attached);
+    let handle = std::thread::Builder::new()
+        .name("capture-reader".into())
+        .spawn(move || {
+            while !thread_installed.load(Ordering::Acquire) {
+                std::thread::yield_now();
             }
-            std::thread::Builder::new()
-                .name("simlink-reader".into())
-                .spawn(move || {
-                    emitter_loop_sim(
-                        app,
-                        thread_stop,
-                        thread_credits,
-                        thread_acc,
-                        thread_ring,
-                        addr,
-                        thread_stats,
-                    );
-                })
-                .map_err(|e| format!("failed to spawn reader: {e}"))?
-        }
-    };
+            reader_loop(
+                app,
+                source,
+                thread_stop,
+                thread_credits,
+                thread_acc,
+                thread_ring,
+                thread_stats,
+                thread_attached,
+            );
+            if let Ok(mut guard) = sessions.lock() {
+                if guard.as_ref().map(|session| session.id) == Some(id) {
+                    *guard = None;
+                }
+            }
+        })
+        .map_err(|e| format!("failed to spawn reader: {e}"))?;
 
     *guard = Some(Session {
+        id,
         stop,
         credits,
         accumulator,
+        attached,
         thread: Some(handle),
     });
+    installed.store(true, Ordering::Release);
+    state.starting.store(false, Ordering::Release);
     Ok(())
 }
 
@@ -762,12 +640,35 @@ pub fn capture_start(
     app: AppHandle,
     source: SourceSpec,
 ) -> Result<(), String> {
-    start_session(&state, app, source)
+    let spec = serde_json::to_value(&source).unwrap_or(serde_json::Value::Null);
+    let result = start_session(&state, app, source);
+    match &result {
+        Ok(()) => crate::log::log(
+            crate::log::Level::Info,
+            "session",
+            "capture started",
+            serde_json::json!({ "source": spec }),
+        ),
+        Err(error) => crate::log::log(
+            crate::log::Level::Error,
+            "session",
+            "capture start rejected",
+            serde_json::json!({ "source": spec, "error": error }),
+        ),
+    }
+    result
 }
 
 #[tauri::command]
 pub fn capture_stop(state: State<CaptureState>) -> Result<(), String> {
-    stop_session(&state)
+    let result = stop_session(&state);
+    crate::log::log(
+        crate::log::Level::Info,
+        "session",
+        "capture stopped",
+        serde_json::json!({ "error": result.as_ref().err() }),
+    );
+    result
 }
 
 /// Exactly one ack per animation frame from the UI; each restores one credit
@@ -777,6 +678,7 @@ pub fn ack_frames(state: State<CaptureState>, n: u32) -> Result<(), String> {
     // Read the live session without taking it; if none, acks are stale no-ops.
     let guard = state.session.lock().map_err(|_| "capture state poisoned")?;
     if let Some(session) = guard.as_ref() {
+        session.attached.store(true, Ordering::Release);
         for _ in 0..n.min(MAX_CREDITS) {
             let _ = session
                 .credits
@@ -792,10 +694,89 @@ pub fn ack_frames(state: State<CaptureState>, n: u32) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSummary {
+    frames: usize,
+    bytes: usize,
+    first_ts_ms: f64,
+    last_ts_ms: f64,
+}
+
+#[derive(Clone, Serialize)]
+struct ExportProgress {
+    done: usize,
+    total: usize,
+}
+
+#[tauri::command]
+pub fn export_ring(
+    state: State<CaptureState>,
+    app: AppHandle,
+    path: String,
+) -> Result<ExportSummary, String> {
+    if state.starting.load(Ordering::Acquire) {
+        return Err("capture is starting".into());
+    }
+    let ring = Arc::clone(&state.frame_ring);
+    std::thread::Builder::new()
+        .name("pcap-export".into())
+        .spawn(move || {
+            let (total, epoch) = ring
+                .lock()
+                .map(|guard| (guard.len(), guard.session_epoch_ns))
+                .map_err(|_| "frame buffer unavailable".to_string())?;
+            let epoch = epoch.ok_or_else(|| "capture has no session epoch".to_string())?;
+            let file =
+                std::fs::File::create(&path).map_err(|error| format!("create {path}: {error}"))?;
+            let mut writer = radeau_pcap::PcapWriter::new(std::io::BufWriter::new(file))
+                .map_err(|error| format!("write pcap header: {error}"))?;
+            let mut done = 0;
+            let mut bytes = 0;
+            let mut first_ts_ms = 0.0;
+            let mut last_ts_ms = 0.0;
+            while done < total {
+                let chunk = ring
+                    .lock()
+                    .map_err(|_| "frame buffer unavailable".to_string())?
+                    .snapshot_chunk(done, 1_024.min(total - done));
+                if chunk.is_empty() {
+                    break;
+                }
+                for frame in &chunk {
+                    let relative_ns = (frame.t_s.max(0.0) * 1_000_000_000.0) as u64;
+                    writer
+                        .write_record(epoch.saturating_add(relative_ns), &frame.wire)
+                        .map_err(|error| format!("write pcap record: {error}"))?;
+                    if done == 0 {
+                        first_ts_ms = frame.t_s * 1_000.0;
+                    }
+                    last_ts_ms = frame.t_s * 1_000.0;
+                    bytes += frame.wire.len();
+                    done += 1;
+                }
+                let _ = app.emit(EVENT_CAPTURE_EXPORT, ExportProgress { done, total });
+            }
+            writer
+                .flush()
+                .map_err(|error| format!("flush pcap: {error}"))?;
+            Ok(ExportSummary {
+                frames: done,
+                bytes,
+                first_ts_ms,
+                last_ts_ms,
+            })
+        })
+        .map_err(|error| format!("failed to spawn export worker: {error}"))?
+        .join()
+        .map_err(|_| "export worker panicked".to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::classify::classify_frame;
+    use crate::devgen::DevGen;
     use crate::simlink::{
         encode_frame_record, validate_handshake_line, FrameMapper, MonitorRecord, RecordDeframer,
     };

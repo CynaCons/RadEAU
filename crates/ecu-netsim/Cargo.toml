@@ -8,3 +8,4 @@ description = "RadEAU's companion ECU network simulator: virtual switch, SOME/IP
 [dependencies]
 radeau-proto = { path = "../radeau-proto" }
 radeau-catalog = { path = "../radeau-catalog" }
+radeau-pcap = { path = "../radeau-pcap" }

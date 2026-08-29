@@ -13,12 +13,17 @@ use tauri::Manager;
 // capture profile, and superseded as the default source by ecu-netsim (v0.4).
 mod capture;
 mod catalog;
+mod channel;
 mod classify;
 mod codes;
+mod deps;
+#[cfg(debug_assertions)]
 mod devgen;
+mod diag;
 mod dissect;
 mod endpoints;
 mod frame;
+mod log;
 mod simlink;
 
 fn main() {
@@ -27,9 +32,14 @@ fn main() {
     let _ = radeau_proto::CRATE_NAME;
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(capture::CaptureState::default())
         .manage(catalog::CatalogState::default())
         .setup(|app| {
+            if let Ok(dir) = app.path().app_log_dir() {
+                log::init(dir);
+                diag::log_startup();
+            }
             catalog::emit_initial(app.state::<catalog::CatalogState>().inner(), &app.handle());
             Ok(())
         })
@@ -37,10 +47,18 @@ fn main() {
             capture::capture_start,
             capture::capture_stop,
             capture::ack_frames,
+            capture::export_ring,
             catalog::catalog_model,
             catalog::catalog_load,
             catalog::catalog_unload,
+            catalog::catalog_import,
+            catalog::catalog_reload,
+            catalog::catalog_diagnostics,
             dissect::frame_detail,
+            diag::dependency_probe,
+            diag::diagnostics_report,
+            diag::log_path,
+            diag::open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running RadEAU");

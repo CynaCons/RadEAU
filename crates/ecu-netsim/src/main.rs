@@ -16,8 +16,10 @@ use radeau_proto::{
     udp::UdpDatagram,
 };
 use std::{
-    io::{self, Write},
+    fs::File,
+    io::{self, BufWriter, Write},
     net::{Ipv4Addr, TcpListener},
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -27,6 +29,7 @@ use std::{
 };
 
 const QUEUE: usize = 4096;
+const PCAP_EPOCH_NS: u64 = 1_767_225_600_000_000_000;
 const HANDSHAKE: &str = "{\"link\":\"ecu-netsim-monitor\",\"version\":1,\"scenario\":\"sensor-fusion\",\"ports\":[{\"id\":1,\"name\":\"camera\",\"ip\":\"10.42.0.11\"},{\"id\":2,\"name\":\"radar\",\"ip\":\"10.42.0.12\"},{\"id\":3,\"name\":\"lidar\",\"ip\":\"10.42.0.13\"},{\"id\":4,\"name\":\"dynamics\",\"ip\":\"10.42.0.14\"},{\"id\":5,\"name\":\"fusion\",\"ip\":\"10.42.0.20\"}]}\n";
 
 #[derive(Clone)]
@@ -86,23 +89,21 @@ const NODES: [Node; 5] = [
     },
 ];
 
+struct Args {
+    port: u16,
+    seed: u64,
+    write_pcap: Option<PathBuf>,
+    duration_seconds: Option<u64>,
+}
+
 fn main() {
-    let (port, seed) = match args() {
+    let args = match args() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(2)
         }
     };
-    let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("failed to bind monitor link: {e}");
-            std::process::exit(1)
-        }
-    };
-    let actual = listener.local_addr().map(|a| a.port()).unwrap_or(port);
-    println!("monitor link listening on 127.0.0.1:{actual}");
     let catalog =
         match radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml")) {
             Ok((catalog, _)) => catalog,
@@ -111,12 +112,41 @@ fn main() {
                 std::process::exit(1)
             }
         };
-    run(listener, seed, Arc::new(AtomicBool::new(true)), &catalog);
+    if let Some(path) = args.write_pcap {
+        let duration = args.duration_seconds.expect("validated by args");
+        match write_pcap(&path, duration, args.seed, &catalog) {
+            Ok(frames) => {
+                println!("wrote {frames} frames to {}", path.display());
+                return;
+            }
+            Err(error) => {
+                eprintln!("failed to write pcap: {error}");
+                std::process::exit(1)
+            }
+        }
+    }
+    let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, args.port)) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("failed to bind monitor link: {e}");
+            std::process::exit(1)
+        }
+    };
+    let actual = listener.local_addr().map(|a| a.port()).unwrap_or(args.port);
+    println!("monitor link listening on 127.0.0.1:{actual}");
+    run(
+        listener,
+        args.seed,
+        Arc::new(AtomicBool::new(true)),
+        &catalog,
+    );
 }
 
-fn args() -> Result<(u16, u64), String> {
+fn args() -> Result<Args, String> {
     let mut port = 5560;
     let mut seed = 1;
+    let mut write_pcap = None;
+    let mut duration_seconds = None;
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
         if flag == "--version" || flag == "-V" {
@@ -141,14 +171,144 @@ fn args() -> Result<(u16, u64), String> {
                     .parse()
                     .map_err(|_| format!("invalid seed: {value}"))?
             }
+            "--write-pcap" => write_pcap = Some(PathBuf::from(value)),
+            "--duration" => {
+                duration_seconds = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid duration in seconds: {value}"))?,
+                )
+            }
             _ => {
                 return Err(format!(
-                    "unknown argument: {flag}; usage: ecu-netsim [--monitor-port 5560] [--seed N]"
+                    "unknown argument: {flag}; usage: ecu-netsim [--monitor-port 5560] [--seed N] [--write-pcap PATH --duration SECONDS]"
                 ))
             }
         }
     }
-    Ok((port, seed))
+    if write_pcap.is_some() != duration_seconds.is_some() {
+        return Err("--write-pcap and --duration must be supplied together".into());
+    }
+    Ok(Args {
+        port,
+        seed,
+        write_pcap,
+        duration_seconds,
+    })
+}
+
+fn write_pcap(
+    path: &PathBuf,
+    duration_seconds: u64,
+    seed: u64,
+    catalog: &Catalog,
+) -> io::Result<u64> {
+    let file = File::create(path)?;
+    let mut writer = radeau_pcap::PcapWriter::new(BufWriter::new(file))?;
+    let frames = generate_accelerated(duration_seconds, seed, catalog, |record| {
+        writer.write_record(PCAP_EPOCH_NS.saturating_add(record.time), &record.frame)
+    })?;
+    writer.flush()?;
+    Ok(frames)
+}
+
+fn generate_accelerated<F>(
+    duration_seconds: u64,
+    seed: u64,
+    catalog: &Catalog,
+    mut emit: F,
+) -> io::Result<u64>
+where
+    F: FnMut(Record) -> io::Result<()>,
+{
+    let duration_ms = duration_seconds
+        .checked_mul(1000)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "duration is too large"))?;
+    let mut sessions = [1u16; 5];
+    let mut seq = 1u16;
+    let mut rng = seed;
+    let mut ident = 1u16;
+    let mut arp_node = 0usize;
+    let mut frames = 0u64;
+    let mut send = |record: Record| -> io::Result<()> {
+        emit(record)?;
+        frames += 1;
+        Ok(())
+    };
+
+    // All periods are integral milliseconds. Events at exactly the requested
+    // duration are included, matching a clock advanced to that instant.
+    for time_ms in 0..=duration_ms {
+        let time = time_ms.saturating_mul(1_000_000);
+        for (i, node) in NODES.iter().enumerate() {
+            if time_ms % node.cycle == 0 {
+                let session = sessions[i];
+                send(Record {
+                    time,
+                    port: node.port,
+                    frame: event(*node, 0x8001, session, &mut rng, &mut ident, catalog),
+                })?;
+                sessions[i] = next_id(session);
+            }
+        }
+        if time_ms % 1000 == 0 {
+            let session = sessions[4];
+            send(Record {
+                time,
+                port: 5,
+                frame: event(NODES[4], 0x8002, session, &mut rng, &mut ident, catalog),
+            })?;
+            sessions[4] = next_id(session);
+            for (i, node) in NODES.iter().enumerate() {
+                let session = sessions[i];
+                send(Record {
+                    time,
+                    port: node.port,
+                    frame: offer(*node, session, &mut ident),
+                })?;
+                sessions[i] = next_id(session);
+            }
+        }
+        if time_ms % 125 == 0 {
+            for kind in [gptp::MSG_SYNC, gptp::MSG_FOLLOW_UP] {
+                send(Record {
+                    time,
+                    port: 5,
+                    frame: ptp(kind, seq, time),
+                })?;
+            }
+            seq = next_id(seq);
+        }
+        if time_ms != 0 && time_ms % 2000 == 0 {
+            let asker = NODES[arp_node];
+            send(Record {
+                time,
+                port: asker.port,
+                frame: arp_frame(asker, NODES[4], false),
+            })?;
+            send(Record {
+                time,
+                port: 5,
+                frame: arp_frame(NODES[4], asker, true),
+            })?;
+            arp_node = (arp_node + 1) % 4;
+        }
+        if time_ms != 0 && time_ms % 5000 == 0 {
+            send(Record {
+                time,
+                port: 5,
+                frame: router_solicitation(),
+            })?;
+        }
+        if time_ms != 0 && time_ms % 10_000 == 0 {
+            send(Record {
+                time,
+                port: 4,
+                frame: runt_frame(),
+            })?;
+        }
+    }
+    Ok(frames)
 }
 
 fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Catalog) {
@@ -444,8 +604,18 @@ fn encode_signal(signal: &Signal, physical: f64, payload: &mut [u8]) {
         BaseType::U32 => {
             out.copy_from_slice(&((raw.clamp(0.0, u32::MAX as f64)) as u32).to_be_bytes())
         }
+        BaseType::U64 => out.copy_from_slice(&((raw.max(0.0)) as u64).to_be_bytes()),
+        BaseType::I8 => {
+            out.copy_from_slice(&[(raw.clamp(i8::MIN as f64, i8::MAX as f64)) as i8 as u8])
+        }
         BaseType::S16 => out
             .copy_from_slice(&((raw.clamp(i16::MIN as f64, i16::MAX as f64)) as i16).to_be_bytes()),
+        BaseType::I32 => out
+            .copy_from_slice(&((raw.clamp(i32::MIN as f64, i32::MAX as f64)) as i32).to_be_bytes()),
+        BaseType::I64 => out.copy_from_slice(&(raw as i64).to_be_bytes()),
+        BaseType::F32 => out.copy_from_slice(&(raw as f32).to_be_bytes()),
+        BaseType::F64 => out.copy_from_slice(&raw.to_be_bytes()),
+        BaseType::Bool => out.copy_from_slice(&[u8::from(raw != 0.0)]),
     }
 }
 fn offer(node: Node, session: u16, ident: &mut u16) -> Vec<u8> {
@@ -664,6 +834,78 @@ mod tests {
         io::{BufRead, BufReader, Read},
         net::TcpStream,
     };
+
+    fn accelerated_pcap(duration_seconds: u64, seed: u64, catalog: &Catalog) -> Vec<u8> {
+        let mut writer = radeau_pcap::PcapWriter::new(Vec::new()).unwrap();
+        generate_accelerated(duration_seconds, seed, catalog, |record| {
+            writer.write_record(PCAP_EPOCH_NS + record.time, &record.frame)
+        })
+        .unwrap();
+        writer.into_inner()
+    }
+
+    #[test]
+    fn accelerated_capture_is_deterministic_and_covers_all_traffic() {
+        let catalog =
+            radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
+                .map(|(catalog, _)| catalog)
+                .expect("checked-in extract");
+        assert_eq!(
+            accelerated_pcap(10, 7, &catalog),
+            accelerated_pcap(10, 7, &catalog)
+        );
+
+        let mut records = Vec::new();
+        let count = generate_accelerated(10, 7, &catalog, |record| {
+            records.push(record);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count, 2_049);
+        assert_eq!(records.len() as u64, count);
+        assert!(records.windows(2).all(|pair| pair[0].time <= pair[1].time));
+        assert_eq!(records.first().unwrap().time, 0);
+        assert_eq!(records.last().unwrap().time, 10_000_000_000);
+
+        let mut ports = [false; 5];
+        let mut saw_arp = false;
+        let mut saw_vlan_lidar = false;
+        let mut saw_icmpv6 = false;
+        let mut saw_runt = false;
+        for record in records {
+            ports[usize::from(record.port - 1)] = true;
+            if record.frame.len() < 14 {
+                saw_runt = record.port == 4 && record.frame == runt_frame();
+                continue;
+            }
+            let ethernet = EthernetFrame::parse(&record.frame).unwrap();
+            saw_arp |= ethernet.ethertype == radeau_proto::ethernet::ETHERTYPE_ARP;
+            saw_vlan_lidar |=
+                record.port == 3 && ethernet.vlan.map(|tag| (tag.vid, tag.pcp)) == Some((10, 5));
+            saw_icmpv6 |= ethernet.ethertype == radeau_proto::ethernet::ETHERTYPE_IPV6;
+        }
+        assert!(ports.into_iter().all(|seen| seen));
+        assert!(saw_arp && saw_vlan_lidar && saw_icmpv6 && saw_runt);
+    }
+
+    #[test]
+    fn accelerated_capture_uses_epoch_plus_switch_time() {
+        let catalog =
+            radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
+                .map(|(catalog, _)| catalog)
+                .expect("checked-in extract");
+        let bytes = accelerated_pcap(0, 7, &catalog);
+        let mut reader = radeau_pcap::PcapReader::new();
+        reader.push(&bytes);
+        reader.finish();
+        let timestamps = (0..13)
+            .map(|_| reader.next().unwrap().unwrap().ts_ns)
+            .collect::<Vec<_>>();
+        assert!(timestamps
+            .into_iter()
+            .all(|timestamp| timestamp == PCAP_EPOCH_NS));
+    }
+
     #[test]
     fn monitor_handshake_and_serialized_records() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();

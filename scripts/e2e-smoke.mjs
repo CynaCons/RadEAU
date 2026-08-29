@@ -854,8 +854,18 @@ async function main() {
         return btn ? btn.getAttribute("aria-pressed") === "true" : false;
       })()`);
       if (!pressed) {
+        // The rail button opens the catalog popover; Decode is its switch.
         if (!(await session.eval(clickProbe("trace-catalog-btn"))))
-          fail("could not click trace-catalog-btn to load the catalog");
+          fail("could not click trace-catalog-btn to open the catalog popover");
+        await waitFor(
+          () => session.eval(clickProbe("trace-catalog-decode")),
+          5_000,
+          "catalog popover Decode switch",
+        );
+        await session.eval(`(() => {
+          document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+          return true;
+        })()`);
         await waitFor(async () => {
           const ok = await session.eval(`(() => {
             const btn = document.querySelector('[data-testid="trace-catalog-btn"]');

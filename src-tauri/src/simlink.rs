@@ -12,8 +12,11 @@ use std::io::{self, Read};
 
 use serde::Deserialize;
 
+#[cfg(test)]
 use crate::classify::{classify_frame, sim_direction};
+#[cfg(test)]
 use crate::endpoints::EndpointTable;
+#[cfg(test)]
 use crate::frame::GenFrame;
 
 /// Bytes after the length field for a frame record header (time + port + dir).
@@ -185,7 +188,8 @@ pub fn read_handshake_line<R: Read>(
 }
 
 /// Session-scoped mapper: assigns monotonic idx / relative time and counts
-/// and gaps. Pure over pushed records — the capture thread owns networking.
+/// gaps. Test stand-in for the reader loop over pushed records.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct FrameMapper {
     pub idx: u64,
@@ -195,12 +199,12 @@ pub struct FrameMapper {
     pub endpoints: EndpointTable,
 }
 
+#[cfg(test)]
 impl FrameMapper {
     pub fn new() -> Self {
         Self::default()
     }
 
-    #[cfg(test)]
     pub fn map_record(&mut self, record: MonitorRecord) -> Option<GenFrame> {
         self.map_record_with_wire(record).map(|(frame, _)| frame)
     }

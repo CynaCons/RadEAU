@@ -43,11 +43,11 @@ pub struct FrameDetail {
     pub decoded: Option<Vec<radeau_catalog::DecodedSignal>>,
 }
 
-#[derive(Debug)]
-struct BufferedFrame {
-    idx: u64,
-    t_s: f64,
-    wire: Vec<u8>,
+#[derive(Debug, Clone)]
+pub(crate) struct BufferedFrame {
+    pub(crate) idx: u64,
+    pub(crate) t_s: f64,
+    pub(crate) wire: Vec<u8>,
 }
 
 /// Session-local FIFO. Frames are assigned continuous indexes by both readers,
@@ -60,6 +60,7 @@ pub struct FrameRing {
     greatest_seen: Option<u64>,
     frame_cap: usize,
     byte_cap: usize,
+    pub(crate) session_epoch_ns: Option<u64>,
 }
 
 impl Default for FrameRing {
@@ -76,12 +77,31 @@ impl FrameRing {
             greatest_seen: None,
             frame_cap,
             byte_cap,
+            session_epoch_ns: None,
         }
     }
     pub fn clear(&mut self) {
         self.frames.clear();
         self.total_bytes = 0;
         self.greatest_seen = None;
+        self.session_epoch_ns = None;
+    }
+
+    pub(crate) fn set_session_epoch_ns(&mut self, epoch: Option<u64>) {
+        self.session_epoch_ns = epoch;
+    }
+
+    pub(crate) fn snapshot_chunk(&self, offset: usize, count: usize) -> Vec<BufferedFrame> {
+        self.frames
+            .iter()
+            .skip(offset)
+            .take(count)
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.frames.len()
     }
 
     /// Appends a full frame and evicts oldest frames for either hard bound.
