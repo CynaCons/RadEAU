@@ -373,8 +373,12 @@ export function frameKey(batch: FrameBatchRaw, k: number): string {
       return `${p}:${sm}:${sv}`;
     case PROTO_DOIP: {
       if (isDoipDiagnostic(ty)) {
+        // The response travels target→source; order the pair so both
+        // directions of one UDS exchange share the live row.
         const se = batch.se[k];
-        return `10:${sv}>${m}:${se < 0 ? "x" : se & ~0x40}`;
+        const lo = Math.min(sv, m);
+        const hi = Math.max(sv, m);
+        return `10:${lo}<>${hi}:${se < 0 ? "x" : se & ~0x40}`;
       }
       return `10:${addr}:${ty}`;
     }

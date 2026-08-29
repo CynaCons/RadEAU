@@ -590,19 +590,20 @@ describe("frameKey", () => {
       }),
       0,
     );
+    // The response carries the swapped pair (gateway → tester).
     const resKey = frameKey(
       baseBatch({
         p: [PROTO_DOIP],
         ty: [DOIP_TY_DIAG],
-        sv: [tester],
-        m: [gateway],
+        sv: [gateway],
+        m: [tester],
         se: [0x7e],
         sa: [da],
         sm: [sm],
       }),
       0,
     );
-    expect(reqKey).toBe(`10:${tester}>${gateway}:${0x3e}`);
+    expect(reqKey).toBe(`10:${tester}<>${gateway}:${0x3e}`);
     expect(resKey).toBe(reqKey);
   });
 
