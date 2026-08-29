@@ -37,6 +37,7 @@ export function NetworkView() {
         simAddr: session.simAddr,
         linkStatus: session.linkStatus,
         sessionInfo: session.sessionInfo,
+        stats: session.stats,
       }),
     [session],
   );
@@ -44,6 +45,8 @@ export function NetworkView() {
   const linkColor = model.linkState
     ? linkChipColorVar(model.linkState)
     : "var(--text-secondary)";
+  const stats = model.stats;
+  const droppedWarning = stats !== null && stats.dropped > 0;
 
   return (
     <Stack spacing={2}>
@@ -115,7 +118,63 @@ export function NetworkView() {
                 }}
               />
             ) : null}
+            {stats ? (
+              <>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`Received ${stats.received.toLocaleString("en-US")}`}
+                  data-testid="network-stat-received"
+                />
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`Emitted ${stats.emitted.toLocaleString("en-US")}`}
+                  data-testid="network-stat-emitted"
+                />
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`Dropped ${stats.dropped.toLocaleString("en-US")}`}
+                  data-testid="network-stat-dropped"
+                  sx={
+                    droppedWarning
+                      ? { color: "var(--warning)", borderColor: "var(--warning)" }
+                      : undefined
+                  }
+                />
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`Gaps ${stats.gaps.toLocaleString("en-US")}`}
+                  data-testid="network-stat-gaps"
+                />
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`Malformed ${stats.malformed.toLocaleString("en-US")}`}
+                  data-testid="network-stat-malformed"
+                />
+              </>
+            ) : null}
           </Stack>
+
+          {stats?.classLine ? (
+            <Typography
+              sx={{ ...MONO, fontSize: 12, color: "text.secondary" }}
+              data-testid="network-stat-classes"
+            >
+              {stats.classLine}
+            </Typography>
+          ) : null}
+          {stats?.caption ? (
+            <Typography
+              sx={{ fontSize: 12, color: "text.secondary" }}
+              data-testid="network-stats-caption"
+            >
+              {stats.caption}
+            </Typography>
+          ) : null}
 
           <Box sx={{ position: "relative", height: 36 }}>
             <EmptyState

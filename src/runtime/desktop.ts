@@ -13,11 +13,19 @@ import type {
   CaptureLinkStatus,
   CaptureSessionInfo,
   CaptureSource,
+  CaptureStats,
 } from "./captureSource";
+import { emptyByClass } from "./captureSource";
 import { FrameBatchRaw, setSessionEndpoints } from "./frameModel";
 import { DevGenMirror, profileRateAt, projectMirrorBatch, RateProfile } from "./devGenMirror";
+import { PROTO_CLASS_COUNT } from "./wireCodes";
 
-export type { CaptureLinkStatus, CaptureSessionInfo, CaptureSource } from "./captureSource";
+export type {
+  CaptureLinkStatus,
+  CaptureSessionInfo,
+  CaptureSource,
+  CaptureStats,
+} from "./captureSource";
 
 export function isDesktop(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -79,23 +87,36 @@ export function onMaximizedChange(cb: (maximized: boolean) => void): () => void 
 const FRAME_EVENT = "frames:batch";
 const SESSION_EVENT = "capture:session";
 const LINK_EVENT = "capture:link";
+const STATS_EVENT = "capture:stats";
 const MIRROR_TICK_MS = 16;
+const MIRROR_STATS_MS = 1000;
 
 class MirrorCapture {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private statsTimer: ReturnType<typeof setInterval> | null = null;
   private gen: DevGenMirror | null = null;
   private seq = 0;
+  private statsSeq = 0;
   private lastTick: number | null = null;
   private carry = 0;
+  private t0 = 0;
+  private received = 0;
+  private emitted = 0;
+  private byClass: number[] = emptyByClass();
   private subscribers = new Set<(b: FrameBatchRaw) => void>();
   private sessionSubs = new Set<(s: CaptureSessionInfo) => void>();
   private linkSubs = new Set<(s: CaptureLinkStatus) => void>();
+  private statsSubs = new Set<(s: CaptureStats) => void>();
 
   start(profile: RateProfile): void {
     this.stop();
     this.gen = new DevGenMirror();
     this.seq = 0;
+    this.statsSeq = 0;
     this.carry = 0;
+    this.received = 0;
+    this.emitted = 0;
+    this.byClass = emptyByClass();
     const endpoints = [0, 1, 2, 3, 4].map((ep) => {
       const ip = `10.42.0.${11 + ep}`;
       return { name: ip, ip };
@@ -109,11 +130,11 @@ class MirrorCapture {
     for (const cb of this.sessionSubs) cb(session);
     for (const cb of this.linkSubs) cb({ state: "connected", detail: null });
 
-    const t0 = Date.now();
-    this.lastTick = t0;
+    this.t0 = Date.now();
+    this.lastTick = this.t0;
     this.timer = setInterval(() => {
       const now = Date.now();
-      const elapsedS = (now - t0) / 1000;
+      const elapsedS = (now - this.t0) / 1000;
       const rate = profileRateAt(profile, elapsedS);
       const dt = Math.min(1, (now - (this.lastTick ?? now)) / 1000);
       this.lastTick = now;
@@ -124,16 +145,46 @@ class MirrorCapture {
       const rows = this.gen.genFrames(n, rate);
       const batch = projectMirrorBatch(this.seq, rows);
       this.seq += 1;
+      this.received += rows.length;
+      this.emitted += rows.length;
+      for (const r of rows) {
+        if (r.proto >= 0 && r.proto < PROTO_CLASS_COUNT) {
+          this.byClass[r.proto] += 1;
+        }
+      }
       for (const cb of this.subscribers) cb(batch);
     }, MIRROR_TICK_MS);
+
+    this.statsTimer = setInterval(() => this.emitStats(), MIRROR_STATS_MS);
   }
 
   stop(): void {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
+    // Final truthful stats at stop (SP-010), then tear down the ticker.
+    if (this.gen !== null) this.emitStats();
+    if (this.statsTimer !== null) clearInterval(this.statsTimer);
+    this.statsTimer = null;
     this.gen = null;
     setSessionEndpoints(null);
     for (const cb of this.linkSubs) cb({ state: "closed", detail: null });
+  }
+
+  private emitStats(): void {
+    const stats: CaptureStats = {
+      seq: this.statsSeq,
+      elapsedS: (Date.now() - this.t0) / 1000,
+      received: this.received,
+      emitted: this.emitted,
+      accumulatorDropped: 0,
+      gapRecords: 0,
+      gapDropped: 0,
+      malformed: 0,
+      kernelDropped: 0,
+      byClass: this.byClass.slice(),
+    };
+    this.statsSeq += 1;
+    for (const cb of this.statsSubs) cb(stats);
   }
 
   subscribe(cb: (b: FrameBatchRaw) => void): () => void {
@@ -149,6 +200,11 @@ class MirrorCapture {
   subscribeLink(cb: (s: CaptureLinkStatus) => void): () => void {
     this.linkSubs.add(cb);
     return () => this.linkSubs.delete(cb);
+  }
+
+  subscribeStats(cb: (s: CaptureStats) => void): () => void {
+    this.statsSubs.add(cb);
+    return () => this.statsSubs.delete(cb);
   }
 }
 
@@ -225,6 +281,12 @@ export function onCaptureSession(cb: (session: CaptureSessionInfo) => void): () 
 export function onCaptureLink(cb: (status: CaptureLinkStatus) => void): () => void {
   if (!isDesktop()) return mirror.subscribeLink(cb);
   return listenEvent<CaptureLinkStatus>(LINK_EVENT, cb);
+}
+
+/** Capture statistics (1 Hz + once at stop); no-op-safe in browser mode. */
+export function onCaptureStats(cb: (stats: CaptureStats) => void): () => void {
+  if (!isDesktop()) return mirror.subscribeStats(cb);
+  return listenEvent<CaptureStats>(STATS_EVENT, cb);
 }
 
 // ---------------------------------------------------------------------------

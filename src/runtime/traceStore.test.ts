@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PROTO_GPTP, PROTO_SD, PROTO_SOMEIP } from "./frameModel";
 import type { FrameBatchRaw } from "./frameModel";
 import { TraceStore } from "./traceStore";
+import {
+  DIR_RX,
+  PROTO_GPTP,
+  PROTO_SD,
+  PROTO_SOMEIP,
+  SD_TY_OFFER,
+  SOMEIP_TY_NOTIFICATION,
+} from "./wireCodes";
 
 function makeBatch(
   seq: number,
@@ -17,21 +24,31 @@ function makeBatch(
     ty?: number;
     se?: number;
     l?: number;
+    sa?: number;
+    da?: number;
+    sm?: number;
+    vl?: number;
+    po?: number;
   }>,
 ): FrameBatchRaw {
   return {
     seq,
     i: rows.map((r) => r.idx),
     t: rows.map((r) => r.t),
-    d: rows.map((r) => r.d ?? 1),
+    d: rows.map((r) => r.d ?? DIR_RX),
     s: rows.map((r) => r.s ?? 0),
     p: rows.map((r) => r.p ?? PROTO_SOMEIP),
     sv: rows.map((r) => r.sv ?? 0x1101),
     m: rows.map((r) => r.m ?? 0x8001),
-    ty: rows.map((r) => r.ty ?? 0),
+    ty: rows.map((r) => r.ty ?? SOMEIP_TY_NOTIFICATION),
     se: rows.map((r) => r.se ?? -1),
     l: rows.map((r) => r.l ?? 100),
     pb: rows.map(() => [0xde, 0xad, 0xbe, 0xef]),
+    sa: rows.map((r) => r.sa ?? ((10 << 24) | (42 << 16) | (0 << 8) | (11 + (r.s ?? 0)))),
+    da: rows.map((r) => r.da ?? ((10 << 24) | (42 << 16) | (0 << 8) | 20)),
+    sm: rows.map((r) => r.sm ?? 0x02004200000b + (r.s ?? 0)),
+    vl: rows.map((r) => r.vl ?? -1),
+    po: rows.map((r) => r.po ?? (r.p === PROTO_GPTP ? 14 : 42)),
   };
 }
 
@@ -171,12 +188,15 @@ describe("TraceStore", () => {
 
   it("classifies SD offers through the shared projection", () => {
     const store = new TraceStore();
-    store.ingest(makeBatch(0, [{ idx: 9, t: 0.42, p: PROTO_SD, sv: 0xffff, m: 0x8100, ty: 1 }]));
+    store.ingest(
+      makeBatch(0, [{ idx: 9, t: 0.42, p: PROTO_SD, sv: 0xffff, m: 0x8100, ty: SD_TY_OFFER }]),
+    );
     vi.advanceTimersByTime(100);
     const row = store.getSnapshot().rows[0];
     expect(row.protocol).toBe("SD");
     expect(row.serviceMethod).toBe("0xFFFF:0x8100");
     expect(row.type).toBe("Offer");
+    expect(row.name.startsWith("Offer ·")).toBe(true);
     store.dispose();
   });
 
@@ -184,9 +204,9 @@ describe("TraceStore", () => {
     const store = new TraceStore();
     store.ingest(
       makeBatch(0, [
-        { idx: 1, t: 1.0, p: PROTO_SD, s: 0, sv: 0xffff, m: 0x8100, ty: 1 },
-        { idx: 2, t: 1.1, p: PROTO_SD, s: 1, sv: 0xffff, m: 0x8100, ty: 1 },
-        { idx: 3, t: 1.5, p: PROTO_SD, s: 0, sv: 0xffff, m: 0x8100, ty: 1 },
+        { idx: 1, t: 1.0, p: PROTO_SD, s: 0, sv: 0xffff, m: 0x8100, ty: SD_TY_OFFER },
+        { idx: 2, t: 1.1, p: PROTO_SD, s: 1, sv: 0xffff, m: 0x8100, ty: SD_TY_OFFER },
+        { idx: 3, t: 1.5, p: PROTO_SD, s: 0, sv: 0xffff, m: 0x8100, ty: SD_TY_OFFER },
         { idx: 4, t: 2.0, p: PROTO_GPTP, s: 2 },
         { idx: 5, t: 2.25, p: PROTO_GPTP, s: 2 },
       ]),

@@ -2,7 +2,8 @@
  * Global capture-session store (SRS_visual_ui.md §4.3): the app-bar run
  * control owns the session; view-local capture buttons mirror this state.
  * Sole caller of startCapture/stopCapture and sole subscriber of
- * capture:session / capture:link — views read via subscribe/getSnapshot.
+ * capture:session / capture:link / capture:stats — views read via
+ * subscribe/getSnapshot.
  */
 
 import {
@@ -12,11 +13,13 @@ import {
   type CaptureLinkStatus,
   type CaptureSessionInfo,
   type CaptureSource,
+  type CaptureStats,
   type SourceKind,
 } from "./captureSource";
 import {
   onCaptureLink,
   onCaptureSession,
+  onCaptureStats,
   startCapture,
   stopCapture,
 } from "./desktop";
@@ -27,6 +30,10 @@ export interface SessionSnapshot {
   readonly simAddr: string;
   readonly linkStatus: CaptureLinkStatus | null;
   readonly sessionInfo: CaptureSessionInfo | null;
+  /** Live / last-session capture counters; null until the first stats event. */
+  readonly stats: CaptureStats | null;
+  /** Verbatim start-rejection message; cleared on the next start/stop. */
+  readonly lastError: string | null;
 }
 
 export class SessionStore {
@@ -35,19 +42,25 @@ export class SessionStore {
   private simAddr = DEFAULT_SIM_ADDR;
   private linkStatus: CaptureLinkStatus | null = null;
   private sessionInfo: CaptureSessionInfo | null = null;
+  private stats: CaptureStats | null = null;
+  private lastError: string | null = null;
   private listeners = new Set<() => void>();
   private snapshot: SessionSnapshot;
   private startInFlight: Promise<void> | null = null;
 
   constructor() {
     this.snapshot = this.buildSnapshot();
-    // Own the session/link event channels for the whole app lifetime.
+    // Own the session/link/stats event channels for the whole app lifetime.
     onCaptureSession((info) => {
       this.sessionInfo = info;
       this.publish();
     });
     onCaptureLink((status) => {
       this.linkStatus = status;
+      this.publish();
+    });
+    onCaptureStats((stats) => {
+      this.stats = stats;
       this.publish();
     });
   }
@@ -82,6 +95,8 @@ export class SessionStore {
 
   async start(): Promise<void> {
     if (this.running || this.startInFlight) return;
+    this.lastError = null;
+    this.stats = null; // counters reset when a session starts
     const source = this.currentSource();
     if (source.kind === "sim") {
       this.linkStatus = { state: "connecting", detail: source.addr };
@@ -95,10 +110,12 @@ export class SessionStore {
         this.running = true;
         this.publish();
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         this.running = false;
         this.linkStatus = null;
         this.sessionInfo = null;
+        this.lastError =
+          err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
         this.publish();
       })
       .finally(() => {
@@ -111,9 +128,11 @@ export class SessionStore {
   async stop(): Promise<void> {
     if (!this.running && !this.startInFlight) return;
     // Flip UI immediately; halt the underlying session next.
+    // Stats are retained so the last session's numbers stay readable.
     this.running = false;
     this.linkStatus = null;
     this.sessionInfo = null;
+    this.lastError = null;
     this.publish();
     try {
       await stopCapture();
@@ -140,6 +159,8 @@ export class SessionStore {
       simAddr: this.simAddr,
       linkStatus: this.linkStatus,
       sessionInfo: this.sessionInfo,
+      stats: this.stats,
+      lastError: this.lastError,
     };
   }
 

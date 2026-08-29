@@ -16,12 +16,11 @@ export type HistoryWindow = (typeof HISTORY_WINDOW_OPTIONS)[number];
 export const DEFAULT_HISTORY_WINDOW: HistoryWindow = 200_000;
 
 /**
- * Stable display key for fixed-mode collapse.
- * SOME/IP → (protocol, service:method); SD / gPTP → (protocol, source node).
+ * Stable display key for fixed-mode collapse — the per-row key computed once
+ * in projectRow (SRS_visual_ui.md §5.2 fixed-mode keying).
  */
 export function fixedDisplayKey(row: TraceFrame): string {
-  if (row.protocol === "SOME/IP") return `SOME/IP:${row.serviceMethod}`;
-  return `${row.protocol}:${row.source}`;
+  return row.key;
 }
 
 /**

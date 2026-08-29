@@ -1,16 +1,14 @@
 /**
  * Settings view (SRS_visual_ui.md §5.7): Interface is the only place the
- * capture source is chosen; other groups remain local until their cores land.
+ * capture source is chosen; groups whose core has not landed render disabled
+ * with a caption naming the arriving version.
  */
 
 import {
+  Alert,
   Box,
   Button,
   Chip,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   IconButton,
   MenuItem,
   Stack,
@@ -40,7 +38,7 @@ import { isDesktop } from "../runtime/desktop";
 import { sessionStore } from "../runtime/sessionStore";
 import { useViewLifecycle } from "../shell/viewLifecycle";
 
-// ── Local mock state for groups not yet wired to the core (PRD §6). ──
+// ── Local state for groups not yet wired to the core (PRD §6). ──
 
 const REFRESH_OPTIONS = [
   { value: 16, label: "16 ms (60 Hz)" },
@@ -76,14 +74,16 @@ function SwitchRow(props: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   testId: string;
+  disabled?: boolean;
 }) {
-  const { label, caption, checked, onChange, testId } = props;
+  const { label, caption, checked, onChange, testId, disabled = false } = props;
   return (
     <Box>
       <Stack direction="row" alignItems="center" spacing={1}>
         <Switch
           size="small"
           checked={checked}
+          disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
           inputProps={{ "aria-label": label }}
           data-testid={testId}
@@ -117,15 +117,7 @@ export function SettingsView() {
   const simOk = simSourceAvailable(desktop);
 
   const [transmitOnly, setTransmitOnly] = useState(false);
-  const [refreshMs, setRefreshMs] = useState(33);
-  const [lowOverhead, setLowOverhead] = useState(false);
-  const [port, setPort] = useState("5555");
-  const [bindHost, setBindHost] = useState("127.0.0.1");
-  const [token, setToken] = useState("tok-5c9a1f2e-90aa-4c21");
-  const [allowlist, setAllowlist] = useState("127.0.0.1, 10.42.0.99");
-  const [collectStats, setCollectStats] = useState(true);
-  const [logSd, setLogSd] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [refreshMs] = useState(33);
 
   const copyReport = () => {
     void navigator.clipboard?.writeText(DIAG_REPORT);
@@ -168,6 +160,11 @@ export function SettingsView() {
               </MenuItem>
             </TextField>
           </DisabledReason>
+          {session.lastError ? (
+            <Alert severity="error" data-testid="settings-start-error">
+              {session.lastError}
+            </Alert>
+          ) : null}
           {showSimAddressField(session.sourceKind) ? (
             <DisabledReason disabled={controlsLocked} reason={lockReason}>
               <TextField
@@ -208,8 +205,8 @@ export function SettingsView() {
             fullWidth
             label="Refresh rate"
             value={refreshMs}
-            onChange={(e) => setRefreshMs(Number(e.target.value))}
-            helperText="UI refresh interval for live tables and charts."
+            disabled
+            helperText="arrives v0.8"
             data-testid="settings-refresh-select"
           >
             {REFRESH_OPTIONS.map((o) => (
@@ -220,10 +217,11 @@ export function SettingsView() {
           </TextField>
           <SwitchRow
             label="Low-overhead mode"
-            caption="Hides the Network and Simulation views and reduces decode depth so capture overhead stays minimal."
-            checked={lowOverhead}
-            onChange={setLowOverhead}
+            caption="arrives v0.8"
+            checked={false}
+            onChange={() => {}}
             testId="settings-low-overhead-switch"
+            disabled
           />
         </Stack>
       </RaisedPanel>
@@ -235,43 +233,32 @@ export function SettingsView() {
         testId="settings-automation-panel"
       >
         <Stack spacing={2}>
+          <Typography sx={{ fontSize: 12, color: "text.secondary" }}>arrives v0.7</Typography>
           <Stack direction="row" spacing={2}>
-            <DisabledReason
-              disabled={session.running}
-              reason="Stop the session to change the automation server port"
-            >
-              <TextField
-                size="small"
-                label="Port"
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                disabled={session.running}
-                sx={{ width: 96 }}
-                inputProps={{ sx: MONO_SX }}
-                data-testid="settings-automation-port-field"
-              />
-            </DisabledReason>
-            <DisabledReason
-              disabled={session.running}
-              reason="Stop the session to change the automation server bind host"
-            >
-              <TextField
-                size="small"
-                label="Bind host"
-                value={bindHost}
-                onChange={(e) => setBindHost(e.target.value)}
-                disabled={session.running}
-                sx={{ width: 160 }}
-                inputProps={{ sx: MONO_SX }}
-                data-testid="settings-automation-host-field"
-              />
-            </DisabledReason>
+            <TextField
+              size="small"
+              label="Port"
+              value=""
+              disabled
+              sx={{ width: 96 }}
+              inputProps={{ sx: MONO_SX }}
+              data-testid="settings-automation-port-field"
+            />
+            <TextField
+              size="small"
+              label="Bind host"
+              value=""
+              disabled
+              sx={{ width: 160 }}
+              inputProps={{ sx: MONO_SX }}
+              data-testid="settings-automation-host-field"
+            />
             <TextField
               size="small"
               fullWidth
               label="Access token"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
+              value=""
+              disabled
               inputProps={{ sx: MONO_SX }}
               data-testid="settings-automation-token-field"
             />
@@ -280,9 +267,9 @@ export function SettingsView() {
             size="small"
             fullWidth
             label="Client allowlist"
-            value={allowlist}
-            onChange={(e) => setAllowlist(e.target.value)}
-            helperText="Comma-separated hosts allowed to connect; applied to the next connection."
+            value=""
+            disabled
+            helperText="arrives v0.7"
             inputProps={{ sx: MONO_SX }}
             data-testid="settings-automation-allowlist-field"
           />
@@ -298,17 +285,19 @@ export function SettingsView() {
         <Stack spacing={2}>
           <SwitchRow
             label="Collect frame statistics"
-            caption="Per-service counters and jitter histograms; roughly 2 MB per hour of capture."
-            checked={collectStats}
-            onChange={setCollectStats}
+            caption="arrives v0.1.6"
+            checked={false}
+            onChange={() => {}}
             testId="settings-collect-stats-switch"
+            disabled
           />
           <SwitchRow
             label="Log SD state transitions"
-            caption="Appends every service-discovery state change to the diagnostic report."
-            checked={logSd}
-            onChange={setLogSd}
+            caption="arrives v0.1.6"
+            checked={false}
+            onChange={() => {}}
             testId="settings-log-sd-switch"
+            disabled
           />
           <Box>
             <Stack direction="row" alignItems="center" justifyContent="space-between">
@@ -350,6 +339,7 @@ export function SettingsView() {
         testId="settings-memory-panel"
       >
         <Stack spacing={2}>
+          <Typography sx={{ fontSize: 12, color: "text.secondary" }}>arrives v0.8</Typography>
           <Stack direction="row" spacing={1}>
             {MEMORY_POOLS.map((p) => (
               <Chip
@@ -369,46 +359,17 @@ export function SettingsView() {
               variant="outlined"
               color="error"
               startIcon={<DeleteSweepIcon />}
-              onClick={() => setConfirmOpen(true)}
+              disabled
               data-testid="settings-reclaim-btn"
             >
               Reclaim memory
             </Button>
             <Typography sx={{ fontSize: 12, color: "text.secondary", mt: 0.5 }}>
-              Releases trace history and decode caches; plotted signals keep only the visible
-              window.
+              arrives v0.8
             </Typography>
           </Box>
         </Stack>
       </RaisedPanel>
-
-      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
-        <DialogTitle sx={{ fontSize: 20, fontWeight: 500 }}>Reclaim memory?</DialogTitle>
-        <DialogContent>
-          <Typography sx={{ fontSize: 14 }}>
-            Trace history and decode caches are released immediately. Plotted signals keep only
-            the currently visible window; this cannot be undone.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            size="small"
-            onClick={() => setConfirmOpen(false)}
-            data-testid="settings-reclaim-cancel-btn"
-          >
-            Cancel
-          </Button>
-          <Button
-            size="small"
-            variant="contained"
-            color="error"
-            onClick={() => setConfirmOpen(false)}
-            data-testid="settings-reclaim-confirm-btn"
-          >
-            Reclaim
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }

@@ -6,15 +6,17 @@
  * xorshift64* by design — determinism is per-environment, not cross-language).
  */
 
+import type { FrameBatchRaw } from "./frameModel";
 import {
-  FrameBatchRaw,
-  MSG_EVENT,
-  MSG_OFFER,
-  MSG_SYNC,
+  DIR_RX,
+  DIR_TX,
+  GPTP_TY_SYNC,
   PROTO_GPTP,
   PROTO_SD,
   PROTO_SOMEIP,
-} from "./frameModel";
+  SD_TY_OFFER,
+  SOMEIP_TY_NOTIFICATION,
+} from "./wireCodes";
 
 export type RateProfile = "idle" | "normal" | "stress" | "burst";
 
@@ -50,6 +52,17 @@ const SERVICES: readonly ServiceSpec[] = [
 
 const SNAP_LEN = 12;
 
+/** Endpoint IPv4 as network-order u32 (10.42.0.11 + ep). */
+function endpointIp(ep: number): number {
+  return (10 << 24) | (42 << 16) | (0 << 8) | (11 + ep);
+}
+
+/** Stable fake MAC per endpoint (locally-administered 02:00:42:00:00:XX). */
+function endpointMac(ep: number): number {
+  // 02:00:42:00:00:(0b+ep) as a 48-bit integer.
+  return 0x020042000000 + (0x0b + ep);
+}
+
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -72,6 +85,11 @@ export interface MirrorRow {
   msgType: number;
   session: number;
   wireLen: number;
+  sa: number;
+  da: number;
+  sm: number;
+  vl: number;
+  po: number;
 }
 
 export class DevGenMirror {
@@ -118,6 +136,7 @@ export class DevGenMirror {
     // Wire length: Eth(14) + IPv4(20) + UDP(8) + payload.
     const wireLen = 42 + payloadLen;
     this.sessions[k] += 1;
+    const sa = endpointIp(s.srcEp);
     const row: MirrorRow = {
       idx: this.idx,
       tS: this.tS,
@@ -126,9 +145,14 @@ export class DevGenMirror {
       proto: PROTO_SOMEIP,
       svc: s.svc,
       method: s.method,
-      msgType: MSG_EVENT,
+      msgType: SOMEIP_TY_NOTIFICATION,
       session: this.sessions[k],
       wireLen,
+      sa,
+      da: endpointIp(4), // fusion as a stand-in destination
+      sm: endpointMac(s.srcEp),
+      vl: -1,
+      po: 42,
     };
     this.idx += 1;
     this.snap(); // consume RNG to mirror payload generation
@@ -147,9 +171,14 @@ export class DevGenMirror {
       proto: PROTO_SD,
       svc: 0xffff,
       method: 0x8100,
-      msgType: MSG_OFFER,
+      msgType: SD_TY_OFFER,
       session: -1,
       wireLen,
+      sa: endpointIp(s.srcEp),
+      da: 0xe0000010, // 224.0.0.16 SD multicast stand-in
+      sm: endpointMac(s.srcEp),
+      vl: -1,
+      po: 42,
     };
     this.idx += 1;
     this.snap();
@@ -166,9 +195,14 @@ export class DevGenMirror {
       proto: PROTO_GPTP,
       svc: 0,
       method: 0,
-      msgType: MSG_SYNC,
+      msgType: GPTP_TY_SYNC,
       session: -1,
       wireLen,
+      sa: 0,
+      da: 0,
+      sm: endpointMac(0),
+      vl: -1,
+      po: 14,
     };
     this.idx += 1;
     this.snap();
@@ -191,11 +225,16 @@ export function projectMirrorBatch(seq: number, rows: readonly MirrorRow[]): Fra
     se: [],
     l: [],
     pb: [],
+    sa: [],
+    da: [],
+    sm: [],
+    vl: [],
+    po: [],
   };
   for (const r of rows) {
     batch.i.push(r.idx);
     batch.t.push(r.tS);
-    batch.d.push(r.rx ? 1 : 0);
+    batch.d.push(r.rx ? DIR_RX : DIR_TX);
     batch.s.push(r.srcEp);
     batch.p.push(r.proto);
     batch.sv.push(r.svc);
@@ -204,6 +243,11 @@ export function projectMirrorBatch(seq: number, rows: readonly MirrorRow[]): Fra
     batch.se.push(r.session);
     batch.l.push(r.wireLen);
     batch.pb.push(new Array(SNAP_LEN).fill(0));
+    batch.sa.push(r.sa);
+    batch.da.push(r.da);
+    batch.sm.push(r.sm);
+    batch.vl.push(r.vl);
+    batch.po.push(r.po);
   }
   return batch;
 }

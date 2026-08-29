@@ -9,7 +9,6 @@ import {
   FrameBatchRaw,
   projectRow,
   TraceFrame,
-  deltaKeyOf,
 } from "./frameModel";
 
 export const TRACE_RING_CAP = 200_000;
@@ -134,12 +133,10 @@ export class TraceStore {
     let prev = this.prevT;
     for (const batch of pending) {
       for (let k = 0; k < batch.i.length; k += 1) {
-        decoded.push(projectRow(batch, k, prev, this.lastByKey));
+        const row = projectRow(batch, k, prev, this.lastByKey);
+        decoded.push(row);
         const t = batch.t[k];
-        this.lastByKey.set(
-          deltaKeyOf(batch.p[k], batch.sv[k], batch.m[k], batch.s[k]),
-          t,
-        );
+        this.lastByKey.set(row.key, t);
         prev = t;
       }
     }

@@ -36,6 +36,7 @@ import {
   captureButtonLabel,
   linkChipColorVar,
   linkChipLabel,
+  lossTotal,
   showDegradedLinkChip,
 } from "../runtime/captureSource";
 import { ackFrames, isDesktop, onFrameBatch } from "../runtime/desktop";
@@ -293,11 +294,22 @@ function rowContent(
         </Tooltip>
       </td>
       <td style={MONO_RIGHT}>{f.time}</td>
-      <td style={{ color: f.dir === "rx" ? "var(--info)" : "var(--accent-secondary)" }}>
-        {f.dir === "rx" ? "Rx" : "Tx"}
+      <td
+        style={{
+          color:
+            f.dir === "rx"
+              ? "var(--info)"
+              : f.dir === "tx"
+                ? "var(--accent-secondary)"
+                : "var(--text-secondary)",
+        }}
+      >
+        {f.dir === "rx" ? "Rx" : f.dir === "tx" ? "Tx" : "—"}
       </td>
       <td title={f.sourceTitle}>{f.source}</td>
-      <td>{f.protocol}</td>
+      <td style={f.protocol === "Malformed" ? { color: "var(--error)" } : undefined}>
+        {f.protocol}
+      </td>
       <td style={MONO_RIGHT}>{f.serviceMethod}</td>
       <td>{f.name}</td>
       <td>{f.type}</td>
@@ -422,6 +434,17 @@ export function TraceView() {
   const clearLabel = displayRows.length > 0 ? "Clear trace" : "Trace is already empty";
   const showLinkChip = showDegradedLinkChip(capturing, sourceKind, linkStatus?.state);
   const chipColor = linkStatus ? linkChipColorVar(linkStatus.state) : "var(--text-secondary)";
+  const stats = session.stats;
+  const dropped = stats && capturing ? lossTotal(stats) : 0;
+  const showDroppedChip = dropped > 0;
+  const droppedTooltip = stats
+    ? [
+        `Accumulator ${stats.accumulatorDropped.toLocaleString("en-US")}`,
+        `Gap ${stats.gapDropped.toLocaleString("en-US")}`,
+        `Kernel ${stats.kernelDropped.toLocaleString("en-US")}`,
+      ].join(" · ")
+    : "";
+  const showChipStack = paused || showLinkChip || showDroppedChip;
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
@@ -627,8 +650,8 @@ export function TraceView() {
               }}
             />
           ) : null}
-          {/* Top-right status chips: Paused + degraded link (§4.3 / VU-015). */}
-          {paused || showLinkChip ? (
+          {/* Top-right status chips: Paused + Dropped + degraded link (§4.3 / §5.2). */}
+          {showChipStack ? (
             <Stack
               spacing={1}
               alignItems="flex-end"
@@ -648,6 +671,23 @@ export function TraceView() {
                     backgroundColor: "var(--surface-raised-2)",
                   }}
                 />
+              ) : null}
+              {showDroppedChip ? (
+                <Tooltip title={droppedTooltip}>
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`Dropped · ${dropped.toLocaleString("en-US")}`}
+                    data-testid="trace-dropped-chip"
+                    sx={{
+                      height: 22,
+                      fontSize: 12,
+                      color: "var(--warning)",
+                      borderColor: "var(--warning)",
+                      backgroundColor: "var(--surface-raised-2)",
+                    }}
+                  />
+                </Tooltip>
               ) : null}
               {showLinkChip && linkStatus ? (
                 <Tooltip title={linkStatus.detail ?? linkChipLabel(linkStatus.state)}>

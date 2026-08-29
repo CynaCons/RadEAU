@@ -325,15 +325,23 @@ const SIM_STATE_PROBE = `(() => {
   const text = cells.map((c) => c.textContent || "");
   const names = ["camera", "radar", "lidar", "dynamics", "fusion"];
   const totalAttr = table ? table.getAttribute("data-row-total") : null;
+  // Dir is column index 2 (expand, time, dir, …).
+  const dirCells = table
+    ? [...table.querySelectorAll("tbody tr")]
+        .filter((r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"))
+        .map((r) => (r.querySelectorAll("td")[2]?.textContent || "").trim())
+    : [];
   return {
     rowCount: totalAttr != null ? Number(totalAttr) : (table ? table.querySelectorAll("tbody tr").length : 0),
     // Healthy Connected link must NOT show the Trace degraded chip (§4.3).
     chipLabel: chip ? chip.textContent : null,
     chipAbsent: !chip,
     endpointNameSeen: text.some((t) => names.some((n) => t.includes(n))),
-    // All three simulated traffic classes must actually render as rows.
-    protocolsSeen: ["SOME/IP", "SD", "gPTP"].filter((p) =>
+    // Cumulative protocol set — ARP / IPv6 / Malformed arrive on a slower cadence.
+    protocolsSeen: ["SOME/IP", "SD", "gPTP", "ARP", "IPv6", "Malformed"].filter((p) =>
       text.some((t) => t === p)),
+    lidarClustersSeen: text.some((t) => t.includes("LidarClusters")),
+    allDirRx: dirCells.length > 0 && dirCells.every((d) => d === "Rx"),
   };
 })()`;
 
@@ -344,12 +352,19 @@ const NETWORK_CONNECTION_PROBE = `(() => {
   const addr = q("network-source-addr");
   const sessionChip = q("network-session-chip");
   const linkChip = q("network-link-chip");
+  const received = q("network-stat-received");
+  const droppedChip = q("trace-dropped-chip");
+  const receivedText = received ? (received.textContent || "") : "";
+  const receivedMatch = receivedText.match(/(\\d[\\d,]*)/);
+  const receivedN = receivedMatch ? Number(receivedMatch[1].replace(/,/g, "")) : 0;
   return {
     panelPresent: !!panel,
     sourceKind: kind ? kind.textContent : null,
     sourceAddr: addr ? addr.textContent : null,
     sessionLabel: sessionChip ? sessionChip.textContent : null,
     linkLabel: linkChip ? linkChip.textContent : null,
+    receivedN,
+    droppedChipAbsent: !droppedChip,
   };
 })()`;
 
@@ -522,6 +537,7 @@ async function main() {
     if (!(await session.eval(clickProbe("appbar-run-btn"))))
       fail("could not start the sim capture via appbar-run-btn");
     // Healthy Connected → Trace degraded chip absent (§4.3).
+    // Allow ~25 s so ARP (2 s), ICMPv6 (5 s), and a runt (10 s) all appear.
     let lastSim = null;
     const protocolsRendered = new Set();
     const sim = await waitFor(async () => {
@@ -531,10 +547,12 @@ async function main() {
       return s.rowCount > 0 &&
         s.chipAbsent &&
         s.endpointNameSeen &&
-        protocolsRendered.size === 3
+        protocolsRendered.size === 6 &&
+        s.lidarClustersSeen &&
+        s.allDirRx
         ? s
         : null;
-    }, 20_000, "simulator frames (SOME/IP + SD + gPTP) + absent degraded chip + endpoint names in Trace").catch((err) => {
+    }, 25_000, "simulator frames (SOME/IP+SD+gPTP+ARP+IPv6+Malformed) + LidarClusters + Dir Rx + absent degraded chip").catch((err) => {
       console.error(
         "last sim state:", JSON.stringify(lastSim),
         "protocols rendered so far:", [...protocolsRendered].join(", ") || "none",
@@ -543,7 +561,7 @@ async function main() {
     });
     console.log("sim:", JSON.stringify(sim));
 
-    // Network Connection panel must show the live sim source + Connected.
+    // Network Connection panel must show the live sim source + Connected + stats.
     if (!(await session.eval(clickProbe("nav-network"))))
       fail("could not navigate to Network");
     const network = await waitFor(async () => {
@@ -551,10 +569,12 @@ async function main() {
       return n.panelPresent &&
         n.sourceKind === "Simulator link" &&
         n.linkLabel === "Connected" &&
-        n.sessionLabel && n.sessionLabel.includes("running")
+        n.sessionLabel && n.sessionLabel.includes("running") &&
+        n.receivedN > 0 &&
+        n.droppedChipAbsent
         ? n
         : null;
-    }, 10_000, "Network Connection panel sim source + Connected");
+    }, 10_000, "Network Connection panel sim source + Connected + received>0 + no Dropped chip");
     console.log("network:", JSON.stringify(network));
     if (network.sourceAddr && !network.sourceAddr.includes(String(SIM_PORT)))
       fail(`Network addr "${network.sourceAddr}" missing sim port ${SIM_PORT}`);
@@ -584,6 +604,55 @@ async function main() {
       return d && d.hasEthernet && d.layerCount >= 2 ? d : null;
     }, 10_000, "dissection panel with Ethernet II + at least 2 layers");
     console.log("dissection:", JSON.stringify(detail));
+
+    // VLAN-tagged LidarClusters: expand and assert 802.1Q precedes IPv4.
+    await session.eval(`(() => {
+      const open = document.querySelector('[data-testid^="trace-expand-btn-"][aria-expanded="true"]');
+      if (open) open.click();
+      return true;
+    })()`);
+    await waitFor(async () => {
+      const r = await session.eval(`(() => {
+        const rows = [...document.querySelectorAll("tbody tr")].filter(
+          (r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"),
+        );
+        for (const row of rows) {
+          const cells = row.querySelectorAll("td");
+          const name = (cells[6]?.textContent || "").trim();
+          if (name.includes("LidarClusters")) {
+            const btn = row.querySelector('[data-testid^="trace-expand-btn-"]');
+            if (!btn) return { ok: false, reason: "no expand" };
+            btn.click();
+            return { ok: true };
+          }
+        }
+        return { ok: false, reason: "LidarClusters row not found" };
+      })()`);
+      return r && r.ok ? r : null;
+    }, 10_000, "LidarClusters row to expand");
+    const vlanDetail = await waitFor(async () => {
+      const d = await session.eval(`(() => {
+        const panel = document.querySelector('[data-testid^="trace-detail-"]');
+        if (!panel) return null;
+        if (panel.querySelector('[data-testid="trace-detail-loading"]')) return null;
+        const layers = [...panel.querySelectorAll('[data-testid^="trace-detail-layer-"]')]
+          .map((el) => {
+            const title = el.querySelector('[data-testid^="trace-detail-layer-title-"]');
+            return (title ? title.textContent : el.textContent || "").trim();
+          });
+        // Fallback: scan layer headings from panel text order.
+        const text = panel.textContent || "";
+        const qIdx = text.indexOf("802.1Q");
+        const ipIdx = text.search(/IPv4|Internet Protocol Version 4/);
+        return {
+          layers,
+          has8021Q: qIdx >= 0,
+          qBeforeIp: qIdx >= 0 && ipIdx >= 0 && qIdx < ipIdx,
+        };
+      })()`);
+      return d && d.has8021Q && d.qBeforeIp ? d : null;
+    }, 10_000, "LidarClusters dissection with 802.1Q before IPv4");
+    console.log("vlan dissection:", JSON.stringify(vlanDetail));
 
     // Phase 5 — catalog-driven Trace content (names + clean dissections + decode).
     // Ensure the catalog is loaded (core may auto-load at startup; rail toggles).
@@ -700,7 +769,7 @@ async function main() {
         const cells = row.querySelectorAll("td");
         const proto = (cells[4]?.textContent || "").trim();
         const type = (cells[7]?.textContent || "").trim();
-        if (proto === "SOME/IP" && type === "Event") {
+        if (proto === "SOME/IP" && (type === "Notification" || type === "Event")) {
           const btn = row.querySelector('[data-testid^="trace-expand-btn-"]');
           if (!btn) return { ok: false };
           btn.click();
@@ -712,7 +781,7 @@ async function main() {
     await waitFor(async () => {
       const r = await session.eval(someIpEventExpand);
       return r && r.ok ? r : null;
-    }, 10_000, "SOME/IP Event row to expand");
+    }, 10_000, "SOME/IP Notification row to expand");
 
     const SIGNAL_ALLOWLIST = [
       "FrameCounter", "ObjectCount", "ExposureTime",
@@ -759,8 +828,8 @@ async function main() {
     console.log(
       `PASS — devgen ${trace.rowCount} rows (Fixed→Sequential); simulator link ${sim.rowCount} rows, ` +
         `degraded chip absent, protocols [${[...protocolsRendered].join(", ")}], ` +
-        `endpoint names rendered; Network Connection "${network.sourceKind}" / "${network.linkLabel}"; ` +
-        `catalog names + clean dissections + decoded signals`,
+        `LidarClusters + Dir Rx + VLAN 802.1Q; Network Connection "${network.sourceKind}" / "${network.linkLabel}" ` +
+        `received=${network.receivedN}; catalog names + clean dissections + decoded signals`,
     );
   } catch (err) {
     failures += 1;

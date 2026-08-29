@@ -32,19 +32,14 @@ const noDrag = {
 export function AppTopBar(props: { onToggleRail: () => void }) {
   const [autosave, setAutosave] = useState(true);
   const [sessionTitle, setSessionTitle] = useState("");
-  const [recordArmed, setRecordArmed] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
   const running = session.running;
 
   useEffect(() => onMaximizedChange(setMaximized), []);
 
-  const recording = running && recordArmed;
-  const indicatorColor = recording
-    ? "var(--error)"
-    : recordArmed
-      ? "var(--warning)"
-      : "var(--text-secondary)";
+  // Recording core arrives v0.6 — indicator stays idle (never error/warning).
+  const indicatorColor = "var(--text-secondary)";
 
   const windowButtonSx = {
     width: 24,
@@ -122,30 +117,31 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
         />
       </Box>
 
-      <Tooltip title={recording ? "Recording" : recordArmed ? "Recording armed" : "Recording idle"}>
+      <Tooltip title="Recording idle">
         <RadioButtonCheckedIcon
           data-testid="appbar-record-indicator"
           sx={{ fontSize: 16, color: indicatorColor, mx: 1 }}
         />
       </Tooltip>
 
-      <Tooltip title={recordArmed ? "Disarm recording" : "Arm recording"}>
-        <Switch
-          {...noDrag}
-          size="small"
-          checked={recordArmed}
-          onChange={(e) => setRecordArmed(e.target.checked)}
-          disabled={false}
-          data-testid="appbar-record-switch"
-          inputProps={{ "aria-label": "Arm recording" }}
-          sx={{
-            mr: 1,
-            "& .MuiSwitch-switchBase.Mui-checked": { color: "var(--error)" },
-            "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": {
-              backgroundColor: "var(--error)",
-            },
-          }}
-        />
+      <Tooltip title="Recording arrives with v0.6">
+        <span>
+          <Switch
+            {...noDrag}
+            size="small"
+            checked={false}
+            disabled
+            data-testid="appbar-record-switch"
+            inputProps={{ "aria-label": "Arm recording" }}
+            sx={{
+              mr: 1,
+              "& .MuiSwitch-switchBase.Mui-checked": { color: "var(--error)" },
+              "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": {
+                backgroundColor: "var(--error)",
+              },
+            }}
+          />
+        </span>
       </Tooltip>
 
       <Button

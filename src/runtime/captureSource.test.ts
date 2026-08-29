@@ -4,15 +4,35 @@ import {
   buildCaptureSource,
   captureButtonLabel,
   DEFAULT_SIM_ADDR,
+  emptyByClass,
   interfaceLockedReason,
   linkChipColorVar,
   linkChipLabel,
+  lossTotal,
   showDegradedLinkChip,
   showSimAddressField,
   simSourceAvailable,
   sourceControlsDisabled,
   sourceKindLabel,
+  type CaptureStats,
 } from "./captureSource";
+import { PROTO_CLASS_COUNT } from "./wireCodes";
+
+function stats(partial: Partial<CaptureStats> = {}): CaptureStats {
+  return {
+    seq: 0,
+    elapsedS: 1,
+    received: 100,
+    emitted: 90,
+    accumulatorDropped: 0,
+    gapRecords: 0,
+    gapDropped: 0,
+    malformed: 0,
+    kernelDropped: 0,
+    byClass: emptyByClass(),
+    ...partial,
+  };
+}
 
 describe("captureSource picker state", () => {
   it("builds tagged CaptureSource values", () => {
@@ -68,5 +88,15 @@ describe("captureSource picker state", () => {
     expect(captureButtonLabel(false, "devgen")).toContain("dev generator");
     expect(captureButtonLabel(false, "sim")).toContain("simulator");
     expect(captureButtonLabel(true, "sim")).toBe("Stop capture");
+  });
+
+  it("sums loss counters for the Dropped chip", () => {
+    expect(lossTotal(stats())).toBe(0);
+    expect(
+      lossTotal(
+        stats({ accumulatorDropped: 3, gapDropped: 5, kernelDropped: 7, gapRecords: 2 }),
+      ),
+    ).toBe(15);
+    expect(emptyByClass()).toHaveLength(PROTO_CLASS_COUNT);
   });
 });

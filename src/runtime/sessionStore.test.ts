@@ -1,46 +1,51 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const desktopState = vi.hoisted(() => ({
+  sessionCb: null as ((s: unknown) => void) | null,
+  linkCb: null as ((s: unknown) => void) | null,
+  statsCb: null as ((s: unknown) => void) | null,
+  mirrorRunning: false,
+}));
+
+vi.mock("./desktop", () => ({
+  startCapture: vi.fn(async (source: { kind: string; addr?: string }) => {
+    if (source.kind === "sim") {
+      throw new Error("simulator link is desktop-app only");
+    }
+    desktopState.mirrorRunning = true;
+    desktopState.sessionCb?.({
+      sourceKind: "devgen",
+      scenario: null,
+      endpoints: [{ name: "10.42.0.11", ip: "10.42.0.11" }],
+    });
+    desktopState.linkCb?.({ state: "connected", detail: null });
+    return true;
+  }),
+  stopCapture: vi.fn(async () => {
+    desktopState.mirrorRunning = false;
+    desktopState.linkCb?.({ state: "closed", detail: null });
+  }),
+  onCaptureSession: vi.fn((cb: (s: unknown) => void) => {
+    desktopState.sessionCb = cb;
+    return () => {
+      desktopState.sessionCb = null;
+    };
+  }),
+  onCaptureLink: vi.fn((cb: (s: unknown) => void) => {
+    desktopState.linkCb = cb;
+    return () => {
+      desktopState.linkCb = null;
+    };
+  }),
+  onCaptureStats: vi.fn((cb: (s: unknown) => void) => {
+    desktopState.statsCb = cb;
+    return () => {
+      desktopState.statsCb = null;
+    };
+  }),
+}));
+
 import { SessionStore } from "./sessionStore";
-
-vi.mock("./desktop", () => {
-  let sessionCb: ((s: unknown) => void) | null = null;
-  let linkCb: ((s: unknown) => void) | null = null;
-  let mirrorRunning = false;
-
-  return {
-    startCapture: vi.fn(async (source: { kind: string; addr?: string }) => {
-      if (source.kind === "sim") {
-        throw new Error("simulator link is desktop-app only");
-      }
-      mirrorRunning = true;
-      sessionCb?.({
-        sourceKind: "devgen",
-        scenario: null,
-        endpoints: [{ name: "10.42.0.11", ip: "10.42.0.11" }],
-      });
-      linkCb?.({ state: "connected", detail: null });
-      return true;
-    }),
-    stopCapture: vi.fn(async () => {
-      mirrorRunning = false;
-      linkCb?.({ state: "closed", detail: null });
-    }),
-    onCaptureSession: vi.fn((cb: (s: unknown) => void) => {
-      sessionCb = cb;
-      return () => {
-        sessionCb = null;
-      };
-    }),
-    onCaptureLink: vi.fn((cb: (s: unknown) => void) => {
-      linkCb = cb;
-      return () => {
-        linkCb = null;
-      };
-    }),
-    __isMirrorRunning: () => mirrorRunning,
-  };
-});
-
 import { startCapture, stopCapture } from "./desktop";
 
 describe("SessionStore", () => {
@@ -61,6 +66,8 @@ describe("SessionStore", () => {
     expect(snap.sourceKind).toBe("devgen");
     expect(snap.linkStatus).toBeNull();
     expect(snap.sessionInfo).toBeNull();
+    expect(snap.stats).toBeNull();
+    expect(snap.lastError).toBeNull();
   });
 
   it("is the sole caller of startCapture / stopCapture on toggle", async () => {
@@ -91,12 +98,60 @@ describe("SessionStore", () => {
     expect(store.getSnapshot().simAddr).toBe("10.0.0.1:5560");
   });
 
-  it("rejects a failed start and stays stopped (browser sim)", async () => {
+  it("rejects a failed start, stays stopped, and keeps lastError", async () => {
     store.setSourceKind("sim");
     await store.start();
     expect(store.getSnapshot().running).toBe(false);
     expect(store.getSnapshot().linkStatus).toBeNull();
+    expect(store.getSnapshot().lastError).toBe("simulator link is desktop-app only");
     expect(stopCapture).not.toHaveBeenCalled();
+  });
+
+  it("clears lastError on the next start / stop", async () => {
+    store.setSourceKind("sim");
+    await store.start();
+    expect(store.getSnapshot().lastError).toBeTruthy();
+
+    store.setSourceKind("devgen");
+    await store.start();
+    expect(store.getSnapshot().lastError).toBeNull();
+    expect(store.getSnapshot().running).toBe(true);
+
+    // Inject a fake error while stopped via a failed sim start again after stop.
+    await store.stop();
+    store.setSourceKind("sim");
+    await store.start();
+    expect(store.getSnapshot().lastError).toBeTruthy();
+    await store.stop(); // stop while not running is a no-op; start failed so not running
+    // Clearing: a successful path — switch to devgen and start then stop.
+    store.setSourceKind("devgen");
+    await store.start();
+    expect(store.getSnapshot().lastError).toBeNull();
+    await store.stop();
+    expect(store.getSnapshot().lastError).toBeNull();
+  });
+
+  it("resets stats on start and retains them after stop", async () => {
+    await store.start();
+    desktopState.statsCb?.({
+      seq: 1,
+      elapsedS: 1,
+      received: 10,
+      emitted: 10,
+      accumulatorDropped: 0,
+      gapRecords: 0,
+      gapDropped: 0,
+      malformed: 0,
+      kernelDropped: 0,
+      byClass: new Array(12).fill(0),
+    });
+    expect(store.getSnapshot().stats?.received).toBe(10);
+
+    await store.stop();
+    expect(store.getSnapshot().stats?.received).toBe(10); // retained
+
+    await store.start();
+    expect(store.getSnapshot().stats).toBeNull(); // reset
   });
 
   it("toggle start then stop mirrors the top-bar / rail contract", async () => {

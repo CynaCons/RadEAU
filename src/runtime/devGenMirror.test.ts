@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { DevGenMirror, profileRateAt, projectMirrorBatch } from "./devGenMirror";
-import { PROTO_GPTP, PROTO_SD, PROTO_SOMEIP } from "./frameModel";
+import {
+  DIR_RX,
+  DIR_TX,
+  GPTP_TY_SYNC,
+  PROTO_GPTP,
+  PROTO_SD,
+  PROTO_SOMEIP,
+  SD_TY_OFFER,
+  SOMEIP_TY_NOTIFICATION,
+} from "./wireCodes";
 
 describe("DevGenMirror", () => {
   it("is deterministic for the same seed", () => {
@@ -36,7 +45,6 @@ describe("DevGenMirror", () => {
       expect(r.wireLen).toBeGreaterThanOrEqual(14);
       expect(r.wireLen).toBeLessThanOrEqual(1522);
       if (r.proto === PROTO_SOMEIP) {
-        // L3 frames: 42-byte overhead + payload ≥ 48.
         expect(r.wireLen).toBeGreaterThanOrEqual(90);
       }
     }
@@ -44,6 +52,33 @@ describe("DevGenMirror", () => {
     for (let j = 1; j < fused.length; j += 1) {
       expect(fused[j].session).toBe(fused[j - 1].session + 1);
     }
+  });
+
+  it("emits the new wire columns and code tables", () => {
+    const gen = new DevGenMirror(3);
+    const rows = gen.genFrames(200, 800);
+    for (const r of rows) {
+      expect(r.vl).toBe(-1);
+      expect(r.sm).toBeGreaterThan(0);
+      if (r.proto === PROTO_SOMEIP) {
+        expect(r.msgType).toBe(SOMEIP_TY_NOTIFICATION);
+        expect(r.po).toBe(42);
+        expect(r.sa).toBeGreaterThan(0);
+        expect(r.da).toBeGreaterThan(0);
+      } else if (r.proto === PROTO_SD) {
+        expect(r.msgType).toBe(SD_TY_OFFER);
+        expect(r.po).toBe(42);
+        expect(r.sa).toBeGreaterThan(0);
+      } else if (r.proto === PROTO_GPTP) {
+        expect(r.msgType).toBe(GPTP_TY_SYNC);
+        expect(r.po).toBe(14);
+        expect(r.sa).toBe(0);
+      }
+    }
+    const tx = rows.filter((r) => !r.rx);
+    const rx = rows.filter((r) => r.rx);
+    expect(tx.length).toBeGreaterThan(0);
+    expect(rx.length).toBeGreaterThan(0);
   });
 });
 
@@ -63,11 +98,32 @@ describe("projectMirrorBatch", () => {
     const rows = gen.genFrames(50, 800);
     const batch = projectMirrorBatch(4, rows);
     expect(batch.seq).toBe(4);
-    for (const key of ["i", "t", "d", "s", "p", "sv", "m", "ty", "se", "l"] as const) {
+    for (const key of [
+      "i",
+      "t",
+      "d",
+      "s",
+      "p",
+      "sv",
+      "m",
+      "ty",
+      "se",
+      "l",
+      "sa",
+      "da",
+      "sm",
+      "vl",
+      "po",
+    ] as const) {
       expect(batch[key]).toHaveLength(50);
     }
     expect(batch.pb).toHaveLength(50);
     expect(batch.i[0]).toBe(rows[0].idx);
     expect(batch.t[49]).toBeCloseTo(rows[49].tS, 10);
+    expect(batch.d.every((d) => d === DIR_RX || d === DIR_TX)).toBe(true);
+    expect(batch.ty.some((t, i) => rows[i].proto === PROTO_SOMEIP && t === SOMEIP_TY_NOTIFICATION)).toBe(
+      true,
+    );
+    expect(batch.po.some((po, i) => rows[i].proto === PROTO_GPTP && po === 14)).toBe(true);
   });
 });

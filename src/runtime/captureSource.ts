@@ -6,6 +6,7 @@
 
 import type { RateProfile } from "./devGenMirror";
 import type { SessionEndpoint } from "./frameModel";
+import { PROTO_CLASS_COUNT } from "./wireCodes";
 
 export type SourceKind = "devgen" | "sim";
 
@@ -29,6 +30,33 @@ export interface CaptureSessionInfo {
   sourceKind: SourceKind;
   scenario: string | null;
   endpoints: SessionEndpoint[];
+}
+
+/**
+ * `capture:stats` payload (SP-010 / codes.rs): 1 Hz while running and once
+ * at stop. `byClass` is indexed by PROTO_* and length PROTO_CLASS_COUNT.
+ */
+export interface CaptureStats {
+  seq: number;
+  elapsedS: number;
+  received: number;
+  emitted: number;
+  accumulatorDropped: number;
+  gapRecords: number;
+  gapDropped: number;
+  malformed: number;
+  kernelDropped: number;
+  byClass: number[];
+}
+
+/** Sum of loss counters that drive the Trace `Dropped · n` chip. */
+export function lossTotal(stats: CaptureStats): number {
+  return stats.accumulatorDropped + stats.gapDropped + stats.kernelDropped;
+}
+
+/** Empty per-class vector for browser-mirror / test fixtures. */
+export function emptyByClass(): number[] {
+  return new Array(PROTO_CLASS_COUNT).fill(0);
 }
 
 export const DEFAULT_SIM_ADDR = "127.0.0.1:5560";
