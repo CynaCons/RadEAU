@@ -14,6 +14,23 @@ import {
   ARP_TY_REQUEST,
   DIR_RX,
   DIR_TX,
+  DOIP_TY_ALIVE_REQ,
+  DOIP_TY_ALIVE_RES,
+  DOIP_TY_DIAG,
+  DOIP_TY_DIAG_ACK,
+  DOIP_TY_DIAG_NACK,
+  DOIP_TY_ENTITY_STATUS_REQ,
+  DOIP_TY_ENTITY_STATUS_RES,
+  DOIP_TY_HEADER_NACK,
+  DOIP_TY_OTHER,
+  DOIP_TY_POWER_MODE_REQ,
+  DOIP_TY_POWER_MODE_RES,
+  DOIP_TY_ROUTING_ACT_REQ,
+  DOIP_TY_ROUTING_ACT_RES,
+  DOIP_TY_VEHICLE_ANNOUNCE,
+  DOIP_TY_VEHICLE_ID_REQ,
+  DOIP_TY_VEHICLE_ID_REQ_EID,
+  DOIP_TY_VEHICLE_ID_REQ_VIN,
   ENDPOINT_OVERFLOW,
   GPTP_TY_ANNOUNCE,
   GPTP_TY_FOLLOW_UP,
@@ -23,6 +40,7 @@ import {
   GPTP_TY_SIGNALING,
   GPTP_TY_SYNC,
   PROTO_ARP,
+  PROTO_DOIP,
   PROTO_GPTP,
   PROTO_ICMP,
   PROTO_IPV4_OTHER,
@@ -244,6 +262,65 @@ function hex4(n: number): string {
   return "0x" + n.toString(16).toUpperCase().padStart(4, "0");
 }
 
+/** DoIP payload-type display names (SRS_protocols §6 / SRS_visual_ui §5.2). */
+export const DOIP_TYPE_NAMES: Readonly<Record<number, string>> = {
+  [DOIP_TY_HEADER_NACK]: "Header NACK",
+  [DOIP_TY_VEHICLE_ID_REQ]: "Vehicle Identification Request",
+  [DOIP_TY_VEHICLE_ID_REQ_EID]: "Vehicle Identification Request (EID)",
+  [DOIP_TY_VEHICLE_ID_REQ_VIN]: "Vehicle Identification Request (VIN)",
+  [DOIP_TY_VEHICLE_ANNOUNCE]: "Vehicle Announcement",
+  [DOIP_TY_ROUTING_ACT_REQ]: "Routing Activation Request",
+  [DOIP_TY_ROUTING_ACT_RES]: "Routing Activation Response",
+  [DOIP_TY_ALIVE_REQ]: "Alive Check Request",
+  [DOIP_TY_ALIVE_RES]: "Alive Check Response",
+  [DOIP_TY_ENTITY_STATUS_REQ]: "Entity Status Request",
+  [DOIP_TY_ENTITY_STATUS_RES]: "Entity Status Response",
+  [DOIP_TY_POWER_MODE_REQ]: "Power Mode Request",
+  [DOIP_TY_POWER_MODE_RES]: "Power Mode Response",
+  [DOIP_TY_DIAG]: "Diagnostic Message",
+  [DOIP_TY_DIAG_ACK]: "Diagnostic Message ACK",
+  [DOIP_TY_DIAG_NACK]: "Diagnostic Message NACK",
+  [DOIP_TY_OTHER]: "DoIP (unknown type)",
+};
+
+/** UDS service-id names for DoIP 0x8001 Type column (SRS_protocols §6). */
+export const UDS_SID_NAMES: Readonly<Record<number, string>> = {
+  0x10: "DiagnosticSessionControl",
+  0x11: "ECUReset",
+  0x14: "ClearDiagnosticInformation",
+  0x19: "ReadDTCInformation",
+  0x22: "ReadDataByIdentifier",
+  0x27: "SecurityAccess",
+  0x28: "CommunicationControl",
+  0x2e: "WriteDataByIdentifier",
+  0x31: "RoutineControl",
+  0x34: "RequestDownload",
+  0x36: "TransferData",
+  0x37: "RequestTransferExit",
+  0x3e: "TesterPresent",
+  0x85: "ControlDTCSetting",
+};
+
+/**
+ * DoIP Type-column label from the UDS SID in `se` (−1 when absent).
+ * Response bit (0x40) folds onto the named request; 0x7F is NRC.
+ */
+export function udsTypeLabel(se: number): string {
+  if (se < 0) return "--";
+  if (se === 0x7f) return "NRC";
+  if ((se & 0x40) !== 0) {
+    const baseName = UDS_SID_NAMES[se & ~0x40];
+    if (baseName) return `${baseName} response`;
+  }
+  const name = UDS_SID_NAMES[se];
+  if (name) return name;
+  return `SID 0x${se.toString(16).toUpperCase().padStart(2, "0")}`;
+}
+
+function isDoipDiagnostic(ty: number): boolean {
+  return ty === DOIP_TY_DIAG || ty === DOIP_TY_DIAG_ACK || ty === DOIP_TY_DIAG_NACK;
+}
+
 /**
  * Catalog-first SOME/IP name. Unknown ids stay honest as `Service 0x…`
  * when the catalog is loaded; otherwise the static SERVICES table fills in.
@@ -294,6 +371,13 @@ export function frameKey(batch: FrameBatchRaw, k: number): string {
     case PROTO_IPV4_OTHER:
     case PROTO_OTHER:
       return `${p}:${sm}:${sv}`;
+    case PROTO_DOIP: {
+      if (isDoipDiagnostic(ty)) {
+        const se = batch.se[k];
+        return `10:${sv}>${m}:${se < 0 ? "x" : se & ~0x40}`;
+      }
+      return `10:${addr}:${ty}`;
+    }
     case PROTO_MALFORMED:
       return `11:${sm}`;
     default:
@@ -400,6 +484,7 @@ function classDisplay(
   sv: number,
   m: number,
   ty: number,
+  se: number,
   sa: number,
   da: number,
   len: number,
@@ -479,6 +564,15 @@ function classDisplay(
         name: `EtherType ${hex4(sv)}`,
         type: "",
       };
+    case PROTO_DOIP: {
+      const diag = isDoipDiagnostic(ty);
+      return {
+        protocol,
+        serviceMethod: diag ? `${hex4(sv)} → ${hex4(m)}` : "--",
+        name: DOIP_TYPE_NAMES[ty] ?? DOIP_TYPE_NAMES[DOIP_TY_OTHER],
+        type: diag ? udsTypeLabel(se) : "--",
+      };
+    }
     case PROTO_MALFORMED:
       return {
         protocol,
@@ -523,6 +617,7 @@ export function projectRow(
     sv,
     m,
     ty,
+    se,
     sa,
     da,
     len,
@@ -540,7 +635,8 @@ export function projectRow(
     serviceMethod,
     name,
     type,
-    session: se < 0 ? "--" : String(se),
+    // DoIP reuses `se` for the UDS SID; Session stays blank for that class.
+    session: proto === PROTO_DOIP || se < 0 ? "--" : String(se),
     length: String(len),
     payload: payloadPreview(batch.pb[k], len, po),
     deltaGlobal: prevT === null ? "--" : (t - prevT).toFixed(4),

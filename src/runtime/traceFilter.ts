@@ -5,7 +5,7 @@
  */
 
 import type { TraceFrame } from "./frameModel";
-import { protoLabel } from "./wireCodes";
+import { PROTO_DOIP, protoLabel } from "./wireCodes";
 
 export type TraceFilterDir = "rx" | "tx" | "unknown";
 
@@ -14,8 +14,9 @@ export type TraceFilterColumn = "service" | "name" | "protocol" | "dir";
 /**
  * Per-column criteria. `null` = column unfiltered. An empty Set is an active
  * filter that matches nothing (allowed — yields the filtered empty state).
- * Service and Name keys are `${sv}:${m}` id pairs; Protocol keys are PROTO_*
- * integers; Direction keys are the row `dir` strings.
+ * Service keys are `${sv}:${m}` id pairs; Name keys are `${sv}:${m}` for
+ * MOST classes and `doip:${ty}` for DoIP (payload-type name once each);
+ * Protocol keys are PROTO_* integers; Direction keys are the row `dir` strings.
  */
 export interface TraceFilter {
   services: ReadonlySet<string> | null;
@@ -37,9 +38,18 @@ export interface TraceFilterOption {
   count: number;
 }
 
-/** Stable (service, method) id pair used by Service and Name selections. */
+/** Stable (service, method) id pair used by Service selections. */
 export function serviceMethodId(row: TraceFrame): string {
   return `${row.sv}:${row.m}`;
+}
+
+/**
+ * Name-filter key: DoIP collapses by payload type (`doip:${ty}`); other
+ * classes keep the `${sv}:${m}` pair so catalog renames stay stable.
+ */
+export function nameFilterId(row: TraceFrame): string {
+  if (row.proto === PROTO_DOIP) return `doip:${row.ty}`;
+  return serviceMethodId(row);
 }
 
 export function isFilterActive(f: TraceFilter): boolean {
@@ -70,7 +80,7 @@ export function isColumnFilterActive(
 /** Integer / Set membership — no string compares on the hot path. */
 export function matches(row: TraceFrame, f: TraceFilter): boolean {
   if (f.services !== null && !f.services.has(serviceMethodId(row))) return false;
-  if (f.names !== null && !f.names.has(serviceMethodId(row))) return false;
+  if (f.names !== null && !f.names.has(nameFilterId(row))) return false;
   if (f.protocols !== null && !f.protocols.has(row.proto)) return false;
   if (f.dirs !== null && !f.dirs.has(row.dir)) return false;
   return true;
@@ -99,7 +109,8 @@ const DIR_ORDER: readonly TraceFilterDir[] = ["rx", "tx", "unknown"];
 /**
  * Distinct values present in `rows` for one filter column — one pass, with
  * occurrence counts. Labels are display strings; keys are the stable ids the
- * filter stores (Name shows display names but keys by `${sv}:${m}`).
+ * filter stores (Name shows display names but keys by `${sv}:${m}`, or
+ * `doip:${ty}` for DoIP).
  */
 export function distinctValues(
   rows: readonly TraceFrame[],
@@ -115,7 +126,7 @@ export function distinctValues(
         label = row.serviceMethod;
         break;
       case "name":
-        key = serviceMethodId(row);
+        key = nameFilterId(row);
         label = row.name;
         break;
       case "protocol":

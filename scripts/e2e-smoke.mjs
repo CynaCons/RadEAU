@@ -492,8 +492,8 @@ const SIM_STATE_PROBE = `(() => {
     chipLabel: chip ? chip.textContent : null,
     chipAbsent: !chip,
     endpointNameSeen: text.some((t) => names.some((n) => t.includes(n))),
-    // Cumulative protocol set — ARP / IPv6 / Malformed arrive on a slower cadence.
-    protocolsSeen: ["SOME/IP", "SD", "gPTP", "ARP", "IPv6", "Malformed"].filter((p) =>
+    // Cumulative protocol set — ARP / IPv6 / Malformed / DoIP arrive on a slower cadence.
+    protocolsSeen: ["SOME/IP", "SD", "gPTP", "ARP", "IPv6", "Malformed", "DoIP"].filter((p) =>
       text.some((t) => t === p)),
     lidarClustersSeen: text.some((t) => t.includes("LidarClusters")),
     allDirRx: dirCells.length > 0 && dirCells.every((d) => d === "Rx"),
@@ -803,12 +803,12 @@ async function main() {
       return s.rowCount > 0 &&
         s.chipAbsent &&
         s.endpointNameSeen &&
-        protocolsRendered.size === 6 &&
+        protocolsRendered.size === 7 &&
         s.lidarClustersSeen &&
         s.allDirRx
         ? s
         : null;
-    }, 25_000, "simulator frames (SOME/IP+SD+gPTP+ARP+IPv6+Malformed) + LidarClusters + Dir Rx + absent degraded chip").catch((err) => {
+    }, 25_000, "simulator frames (SOME/IP+SD+gPTP+ARP+IPv6+Malformed+DoIP) + LidarClusters + Dir Rx + absent degraded chip").catch((err) => {
       console.error(
         "last sim state:", JSON.stringify(lastSim),
         "protocols rendered so far:", [...protocolsRendered].join(", ") || "none",
@@ -1006,6 +1006,9 @@ async function main() {
       };
     })()`;
 
+    // Exact Protocol-cell match — DoIP rows never satisfy "SOME/IP"/"SD"/"gPTP".
+    // DoIP itself is asserted in the isolated v0.1.9 phase below (avoids failing
+    // this gate while the Rust codec/sim cast is still landing).
     const malformedByProto = {};
     for (const proto of ["SOME/IP", "SD", "gPTP"]) {
       await session.eval(COLLAPSE_EXPANDED_PROBE);
@@ -1229,6 +1232,91 @@ async function main() {
       chipPresent: cleared.chipPresent,
       rowCount: cleared.rowCount,
     }));
+
+    // v0.1.9 DoIP TesterPresent dissection — isolated so a missing Rust
+    // codec / sim cast reports its own FAIL without aborting the run.
+    const v019 = { doipDissect: false };
+    try {
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+      await waitFor(
+        () => session.eval(clickProbe("nav-trace")),
+        10_000,
+        "nav-trace for DoIP dissection",
+      );
+      const doipExpand = await waitFor(async () => {
+        const r = await session.eval(`(() => {
+          const rows = [...document.querySelectorAll("tbody tr")].filter(
+            (r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"),
+          );
+          for (const row of rows) {
+            const cells = row.querySelectorAll("td");
+            const proto = (cells[4]?.textContent || "").trim();
+            const type = (cells[7]?.textContent || "").trim();
+            if (proto === "DoIP" && type.includes("TesterPresent")) {
+              const btn = row.querySelector('[data-testid^="trace-expand-btn-"]');
+              if (!btn) return { ok: false, reason: "no expand" };
+              btn.click();
+              return {
+                ok: true,
+                type,
+                idx: (btn.getAttribute("data-testid") || "").replace("trace-expand-btn-", ""),
+              };
+            }
+          }
+          return { ok: false, reason: "DoIP TesterPresent row not found" };
+        })()`);
+        return r && r.ok ? r : null;
+      }, 15_000, "DoIP row with Type containing TesterPresent");
+      const doipDetail = await waitFor(async () => {
+        const d = await session.eval(`(() => {
+          const panel = document.querySelector('[data-testid^="trace-detail-"]');
+          if (!panel) return null;
+          if (panel.querySelector('[data-testid="trace-detail-loading"]')) return null;
+          if (panel.querySelector('[data-testid="trace-detail-empty"]')) {
+            return { text: "", layers: [], layerCount: 0, empty: true };
+          }
+          const layers = [...panel.querySelectorAll('[data-testid^="trace-detail-layer-"]')]
+            .map((el) => {
+              const title = el.querySelector('[data-testid^="trace-detail-layer-title-"]');
+              return (title ? title.textContent : el.textContent || "").trim();
+            });
+          const text = panel.textContent || "";
+          return {
+            text,
+            layers,
+            layerCount: layers.length,
+            empty: false,
+            hasTcp: /\\bTCP\\b/.test(text) || layers.some((l) => /\\bTCP\\b/.test(l)),
+            hasDoip: /DoIP/i.test(text) || layers.some((l) => /DoIP/i.test(l)),
+            hasUds: /\\bUDS\\b/.test(text) || layers.some((l) => /\\bUDS\\b/.test(l)),
+            hasTesterPresent: /TesterPresent/i.test(text),
+            hasMalformed: /malformed/i.test(text),
+          };
+        })()`);
+        return d && !d.empty && d.layerCount >= 1 ? d : null;
+      }, 10_000, "DoIP TesterPresent dissection panel");
+      if (!doipDetail.hasTcp) fail("DoIP dissection missing TCP layer");
+      else if (!doipDetail.hasDoip) fail("DoIP dissection missing DoIP layer");
+      else if (!doipDetail.hasUds) fail("DoIP dissection missing UDS layer");
+      else if (!doipDetail.hasTesterPresent)
+        fail("DoIP dissection missing TesterPresent field");
+      else if (doipDetail.hasMalformed)
+        fail(`DoIP TesterPresent dissection contained "malformed" (idx ${doipExpand.idx})`);
+      else {
+        v019.doipDissect = true;
+        console.log(
+          "doip dissection: PASS",
+          JSON.stringify({
+            type: doipExpand.type,
+            layers: doipDetail.layers,
+          }),
+        );
+      }
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+    } catch (err) {
+      fail(`doip dissection phase: ${err?.message ?? err}`);
+      v019.doipDissect = false;
+    }
 
     // v0.1.6 phases — each is isolated so a missing Rust command/fixture
     // reports its own FAIL without skipping the rest of the report.
@@ -1525,7 +1613,7 @@ async function main() {
         `degraded chip absent, protocols [${[...protocolsRendered].join(", ")}], ` +
         `LidarClusters + Dir Rx + VLAN 802.1Q; Network Connection "${network.sourceKind}" / "${network.linkLabel}" ` +
         `received=${network.receivedN}; catalog names + clean dissections + decoded signals; ` +
-        `filters Protocol/Dir/Name; v0.1.6=${JSON.stringify(v016)}`,
+        `filters Protocol/Dir/Name; v0.1.9=${JSON.stringify(v019)}; v0.1.6=${JSON.stringify(v016)}`,
     );
   } catch (err) {
     failures += 1;

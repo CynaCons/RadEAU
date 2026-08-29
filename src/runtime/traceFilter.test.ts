@@ -8,11 +8,19 @@ import {
   EMPTY_FILTER,
   isFilterActive,
   matches,
+  nameFilterId,
   serviceMethodId,
   type TraceFilter,
   windowSequentialFiltered,
 } from "./traceFilter";
-import { PROTO_GPTP, PROTO_SD, PROTO_SOMEIP } from "./wireCodes";
+import {
+  DOIP_TY_DIAG,
+  DOIP_TY_VEHICLE_ANNOUNCE,
+  PROTO_DOIP,
+  PROTO_GPTP,
+  PROTO_SD,
+  PROTO_SOMEIP,
+} from "./wireCodes";
 
 function row(
   partial: Partial<TraceFrame> & Pick<TraceFrame, "id" | "protocol" | "source" | "key">,
@@ -376,12 +384,60 @@ describe("projectDisplayRows filter perf guardrail (v0.1.7)", () => {
   });
 });
 
-describe("serviceMethodId", () => {
+describe("serviceMethodId / nameFilterId", () => {
   it("formats sv:m as decimal id pair", () => {
     expect(
       serviceMethodId(
         row({ id: 1, protocol: "SOME/IP", source: "a", key: "k", sv: 0x1103, m: 0x8001 }),
       ),
     ).toBe("4355:32769");
+  });
+
+  it("keys DoIP Name filters by doip:ty (Service stays sv:m)", () => {
+    const announce = row({
+      id: 1,
+      protocol: "DoIP",
+      source: "fusion",
+      key: "10:1:4",
+      proto: PROTO_DOIP,
+      ty: DOIP_TY_VEHICLE_ANNOUNCE,
+      sv: 0x1000,
+      m: 0,
+      name: "Vehicle Announcement",
+      serviceMethod: "--",
+    });
+    const diag = row({
+      id: 2,
+      protocol: "DoIP",
+      source: "tester",
+      key: "10:3712>4096:62",
+      proto: PROTO_DOIP,
+      ty: DOIP_TY_DIAG,
+      sv: 0x0e80,
+      m: 0x1000,
+      name: "Diagnostic Message",
+      type: "TesterPresent",
+      serviceMethod: "0x0E80 → 0x1000",
+    });
+    expect(nameFilterId(announce)).toBe(`doip:${DOIP_TY_VEHICLE_ANNOUNCE}`);
+    expect(nameFilterId(diag)).toBe(`doip:${DOIP_TY_DIAG}`);
+    expect(serviceMethodId(diag)).toBe(`${0x0e80}:${0x1000}`);
+
+    const names = distinctValues([announce, diag, announce], "name");
+    expect(names.map((o) => o.key).sort()).toEqual(
+      [`doip:${DOIP_TY_DIAG}`, `doip:${DOIP_TY_VEHICLE_ANNOUNCE}`].sort(),
+    );
+    expect(names.find((o) => o.key === `doip:${DOIP_TY_VEHICLE_ANNOUNCE}`)).toEqual({
+      key: `doip:${DOIP_TY_VEHICLE_ANNOUNCE}`,
+      label: "Vehicle Announcement",
+      count: 2,
+    });
+
+    const nameFilter: TraceFilter = {
+      ...EMPTY_FILTER,
+      names: new Set([`doip:${DOIP_TY_VEHICLE_ANNOUNCE}`]),
+    };
+    expect(matches(announce, nameFilter)).toBe(true);
+    expect(matches(diag, nameFilter)).toBe(false);
   });
 });

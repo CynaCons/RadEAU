@@ -11,6 +11,7 @@ import {
   resolveSomeIpName,
   setCatalogNames,
   setSessionEndpoints,
+  udsTypeLabel,
   type FrameBatchRaw,
 } from "./frameModel";
 import {
@@ -19,10 +20,13 @@ import {
   DIR_RX,
   DIR_TX,
   DIR_UNKNOWN,
+  DOIP_TY_DIAG,
+  DOIP_TY_VEHICLE_ANNOUNCE,
   ENDPOINT_OVERFLOW,
   GPTP_TY_ANNOUNCE,
   GPTP_TY_SYNC,
   PROTO_ARP,
+  PROTO_DOIP,
   PROTO_GPTP,
   PROTO_ICMP,
   PROTO_IPV4_OTHER,
@@ -419,6 +423,83 @@ describe("projectRow per class", () => {
     // payloadLen = 30 > 4 → ellipsis
     expect(projectRow(gptp, 0, null, new Map()).payload).toBe("AA BB CC DD …");
   });
+
+  it("projects DoIP Vehicle Announcement (discovery)", () => {
+    const batch = baseBatch({
+      p: [PROTO_DOIP],
+      ty: [DOIP_TY_VEHICLE_ANNOUNCE],
+      sv: [0x1000],
+      m: [0],
+      se: [-1],
+      sa: [sa],
+      da: [da],
+      sm: [sm],
+    });
+    const row = projectRow(batch, 0, null, new Map());
+    expect(row.protocol).toBe("DoIP");
+    expect(row.name).toBe("Vehicle Announcement");
+    expect(row.type).toBe("--");
+    expect(row.serviceMethod).toBe("--");
+    expect(row.session).toBe("--");
+    expect(row.key).toBe(`10:${sa}:${DOIP_TY_VEHICLE_ANNOUNCE}`);
+  });
+
+  it("projects DoIP TesterPresent request / response / NRC", () => {
+    const tester = 0x0e80;
+    const gateway = 0x1000;
+    const req = baseBatch({
+      p: [PROTO_DOIP],
+      ty: [DOIP_TY_DIAG],
+      sv: [tester],
+      m: [gateway],
+      se: [0x3e],
+      sa: [sa],
+      da: [da],
+      sm: [sm],
+    });
+    const reqRow = projectRow(req, 0, null, new Map());
+    expect(reqRow.name).toBe("Diagnostic Message");
+    expect(reqRow.type).toBe("TesterPresent");
+    expect(reqRow.serviceMethod).toBe("0x0E80 → 0x1000");
+    expect(reqRow.session).toBe("--");
+
+    const res = baseBatch({
+      p: [PROTO_DOIP],
+      ty: [DOIP_TY_DIAG],
+      sv: [gateway],
+      m: [tester],
+      se: [0x7e],
+      sa: [da],
+      da: [sa],
+      sm: [sm],
+    });
+    const resRow = projectRow(res, 0, null, new Map());
+    expect(resRow.type).toBe("TesterPresent response");
+
+    const nrc = baseBatch({
+      p: [PROTO_DOIP],
+      ty: [DOIP_TY_DIAG],
+      sv: [gateway],
+      m: [tester],
+      se: [0x7f],
+      sa: [da],
+      da: [sa],
+      sm: [sm],
+    });
+    expect(projectRow(nrc, 0, null, new Map()).type).toBe("NRC");
+  });
+});
+
+describe("udsTypeLabel", () => {
+  it("maps absent / named / response / NRC / unknown SIDs", () => {
+    expect(udsTypeLabel(-1)).toBe("--");
+    expect(udsTypeLabel(0x3e)).toBe("TesterPresent");
+    expect(udsTypeLabel(0x7e)).toBe("TesterPresent response");
+    expect(udsTypeLabel(0x7f)).toBe("NRC");
+    expect(udsTypeLabel(0x22)).toBe("ReadDataByIdentifier");
+    expect(udsTypeLabel(0x62)).toBe("ReadDataByIdentifier response");
+    expect(udsTypeLabel(0xab)).toBe("SID 0xAB");
+  });
 });
 
 describe("frameKey", () => {
@@ -480,6 +561,49 @@ describe("frameKey", () => {
       `9:${sm}:${0x88b5}`,
     );
     expect(frameKey(baseBatch({ p: [PROTO_MALFORMED], sm: [sm] }), 0)).toBe(`11:${sm}`);
+  });
+
+  it("keys DoIP discovery by srcAddrKey + ty; diagnostics fold response bit", () => {
+    expect(
+      frameKey(
+        baseBatch({
+          p: [PROTO_DOIP],
+          ty: [DOIP_TY_VEHICLE_ANNOUNCE],
+          sa: [sa],
+          sm: [sm],
+        }),
+        0,
+      ),
+    ).toBe(`10:${sa}:${DOIP_TY_VEHICLE_ANNOUNCE}`);
+
+    const tester = 0x0e80;
+    const gateway = 0x1000;
+    const reqKey = frameKey(
+      baseBatch({
+        p: [PROTO_DOIP],
+        ty: [DOIP_TY_DIAG],
+        sv: [tester],
+        m: [gateway],
+        se: [0x3e],
+        sa: [sa],
+        sm: [sm],
+      }),
+      0,
+    );
+    const resKey = frameKey(
+      baseBatch({
+        p: [PROTO_DOIP],
+        ty: [DOIP_TY_DIAG],
+        sv: [tester],
+        m: [gateway],
+        se: [0x7e],
+        sa: [da],
+        sm: [sm],
+      }),
+      0,
+    );
+    expect(reqKey).toBe(`10:${tester}>${gateway}:${0x3e}`);
+    expect(resKey).toBe(reqKey);
   });
 
   it("computes per-node cycle time for SD offers from different sources", () => {
