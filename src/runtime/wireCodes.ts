@@ -54,6 +54,25 @@ export const GPTP_TY_ANNOUNCE = 5;
 export const GPTP_TY_SIGNALING = 6;
 export const GPTP_TY_OTHER = 255;
 
+// DoIP payload types (`ty` when `p === PROTO_DOIP`).
+export const DOIP_TY_HEADER_NACK = 0;
+export const DOIP_TY_VEHICLE_ID_REQ = 1;
+export const DOIP_TY_VEHICLE_ID_REQ_EID = 2;
+export const DOIP_TY_VEHICLE_ID_REQ_VIN = 3;
+export const DOIP_TY_VEHICLE_ANNOUNCE = 4;
+export const DOIP_TY_ROUTING_ACT_REQ = 5;
+export const DOIP_TY_ROUTING_ACT_RES = 6;
+export const DOIP_TY_ALIVE_REQ = 7;
+export const DOIP_TY_ALIVE_RES = 8;
+export const DOIP_TY_ENTITY_STATUS_REQ = 9;
+export const DOIP_TY_ENTITY_STATUS_RES = 10;
+export const DOIP_TY_POWER_MODE_REQ = 11;
+export const DOIP_TY_POWER_MODE_RES = 12;
+export const DOIP_TY_DIAG = 13;
+export const DOIP_TY_DIAG_ACK = 14;
+export const DOIP_TY_DIAG_NACK = 15;
+export const DOIP_TY_OTHER = 255;
+
 // ARP operations (`ty` when `p === PROTO_ARP`).
 export const ARP_TY_REQUEST = 0;
 export const ARP_TY_REPLY = 1;

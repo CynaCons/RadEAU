@@ -37,6 +37,10 @@
 //! `capture:stats` (SP-010), 1 Hz while running and once at stop:
 //! `{seq, elapsedS, received, emitted, accumulatorDropped, gapRecords,
 //! gapDropped, malformed, kernelDropped, byClass: [u64; PROTO_CLASS_COUNT]}`.
+//!
+//! Reserved codes are part of the contract before the code that emits them
+//! lands, so unused-constant warnings are suppressed for this module.
+#![allow(dead_code)]
 
 /// Protocol class (`p` column).
 pub const PROTO_SOMEIP: u8 = 0;
@@ -97,6 +101,28 @@ pub const GPTP_TY_PDELAY_RESP_FOLLOW_UP: u8 = 4;
 pub const GPTP_TY_ANNOUNCE: u8 = 5;
 pub const GPTP_TY_SIGNALING: u8 = 6;
 pub const GPTP_TY_OTHER: u8 = 255;
+
+/// DoIP payload types (`ty` when `p == PROTO_DOIP`, ISO 13400-2); `sv` /
+/// `m` carry the logical source / target addresses of diagnostic messages
+/// (0 otherwise) and `se` the UDS service id of a 0x8001 message (-1
+/// otherwise).
+pub const DOIP_TY_HEADER_NACK: u8 = 0;
+pub const DOIP_TY_VEHICLE_ID_REQ: u8 = 1;
+pub const DOIP_TY_VEHICLE_ID_REQ_EID: u8 = 2;
+pub const DOIP_TY_VEHICLE_ID_REQ_VIN: u8 = 3;
+pub const DOIP_TY_VEHICLE_ANNOUNCE: u8 = 4;
+pub const DOIP_TY_ROUTING_ACT_REQ: u8 = 5;
+pub const DOIP_TY_ROUTING_ACT_RES: u8 = 6;
+pub const DOIP_TY_ALIVE_REQ: u8 = 7;
+pub const DOIP_TY_ALIVE_RES: u8 = 8;
+pub const DOIP_TY_ENTITY_STATUS_REQ: u8 = 9;
+pub const DOIP_TY_ENTITY_STATUS_RES: u8 = 10;
+pub const DOIP_TY_POWER_MODE_REQ: u8 = 11;
+pub const DOIP_TY_POWER_MODE_RES: u8 = 12;
+pub const DOIP_TY_DIAG: u8 = 13;
+pub const DOIP_TY_DIAG_ACK: u8 = 14;
+pub const DOIP_TY_DIAG_NACK: u8 = 15;
+pub const DOIP_TY_OTHER: u8 = 255;
 
 /// ARP operations (`ty` when `p == PROTO_ARP`).
 pub const ARP_TY_REQUEST: u8 = 0;

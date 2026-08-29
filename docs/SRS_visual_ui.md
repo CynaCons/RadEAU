@@ -411,9 +411,14 @@ ARP — Type Request / Reply, Name `who-has <ip>` / `<ip> is-at`; UDP and TCP �
 Name `<src ip>:<port> → <dst ip>:<port>`; ICMP — Name `type <t> code <c>`;
 IPv6 — Name `next header <n>`; IPv4 — Name `protocol <n>`; Other — Name
 `EtherType 0x….`; Malformed — Name `runt · <n> bytes`, Protocol cell in
-`error`. Service:Method shows the SOME/IP pair for SOME/IP and SD, ports for
-UDP/TCP, and `--` otherwise. The Payload column previews from the payload
-offset the core supplies (VLAN tags never shift it).
+`error`; DoIP — Name the payload-type name ("Vehicle Announcement",
+"Routing Activation Request", "Diagnostic Message", …), Type the UDS
+service name for diagnostic messages (`TesterPresent`, `ReadDataByIdentifier
+response`, `NRC` for 0x7F) and `--` otherwise. Service:Method shows the
+SOME/IP pair for SOME/IP and SD, ports for UDP/TCP, `0x<src> → 0x<tgt>`
+logical addresses for DoIP diagnostic messages, and `--` otherwise. The
+Payload column previews from the payload offset the core supplies (VLAN tags
+never shift it).
 
 Two modes share the table. **Sequential** appends chronologically and
 auto-follows the tail while scrolled to the bottom. **Fixed** collapses to one
@@ -424,9 +429,12 @@ address) instead — SD offers keep one row per emitting node, gPTP one row per
 (node, message type) so Sync and Announce show their own cadences, ARP one row
 per node, UDP and TCP one row per flow (src address:port → dst address:port),
 ICMP one per (src, dst), IPv6 / IPv4 / Other one per (source MAC, next
-header / protocol / EtherType), Malformed one per source MAC — never a single
-row that hides a class. Δ per key follows the same keying. **Fixed is the
-default mode**: the
+header / protocol / EtherType), Malformed one per source MAC, DoIP one row
+per (source address, payload type) for discovery and status messages and
+one per (source → target, UDS service with the response bit folded) for
+diagnostic messages so a request and its response share a live row and
+TesterPresent shows its cadence — never a single row that hides a class. Δ
+per key follows the same keying. **Fixed is the default mode**: the
 steady-state picture of the network is the first thing an operator needs, as
 with a CAN trace keyed by arbitration id. Mode, history window and column
 order live in the settings panel rather than on screen, being set once per

@@ -185,3 +185,64 @@ covering floats, signed widths at sign-extension boundaries, bit slices, byte
 straddles, and truncated payloads. UI decode uses plain-number bit math for
 ≤ 53-bit fields (~100× faster than bignum), arbitrary precision above; watch
 32-bit shifts in JS (mod-32 wrap).
+
+## 6. DoIP (ISO 13400-2) display (SP-011..014)
+
+DoIP joins SOME/IP, SD and gPTP as a first-class displayed protocol; UDS is
+shown as a service-id sub-layer. Transmission, tester roles and full UDS
+decode stay out of scope (the PRD v1 non-goal is narrowed to those).
+
+**Header (SP-011):** 8 bytes — protocol version (0x02 ISO 13400-2:2012, 0x03
+2019, 0xFF "default" from testers), inverse protocol version (must equal the
+bitwise complement of the version, else the message is a header-NACK case
+and dissects as `malformed: inverse version mismatch`), payload type (u16),
+payload length (u32, sanity-capped at 64 KiB — larger dissects the header and
+labels the body truncated). Big-endian throughout.
+
+**Payload types decoded:** 0x0000 generic header NACK (code); 0x0001 vehicle
+identification request; 0x0002 by EID (6 bytes); 0x0003 by VIN (17 bytes);
+0x0004 vehicle announcement / identification response (VIN 17, logical
+address u16, EID 6, GID 6, further-action u8, optional VIN/GID sync status
+u8); 0x0005 routing activation request (source address u16, activation type
+u8, reserved u32, optional OEM u32); 0x0006 routing activation response
+(tester address u16, entity address u16, response code u8, reserved u32,
+optional OEM u32); 0x0007 / 0x0008 alive check request / response (response
+carries source address u16); 0x4001 / 0x4002 entity status request /
+response (node type u8, max open sockets u8, open sockets u8, optional max
+data size u32); 0x4003 / 0x4004 diagnostic power mode request / response
+(mode u8); 0x8001 diagnostic message (source address u16, target address
+u16, UDS payload); 0x8002 / 0x8003 diagnostic message positive / negative
+acknowledgement (source u16, target u16, ack/nack code u8, optional echo of
+the previous message). Unknown types dissect the header and show the body as
+hex. Every code maps to `DOIP_TY_*` in `codes.rs`.
+
+**Classification (SP-012):** UDP port 13400 (source or destination) →
+`DoIP`; TCP port 13400 → `DoIP` when the segment payload starts with a valid
+DoIP header (version / inverse check, known payload type, plausible length),
+otherwise the frame stays `TCP` with its payload labelled "mid-stream" in
+the dissection. Boundary-aligned multi-message segments dissect every
+complete message in wire order; a trailing partial message is labelled
+"continues in next segment". No connection state is kept in this cut —
+bounded per-connection reassembly is a backlog item. Identity columns: `sv`
+= logical source address, `m` = logical target address (0 when the type has
+none), `se` = the UDS service id of a 0x8001 message (-1 otherwise), `po` =
+start of the DoIP payload.
+
+**UDS sub-layer (SP-013):** for 0x8001 the dissector adds a `UDS` layer with
+the service id and its name (0x10 DiagnosticSessionControl, 0x11 ECUReset,
+0x14 ClearDiagnosticInformation, 0x19 ReadDTCInformation, 0x22
+ReadDataByIdentifier, 0x27 SecurityAccess, 0x28 CommunicationControl, 0x2E
+WriteDataByIdentifier, 0x31 RoutineControl, 0x34 RequestDownload, 0x36
+TransferData, 0x37 RequestTransferExit, 0x3E TesterPresent, 0x85
+ControlDTCSetting; SID + 0x40 = positive response to the named service; 0x7F
+= negative response with the rejected SID and the NRC named), the
+sub-function byte where the service has one, the DID for 0x22 / 0x2E, and
+the remaining bytes as hex.
+
+**Simulator cast (SP-014):** the sensor-fusion scenario gains a diagnostic
+gateway entity on the fusion ECU and a tester node (10.42.0.99, logical
+address 0x0E80): vehicle announcement ×3 at start and every 30 s, a routing
+activation request / response at 2 s, TesterPresent every 2 s with its
+positive response, ReadDataByIdentifier 0xF190 (VIN) every 10 s with its
+response — all over real TCP-shaped frames on the virtual switch (UDP for
+discovery) so the trace shows a realistic diagnostic session.

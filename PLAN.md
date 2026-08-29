@@ -312,7 +312,7 @@ release.
 
 ### v0.1.9 — DoIP on the wire
 **Goal:** DoIP (ISO 13400-2) joins SOME/IP/SD/gPTP as a first-class displayed protocol: UDP-13400 discovery decoded in full, TCP-13400 sessions dissected boundary-aligned with honest mid-stream labels and a UDS SID sub-layer. Specced in SRS_protocols with the PRD v1 non-goal amended deliberately; bounded per the house discipline (full TCP reassembly stays in backlog).
-- [ ] Spec first: DoIP section in docs/SRS_protocols.md (8-byte header with version/inverse validation, payload-type table, discovery payload layouts, degraded TCP dissection rules, SP- IDs); PRD non-goals list amended deliberately to admit DoIP display
+- [ ] Spec first: DoIP section in docs/SRS_protocols.md §6 (header validation, payload-type table, discovery/diagnostic layouts, boundary-aligned TCP rules, UDS sub-layer, simulator cast; SP-011..014); PRD non-goal narrowed to transmission/tester roles/full UDS; DOIP_TY_* code table pinned in codes.rs + wireCodes.ts [Claude]
 - [ ] TCP header codec in radeau-proto (ports, seq/ack, data-offset, flags, window; options length-skipped; bounded, missing-not-partial like udp.rs) + TCP layer in dissect for non-13400 traffic
 - [ ] DoIP codec in radeau-proto: header + payload decoders for 0x0000 NACK, 0x0001-0x0004 vehicle identification/announcement (VIN, logical address, EID, GID), 0x0005/0x0006 routing activation, 0x0007/0x0008 alive check, 0x4001-0x4004 entity status/power mode, 0x8001-0x8003 diagnostic message + acks; payload-length sanity cap
 - [ ] Classification + dissection: UDP/TCP port 13400 → PROTO_DOIP with payload-type identity in the batch columns; DoIP layer in the dissector; payload-type name table driving row names ('Vehicle Announcement', 'Routing Activation', …)

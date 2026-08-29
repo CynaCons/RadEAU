@@ -80,7 +80,9 @@ against PTP-stamped sensor data, scripting test sequences, and simulating nodes.
 - SOME/IP-TP segmentation, SOME/IP over TCP, multicast eventgroups (unicast
   eventgroups only in v1).
 - gPTP BMCA — v1 uses a statically configured grandmaster.
-- DoIP / UDS, SecOC / MACsec, TSN traffic shaping beyond 802.1AS time sync.
+- DoIP transmission / tester roles and full UDS decode (v1 *displays* DoIP
+  messages and the UDS service-id sub-layer — SRS_protocols §6), SecOC /
+  MACsec, TSN traffic shaping beyond 802.1AS time sync.
 - IPv6 (v1 is IPv4-only).
 - Multi-user collaboration or cloud storage.
 
