@@ -46,6 +46,9 @@ function makeStats(partial: Partial<CaptureStats> = {}): CaptureStats {
     malformed: 3,
     kernelDropped: 0,
     byClass,
+    recordingFrames: 0,
+    recordingBytes: 0,
+    recordingDropped: 0,
     ...partial,
   };
 }

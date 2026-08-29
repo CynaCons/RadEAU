@@ -16,6 +16,11 @@ import {
   onMaximizedChange,
   toggleMaximizeWindow,
 } from "../runtime/desktop";
+import {
+  recordIndicatorColor,
+  recordIndicatorTooltip,
+} from "../runtime/recorderDisplay";
+import { recordingStore } from "../runtime/recordingStore";
 import { sessionStore } from "../runtime/sessionStore";
 import radeauMark from "../assets/radeau-mark.png";
 
@@ -34,12 +39,19 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
   const [sessionTitle, setSessionTitle] = useState("");
   const [maximized, setMaximized] = useState(false);
   const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const recording = useSyncExternalStore(recordingStore.subscribe, recordingStore.getSnapshot);
   const running = session.running;
+  // Recording a replay of a pcap file is pointless — keep the switch off.
+  const recordDisabled = session.sourceKind === "pcap";
+  const indicatorColor = recordIndicatorColor(recording);
+  const indicatorTooltip = recordIndicatorTooltip(recording);
+  const recordSwitchTooltip = recordDisabled
+    ? "Recording is disabled while a pcap file is the capture source"
+    : recording.armed
+      ? "Disarm continuous pcap recording"
+      : "Arm continuous pcap recording";
 
   useEffect(() => onMaximizedChange(setMaximized), []);
-
-  // Recording core arrives v0.6 — indicator stays idle (never error/warning).
-  const indicatorColor = "var(--text-secondary)";
 
   const windowButtonSx = {
     width: 24,
@@ -117,20 +129,30 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
         />
       </Box>
 
-      <Tooltip title="Recording idle">
+      <Tooltip title={indicatorTooltip}>
         <RadioButtonCheckedIcon
           data-testid="appbar-record-indicator"
+          data-color-token={
+            recording.active && recording.frames > 0
+              ? "error"
+              : recording.armed
+                ? "warning"
+                : "text-secondary"
+          }
           sx={{ fontSize: 16, color: indicatorColor, mx: 1 }}
         />
       </Tooltip>
 
-      <Tooltip title="Recording arrives with v0.6">
+      <Tooltip title={recordSwitchTooltip}>
         <span>
           <Switch
             {...noDrag}
             size="small"
-            checked={false}
-            disabled
+            checked={recording.armed}
+            disabled={recordDisabled}
+            onChange={(_, checked) => {
+              void recordingStore.arm(checked);
+            }}
             data-testid="appbar-record-switch"
             inputProps={{ "aria-label": "Arm recording" }}
             sx={{

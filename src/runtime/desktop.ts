@@ -225,6 +225,9 @@ class MirrorCapture {
       malformed: 0,
       kernelDropped: 0,
       byClass: this.byClass.slice(),
+      recordingFrames: 0,
+      recordingBytes: 0,
+      recordingDropped: 0,
     };
     this.statsSeq += 1;
     for (const cb of this.statsSubs) cb(stats);
@@ -681,6 +684,154 @@ export async function pickSavePath(defaultName: string): Promise<string | null> 
     const msg =
       err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
     return Promise.reject(new Error(msg || "save dialog unavailable"));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Continuous pcap recording (CP-014..016). Desktop: recording_* commands +
+// recording:state. Browser: in-memory arm toggle; empty list; dir "browser".
+// ---------------------------------------------------------------------------
+
+const RECORDING_STATE_EVENT = "recording:state";
+
+/** Shape of `recording_state` / `recording:state` (camelCase). */
+export interface RecordingState {
+  armed: boolean;
+  active: boolean;
+  path: string | null;
+  frames: number;
+  bytes: number;
+  dropped: number;
+  error: string | null;
+  dir: string;
+  startedMs: number | null;
+}
+
+/** One row from `recording_list` (newest first). */
+export interface RecordingInfo {
+  path: string;
+  bytes: number;
+  frames: number | null;
+  startedMs: number;
+}
+
+function idleRecordingState(dir = "browser"): RecordingState {
+  return {
+    armed: false,
+    active: false,
+    path: null,
+    frames: 0,
+    bytes: 0,
+    dropped: 0,
+    error: null,
+    dir,
+    startedMs: null,
+  };
+}
+
+/** Browser-mode in-memory recording mirror (arm toggles only). */
+class BrowserRecording {
+  private state: RecordingState = idleRecordingState();
+  private subscribers = new Set<(s: RecordingState) => void>();
+
+  snapshot(): RecordingState {
+    return { ...this.state };
+  }
+
+  arm(armed: boolean): RecordingState {
+    this.state = {
+      ...this.state,
+      armed,
+      // Browser never opens a file; keep active/path idle.
+      active: false,
+      path: null,
+      frames: 0,
+      bytes: 0,
+      dropped: 0,
+      error: null,
+      startedMs: null,
+    };
+    this.emit();
+    return this.snapshot();
+  }
+
+  setDir(path: string): string {
+    this.state = { ...this.state, dir: path };
+    this.emit();
+    return this.state.dir;
+  }
+
+  subscribe(cb: (s: RecordingState) => void): () => void {
+    this.subscribers.add(cb);
+    return () => this.subscribers.delete(cb);
+  }
+
+  private emit(): void {
+    const snap = this.snapshot();
+    for (const cb of this.subscribers) cb(snap);
+  }
+}
+
+const browserRecording = new BrowserRecording();
+
+export function recordingState(): Promise<RecordingState> {
+  if (!isDesktop()) {
+    return Promise.resolve(browserRecording.snapshot());
+  }
+  return invoke<RecordingState>("recording_state");
+}
+
+export function recordingArm(armed: boolean): Promise<RecordingState> {
+  if (!isDesktop()) {
+    return Promise.resolve(browserRecording.arm(armed));
+  }
+  return invoke<RecordingState>("recording_arm", { armed });
+}
+
+export function recordingDirGet(): Promise<string> {
+  if (!isDesktop()) {
+    return Promise.resolve(browserRecording.snapshot().dir);
+  }
+  return invoke<string>("recording_dir_get");
+}
+
+export function recordingDirSet(path: string): Promise<string> {
+  if (!isDesktop()) {
+    return Promise.resolve(browserRecording.setDir(path));
+  }
+  return invoke<string>("recording_dir_set", { path });
+}
+
+export function recordingList(): Promise<RecordingInfo[]> {
+  if (!isDesktop()) {
+    return Promise.resolve([]);
+  }
+  return invoke<RecordingInfo[]>("recording_list");
+}
+
+/** Fires on every recording transition and at 1 Hz while active. */
+export function onRecordingState(cb: (state: RecordingState) => void): () => void {
+  if (!isDesktop()) return browserRecording.subscribe(cb);
+  return listenEvent<RecordingState>(RECORDING_STATE_EVENT, cb);
+}
+
+/**
+ * Native directory picker. Returns null on cancel; rejects when the dialog
+ * cannot run (browser / plugin unavailable).
+ */
+export async function pickDirectory(): Promise<string | null> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected === "string") return selected;
+    return null;
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+    return Promise.reject(new Error(msg || "directory dialog unavailable"));
   }
 }
 

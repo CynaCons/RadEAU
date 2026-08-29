@@ -68,6 +68,12 @@ export interface CaptureStats {
   malformed: number;
   kernelDropped: number;
   byClass: number[];
+  /** Frames appended to the active pcap recording (CP-016). */
+  recordingFrames: number;
+  /** Bytes written to the active pcap recording (CP-016). */
+  recordingBytes: number;
+  /** Frames dropped by the recording writer queue (CP-014). */
+  recordingDropped: number;
 }
 
 /** Sum of loss counters that drive the Trace `Dropped · n` chip. */
@@ -296,12 +302,13 @@ export function captureButtonLabel(capturing: boolean, kind: SourceKind): string
   }
 }
 
-/** Dropped-chip tooltip: accumulator + gap + kernel (SP-010 / CP-012). */
+/** Dropped-chip tooltip: accumulator + gap + kernel + recording (SP-010 / CP-012 / CP-016). */
 export function droppedBreakdownTooltip(stats: CaptureStats): string {
   return [
     `Accumulator ${stats.accumulatorDropped.toLocaleString("en-US")}`,
     `Gap ${stats.gapDropped.toLocaleString("en-US")}`,
     `Kernel ${stats.kernelDropped.toLocaleString("en-US")}`,
+    `Recording ${stats.recordingDropped.toLocaleString("en-US")}`,
   ].join(" · ");
 }
 

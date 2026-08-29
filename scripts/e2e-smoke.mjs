@@ -24,7 +24,7 @@
  * Run: npm run test:e2e
  */
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -202,6 +202,86 @@ function setSimAddrProbe(addr) {
     return true;
   })()`;
 }
+
+/**
+ * Type the recordings directory into recorder-dir and commit via Enter
+ * (SRS: commit on blur/Enter). Also invokes recording_dir_set through the
+ * Tauri bridge so the core path is verified even if React controlled-input
+ * timing swallows the synthetic event.
+ */
+function setRecorderDirProbe(path) {
+  return `(async () => {
+    const root = document.querySelector('[data-testid="recorder-dir"]');
+    const input = root ? root.querySelector("input") : null;
+    if (!input) return { ok: false, error: "missing input" };
+    input.focus();
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, "value").set;
+    setter.call(input, ${JSON.stringify(path)});
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Enter", bubbles: true, cancelable: true,
+    }));
+    input.blur();
+    const invoke = window.__TAURI_INTERNALS__?.invoke;
+    if (!invoke) return { ok: false, error: "no __TAURI_INTERNALS__.invoke" };
+    try {
+      const dir = await invoke("recording_dir_set", { path: ${JSON.stringify(path)} });
+      const got = await invoke("recording_dir_get");
+      return { ok: true, dir, got, field: input.value };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  })()`;
+}
+
+const RECORD_INDICATOR_PROBE = `(() => {
+  const el = document.querySelector('[data-testid="appbar-record-indicator"]');
+  if (!el) return null;
+  return { token: el.getAttribute("data-color-token") };
+})()`;
+
+const ARM_RECORD_SWITCH_PROBE = `(() => {
+  const root = document.querySelector('[data-testid="appbar-record-switch"]');
+  const input = root ? root.querySelector('input[type="checkbox"]') : null;
+  if (!input) return { ok: false, reason: "missing" };
+  if (input.disabled) return { ok: false, reason: "disabled" };
+  if (!input.checked) input.click();
+  return { ok: true, checked: true };
+})()`;
+
+const DISARM_RECORD_SWITCH_PROBE = `(() => {
+  const root = document.querySelector('[data-testid="appbar-record-switch"]');
+  const input = root ? root.querySelector('input[type="checkbox"]') : null;
+  if (!input) return { ok: false };
+  if (input.checked) input.click();
+  return { ok: true, checked: false };
+})()`;
+
+const TRACE_RECORDING_CHIP_PROBE = `(() => {
+  const chip = document.querySelector('[data-testid="trace-recording-chip"]');
+  if (!chip) return null;
+  return { label: (chip.textContent || "").trim() };
+})()`;
+
+const RECORDER_LIST_PROBE = `(() => {
+  const list = document.querySelector('[data-testid="recorder-list"]');
+  const empty = document.querySelector('[data-testid="recorder-empty"]');
+  const items = [...document.querySelectorAll('[data-testid^="recorder-item-"]')].filter(
+    (el) => /^recorder-item-\\d+$/.test(el.getAttribute("data-testid") || ""),
+  );
+  const first = items[0];
+  const text = first ? (first.textContent || "") : "";
+  const bytesMatch = text.match(/([\\d,]+)\\s*(B|KB|MB)/i);
+  return {
+    listPresent: !!list,
+    emptyPresent: !!empty,
+    count: items.length,
+    text: text.trim().slice(0, 200),
+    bytesLabel: bytesMatch ? bytesMatch[0] : null,
+  };
+})()`;
 
 const DIAG_PROBE = `(() => {
   const field = document.querySelector('[data-testid="settings-diag-report-field"]');
@@ -1385,12 +1465,157 @@ async function main() {
       v016.live = false;
     }
 
+    // Phase (f) — continuous pcap recording (CP-014..016). Isolated; re-selects
+    // the simulator so the file gets real frames while armed.
+    let recordingPass = null;
+    const recordingDir = mkdtempSync(join(tmpdir(), "radeau-e2e-rec-"));
+    try {
+      const runState = await session.eval(APPBAR_RUN_LABEL_PROBE);
+      if (runState && /stop/i.test(runState.label || "")) {
+        if (!(await session.eval(clickProbe("appbar-run-btn"))))
+          throw new Error("could not Stop before recording phase");
+        await sleep(500);
+      }
+
+      await waitFor(
+        () => session.eval(clickProbe("nav-settings")),
+        10_000,
+        "nav-settings for recording",
+      );
+      if (!(await session.eval(OPEN_SETTINGS_SOURCE_SELECT_PROBE)))
+        throw new Error("could not open source select for recording");
+      await sleep(200);
+      if (!(await session.eval(clickProbe("settings-source-option-sim"))))
+        throw new Error("could not re-select simulator for recording");
+      await waitFor(
+        () => session.eval(setSimAddrProbe(`127.0.0.1:${SIM_PORT}`)),
+        5_000,
+        "sim address for recording",
+      );
+
+      await waitFor(
+        () => session.eval(clickProbe("nav-recorder")),
+        10_000,
+        "nav-recorder",
+      );
+      await waitFor(async () => {
+        const ok = await session.eval(
+          `!!document.querySelector('[data-testid="recorder-dir"]')`,
+        );
+        return ok ? true : null;
+      }, 10_000, "recorder-dir field");
+
+      const dirSet = await session.eval(setRecorderDirProbe(recordingDir));
+      if (!dirSet || !dirSet.ok) {
+        throw new Error(`could not set recorder-dir: ${JSON.stringify(dirSet)}`);
+      }
+      const normPath = (s) => String(s).replace(/\\/g, "/").toLowerCase();
+      if (!normPath(dirSet.got).includes(normPath(recordingDir))) {
+        throw new Error(
+          `recording_dir_get mismatch: got=${dirSet.got} want=${recordingDir}`,
+        );
+      }
+      console.log("recording dir:", JSON.stringify(dirSet));
+      await sleep(300);
+
+      const armed = await session.eval(ARM_RECORD_SWITCH_PROBE);
+      if (!armed || !armed.ok)
+        throw new Error(`could not arm appbar-record-switch: ${JSON.stringify(armed)}`);
+      const armedInd = await waitFor(async () => {
+        const s = await session.eval(RECORD_INDICATOR_PROBE);
+        return s && s.token && String(s.token).includes("warning") ? s : null;
+      }, 5_000, "record indicator warning while armed");
+      console.log("recording armed indicator:", JSON.stringify(armedInd));
+
+      await waitFor(
+        () => session.eval(clickProbe("nav-trace")),
+        10_000,
+        "nav-trace before recording start",
+      );
+      if (!(await session.eval(clickProbe("appbar-run-btn"))))
+        throw new Error("could not Start recording session");
+
+      const startedAt = Date.now();
+      const liveRec = await waitFor(async () => {
+        const chip = await session.eval(TRACE_RECORDING_CHIP_PROBE);
+        const ind = await session.eval(RECORD_INDICATOR_PROBE);
+        return chip && ind && String(ind.token).includes("error")
+          ? { chip, ind }
+          : null;
+      }, 5_000, "trace-recording-chip + error indicator");
+      console.log("recording live:", JSON.stringify(liveRec));
+
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < 5_000) await sleep(5_000 - elapsed);
+
+      if (!(await session.eval(clickProbe("appbar-run-btn"))))
+        throw new Error("could not Stop recording session");
+      await sleep(800);
+
+      await waitFor(
+        () => session.eval(clickProbe("nav-recorder")),
+        10_000,
+        "nav-recorder after stop",
+      );
+      const list = await waitFor(async () => {
+        const s = await session.eval(RECORDER_LIST_PROBE);
+        return s && s.listPresent && s.count > 0 ? s : null;
+      }, 10_000, "recorder-list with at least one file");
+      console.log("recording list:", JSON.stringify(list));
+
+      const files = readdirSync(recordingDir).filter(
+        (n) => n.startsWith("radeau-") && n.endsWith(".pcap"),
+      );
+      if (files.length === 0)
+        throw new Error(`no radeau-*.pcap in ${recordingDir}`);
+      const pcapPath = join(recordingDir, files[0]);
+      const buf = readFileSync(pcapPath);
+      if (buf.length < 4)
+        throw new Error(`pcap too small: ${buf.length} bytes`);
+      // ns magic a1b23c4d little-endian → 4d 3c b2 a1
+      if (buf[0] !== 0x4d || buf[1] !== 0x3c || buf[2] !== 0xb2 || buf[3] !== 0xa1) {
+        throw new Error(
+          `pcap magic mismatch: ${[...buf.subarray(0, 4)].map((b) => b.toString(16)).join(" ")}`,
+        );
+      }
+      if (buf.length <= 24) {
+        throw new Error(
+          `pcap has header only (${buf.length} bytes) — expected recorded frames`,
+        );
+      }
+
+      const framesMatch = (list.text || "").match(/([\d,]+)\s*frames/i);
+      const frames = framesMatch
+        ? Number(framesMatch[1].replace(/,/g, ""))
+        : null;
+      recordingPass = { bytes: buf.length, frames, file: files[0] };
+      console.log("recording: PASS", JSON.stringify(recordingPass));
+
+      await session.eval(DISARM_RECORD_SWITCH_PROBE);
+      await sleep(200);
+    } catch (err) {
+      fail(`recording phase: ${err?.message ?? err}`);
+      recordingPass = false;
+      try {
+        await session.eval(DISARM_RECORD_SWITCH_PROBE);
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      try {
+        rmSync(recordingDir, { recursive: true, force: true });
+      } catch {
+        /* temp cleanup best-effort */
+      }
+    }
+
     console.log(
       `PASS — devgen ${trace.rowCount} rows (Fixed→Sequential); simulator link ${sim.rowCount} rows, ` +
         `degraded chip absent, protocols [${[...protocolsRendered].join(", ")}], ` +
         `LidarClusters + Dir Rx + VLAN 802.1Q; Network Connection "${network.sourceKind}" / "${network.linkLabel}" ` +
         `received=${network.receivedN}; catalog names + clean dissections + decoded signals; ` +
-        `filters Protocol/Dir/Name; v0.1.9=${JSON.stringify(v019)}; v0.1.6=${JSON.stringify(v016)}`,
+        `filters Protocol/Dir/Name; v0.1.9=${JSON.stringify(v019)}; v0.1.6=${JSON.stringify(v016)}; ` +
+        `recording=${JSON.stringify(recordingPass)}`,
     );
   } catch (err) {
     failures += 1;

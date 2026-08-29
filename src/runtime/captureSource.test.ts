@@ -44,6 +44,9 @@ function stats(partial: Partial<CaptureStats> = {}): CaptureStats {
     malformed: 0,
     kernelDropped: 0,
     byClass: emptyByClass(),
+    recordingFrames: 0,
+    recordingBytes: 0,
+    recordingDropped: 0,
     ...partial,
   };
 }
@@ -244,9 +247,14 @@ describe("captureSource picker state", () => {
     ).toBe(15);
     expect(
       droppedBreakdownTooltip(
-        stats({ accumulatorDropped: 3, gapDropped: 5, kernelDropped: 7 }),
+        stats({
+          accumulatorDropped: 3,
+          gapDropped: 5,
+          kernelDropped: 7,
+          recordingDropped: 2,
+        }),
       ),
-    ).toBe("Accumulator 3 · Gap 5 · Kernel 7");
+    ).toBe("Accumulator 3 · Gap 5 · Kernel 7 · Recording 2");
     expect(emptyByClass()).toHaveLength(PROTO_CLASS_COUNT);
   });
 });

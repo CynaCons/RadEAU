@@ -4,7 +4,7 @@
  * honest browser path.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   appInfo,
@@ -17,9 +17,16 @@ import {
   isDesktop,
   listInterfaces,
   logPath,
+  onRecordingState,
   pickArxmlFile,
+  pickDirectory,
   pickPcapFile,
   pickSavePath,
+  recordingArm,
+  recordingDirGet,
+  recordingDirSet,
+  recordingList,
+  recordingState,
 } from "./desktop";
 
 describe("desktop browser fallbacks (v0.1.6)", () => {
@@ -84,3 +91,52 @@ describe("desktop browser fallbacks (v0.1.8 catalog)", () => {
     await expect(pickArxmlFile()).rejects.toThrow(/desktop app only/i);
   });
 });
+
+describe("desktop browser fallbacks (recording CP-014..016)", () => {
+  beforeEach(async () => {
+    await recordingArm(false);
+    await recordingDirSet("browser");
+  });
+
+  it("recordingState starts idle with dir browser", async () => {
+    const s = await recordingState();
+    expect(s.armed).toBe(false);
+    expect(s.active).toBe(false);
+    expect(s.path).toBeNull();
+    expect(s.dir).toBe("browser");
+    expect(s.frames).toBe(0);
+    expect(s.error).toBeNull();
+  });
+
+  it("recordingArm toggles armed without opening a file", async () => {
+    const armed = await recordingArm(true);
+    expect(armed.armed).toBe(true);
+    expect(armed.active).toBe(false);
+    expect(armed.path).toBeNull();
+
+    const idle = await recordingArm(false);
+    expect(idle.armed).toBe(false);
+  });
+
+  it("recordingDirSet / recordingDirGet round-trip in memory", async () => {
+    expect(await recordingDirSet("/tmp/rec")).toBe("/tmp/rec");
+    expect(await recordingDirGet()).toBe("/tmp/rec");
+  });
+
+  it("recordingList is empty and pickDirectory rejects", async () => {
+    expect(await recordingList()).toEqual([]);
+    await expect(pickDirectory()).rejects.toThrow(/desktop app only/i);
+  });
+
+  it("onRecordingState delivers arm transitions", async () => {
+    const seen: boolean[] = [];
+    const unsub = onRecordingState((s) => {
+      seen.push(s.armed);
+    });
+    await recordingArm(true);
+    await recordingArm(false);
+    unsub();
+    expect(seen).toEqual([true, false]);
+  });
+});
+

@@ -61,6 +61,8 @@ import {
   CATALOG_NO_DIAGNOSTICS,
 } from "../runtime/catalogDisplay";
 import { catalogStore } from "../runtime/catalogStore";
+import { recordingChipLabel } from "../runtime/recorderDisplay";
+import { recordingStore } from "../runtime/recordingStore";
 import { runExportRing } from "../runtime/ringExport";
 import { sessionStore } from "../runtime/sessionStore";
 import {
@@ -438,6 +440,7 @@ function rowContent(
 export function TraceView() {
   useViewLifecycle("trace", {});
   const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const recording = useSyncExternalStore(recordingStore.subscribe, recordingStore.getSnapshot);
   const catalog = useSyncExternalStore(catalogStore.subscribe, catalogStore.getSnapshot);
   const capturing = session.running;
   const sourceKind = session.sourceKind;
@@ -605,8 +608,14 @@ export function TraceView() {
   const dropped = stats && capturing ? lossTotal(stats) : 0;
   const showDroppedChip = dropped > 0;
   const droppedTooltip = stats ? droppedBreakdownTooltip(stats) : "";
+  const showRecordingChip = recording.active;
   const showChipStack =
-    paused || showLinkChip || showDroppedChip || filterActive || exportResult !== null;
+    paused ||
+    showLinkChip ||
+    showDroppedChip ||
+    showRecordingChip ||
+    filterActive ||
+    exportResult !== null;
 
   const onExport = (): void => {
     if (exportBusy || snap.rows.length === 0) return;
@@ -1064,6 +1073,23 @@ export function TraceView() {
                       fontSize: 12,
                       color: "var(--warning)",
                       borderColor: "var(--warning)",
+                      backgroundColor: "var(--surface-raised-2)",
+                    }}
+                  />
+                </Tooltip>
+              ) : null}
+              {showRecordingChip ? (
+                <Tooltip title={recording.path ?? "Recording"}>
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={recordingChipLabel(recording.frames)}
+                    data-testid="trace-recording-chip"
+                    sx={{
+                      height: 22,
+                      fontSize: 12,
+                      color: "var(--error)",
+                      borderColor: "var(--error)",
                       backgroundColor: "var(--surface-raised-2)",
                     }}
                   />

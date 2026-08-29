@@ -197,6 +197,9 @@ describe("SessionStore", () => {
       malformed: 0,
       kernelDropped: 0,
       byClass: new Array(12).fill(0),
+      recordingFrames: 0,
+      recordingBytes: 0,
+      recordingDropped: 0,
     });
     expect(store.getSnapshot().stats?.received).toBe(10);
 
@@ -306,6 +309,9 @@ describe("SessionStore", () => {
       malformed: 0,
       kernelDropped: 0,
       byClass: new Array(12).fill(0),
+      recordingFrames: 0,
+      recordingBytes: 0,
+      recordingDropped: 0,
     });
     expect(store.getSnapshot().running).toBe(true);
 
