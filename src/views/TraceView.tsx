@@ -31,6 +31,7 @@ import { TableVirtuoso } from "react-virtuoso";
 import type { TableComponents } from "react-virtuoso";
 import { EmptyState } from "../components/EmptyState";
 import { TraceDetailPanel } from "../components/TraceDetailPanel";
+import { TraceFilterPopover } from "../components/TraceFilterPopover";
 import { useViewLifecycle } from "../shell/viewLifecycle";
 import {
   captureButtonLabel,
@@ -56,6 +57,16 @@ import {
   type HistoryWindow,
   type TraceDisplayMode,
 } from "../runtime/traceDisplay";
+import {
+  distinctValues,
+  EMPTY_FILTER,
+  isColumnFilterActive,
+  isFilterActive,
+  type TraceFilter,
+  type TraceFilterColumn,
+  type TraceFilterDir,
+  type TraceFilterOption,
+} from "../runtime/traceFilter";
 import { traceStore } from "../runtime/traceStore";
 import type { TraceFrame } from "../runtime/frameModel";
 
@@ -68,28 +79,48 @@ interface ColumnDef {
   label: string;
   width: number;
   align: "left" | "right" | "center";
-  filter?: { testId: string; label: string };
+  filter?: { testId: string; label: string; column: TraceFilterColumn };
 }
 
 const BASE_COLUMNS: ColumnDef[] = [
   { id: "expand", label: "", width: 40, align: "center" },
   { id: "time", label: "Time", width: 120, align: "right" },
-  { id: "dir", label: "Dir", width: 70, align: "left" },
+  {
+    id: "dir",
+    label: "Dir",
+    width: 70,
+    align: "left",
+    filter: { testId: "trace-filter-btn-dir", label: "Filter direction", column: "dir" },
+  },
   { id: "source", label: "Source", width: 90, align: "left" },
-  { id: "protocol", label: "Protocol", width: 90, align: "left" },
+  {
+    id: "protocol",
+    label: "Protocol",
+    width: 90,
+    align: "left",
+    filter: {
+      testId: "trace-filter-btn-protocol",
+      label: "Filter protocol",
+      column: "protocol",
+    },
+  },
   {
     id: "svcmethod",
     label: "Service:Method",
     width: 130,
     align: "right",
-    filter: { testId: "trace-filter-service-btn", label: "Filter services" },
+    filter: {
+      testId: "trace-filter-btn-service",
+      label: "Filter services",
+      column: "service",
+    },
   },
   {
     id: "name",
     label: "Name",
     width: 200,
     align: "left",
-    filter: { testId: "trace-filter-name-btn", label: "Filter names" },
+    filter: { testId: "trace-filter-btn-name", label: "Filter names", column: "name" },
   },
   { id: "type", label: "Type", width: 70, align: "left" },
   { id: "session", label: "Session", width: 70, align: "right" },
@@ -223,7 +254,11 @@ function makeTableComponents(columns: ColumnDef[]): TableComponents<TraceFrame, 
   };
 }
 
-function renderHeader(columns: ColumnDef[]): ReactNode {
+function renderHeader(
+  columns: ColumnDef[],
+  filter: TraceFilter,
+  onOpenFilter: (column: TraceFilterColumn, el: HTMLElement) => void,
+): ReactNode {
   return (
     <tr>
       {columns.map((c) => (
@@ -245,8 +280,15 @@ function renderHeader(columns: ColumnDef[]): ReactNode {
                 <IconButton
                   size="small"
                   aria-label={c.filter.label}
+                  aria-pressed={isColumnFilterActive(filter, c.filter.column)}
                   data-testid={c.filter.testId}
-                  sx={{ p: "2px", color: "text.secondary" }}
+                  onClick={(e) => onOpenFilter(c.filter!.column, e.currentTarget)}
+                  sx={{
+                    p: "2px",
+                    color: isColumnFilterActive(filter, c.filter.column)
+                      ? "var(--accent-primary)"
+                      : "text.secondary",
+                  }}
                 >
                   <FilterListIcon sx={{ fontSize: 14 }} />
                 </IconButton>
@@ -259,6 +301,25 @@ function renderHeader(columns: ColumnDef[]): ReactNode {
       ))}
     </tr>
   );
+}
+
+/** Committed popover draft keys for one column (string form). */
+function committedKeys(
+  filter: TraceFilter,
+  column: TraceFilterColumn,
+): ReadonlySet<string> | null {
+  switch (column) {
+    case "service":
+      return filter.services;
+    case "name":
+      return filter.names;
+    case "protocol":
+      return filter.protocols === null
+        ? null
+        : new Set(Array.from(filter.protocols, String));
+    case "dir":
+      return filter.dirs;
+  }
 }
 
 function rowContent(
@@ -360,14 +421,19 @@ export function TraceView() {
   const [mode, setMode] = useState<TraceDisplayMode>(DEFAULT_TRACE_MODE);
   const [historyWindow, setHistoryWindow] = useState<HistoryWindow>(DEFAULT_HISTORY_WINDOW);
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
+  const [filter, setFilter] = useState<TraceFilter>(EMPTY_FILTER);
   const [settingsAnchor, setSettingsAnchor] = useState<HTMLElement | null>(null);
   const [expansion, setExpansion] = useState<TraceExpansion | null>(null);
+  const [filterAnchor, setFilterAnchor] = useState<HTMLElement | null>(null);
+  const [filterColumn, setFilterColumn] = useState<TraceFilterColumn | null>(null);
+  const [filterOptions, setFilterOptions] = useState<readonly TraceFilterOption[]>([]);
 
   const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
   const displayRows = useMemo(
-    () => projectDisplayRows(snap.rows, mode, pinned, historyWindow),
-    [snap.rows, mode, pinned, historyWindow],
+    () => projectDisplayRows(snap.rows, mode, pinned, historyWindow, filter),
+    [snap.rows, mode, pinned, historyWindow, filter],
   );
+  const filterActive = isFilterActive(filter);
   const columns = useMemo(() => columnsForMode(mode), [mode]);
   const tableComponents = useMemo(() => makeTableComponents(columns), [columns]);
   const tableContext = useMemo<TraceTableContext>(
@@ -427,11 +493,50 @@ export function TraceView() {
     setSettingsAnchor(e.currentTarget);
   };
 
+  const openFilter = (column: TraceFilterColumn, el: HTMLElement): void => {
+    // Option list from the ring snapshot at open — not live-updating under the popover.
+    setFilterOptions(distinctValues(snap.rows, column));
+    setFilterColumn(column);
+    setFilterAnchor(el);
+  };
+
+  const closeFilter = (): void => {
+    setFilterAnchor(null);
+    setFilterColumn(null);
+  };
+
+  const applyColumnFilter = (next: ReadonlySet<string> | null): void => {
+    if (filterColumn === null) return;
+    const column = filterColumn;
+    setFilter((prev) => {
+      switch (column) {
+        case "service":
+          return { ...prev, services: next };
+        case "name":
+          return { ...prev, names: next };
+        case "protocol": {
+          const protocols =
+            next === null ? null : new Set(Array.from(next, (k) => Number(k)));
+          return { ...prev, protocols };
+        }
+        case "dir": {
+          const dirs =
+            next === null ? null : (new Set(next) as Set<TraceFilterDir>);
+          return { ...prev, dirs };
+        }
+      }
+    });
+    // Applying a filter clears expansion the way a mode change does (§5.2).
+    setExpansion(null);
+    closeFilter();
+  };
+
   const captureLabel = captureButtonLabel(capturing, sourceKind);
   const pauseLabel = paused ? "Resume" : "Pause";
   const catalogActionLabel = catalogStore.railActionLabel();
   const catalogTooltip = catalogStore.railTooltip();
-  const clearLabel = displayRows.length > 0 ? "Clear trace" : "Trace is already empty";
+  const clearLabel =
+    snap.rows.length > 0 ? "Clear trace" : "Trace is already empty";
   const showLinkChip = showDegradedLinkChip(capturing, sourceKind, linkStatus?.state);
   const chipColor = linkStatus ? linkChipColorVar(linkStatus.state) : "var(--text-secondary)";
   const stats = session.stats;
@@ -444,7 +549,7 @@ export function TraceView() {
         `Kernel ${stats.kernelDropped.toLocaleString("en-US")}`,
       ].join(" · ")
     : "";
-  const showChipStack = paused || showLinkChip || showDroppedChip;
+  const showChipStack = paused || showLinkChip || showDroppedChip || filterActive;
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
@@ -609,6 +714,8 @@ export function TraceView() {
                 aria-label={clearLabel}
                 disabled={snap.rows.length === 0}
                 onClick={() => {
+                  // Clear keeps the session-scoped filter (like pins surviving
+                  // filter round-trips — filter itself is not cleared here).
                   traceStore.clear();
                   setPinned(new Set());
                   setExpansion(null);
@@ -650,13 +757,28 @@ export function TraceView() {
               }}
             />
           ) : null}
-          {/* Top-right status chips: Paused + Dropped + degraded link (§4.3 / §5.2). */}
+          {/* Top-right status chips: Filtered + Paused + Dropped + degraded link (§4.3 / §5.2). */}
           {showChipStack ? (
             <Stack
               spacing={1}
               alignItems="flex-end"
               sx={{ position: "absolute", top: 10, right: 20, zIndex: 3 }}
             >
+              {filterActive ? (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={`Filtered · ${displayRows.length.toLocaleString("en-US")} / ${snap.rows.length.toLocaleString("en-US")}`}
+                  data-testid="trace-filtered-chip"
+                  sx={{
+                    height: 22,
+                    fontSize: 12,
+                    color: "var(--info)",
+                    borderColor: "var(--info)",
+                    backgroundColor: "var(--surface-raised-2)",
+                  }}
+                />
+              ) : null}
               {paused ? (
                 <Chip
                   size="small"
@@ -708,33 +830,67 @@ export function TraceView() {
               ) : null}
             </Stack>
           ) : null}
-          {displayRows.length === 0 ? (
+          {snap.rows.length === 0 ? (
             <EmptyState
               text="No frames captured — start the capture or resume the trace"
               testId="trace-empty"
             />
           ) : (
-            <Box
-              sx={TABLE_WRAP_SX}
-              data-testid="trace-table"
-              data-trace-mode={mode}
-              data-row-total={displayRows.length}
-            >
-              <TableVirtuoso
-                data={displayRows as TraceFrame[]}
-                context={tableContext}
-                // Default 32 px; drop fixed height so an open dissection row can grow.
-                defaultItemHeight={32}
-                components={tableComponents}
-                fixedHeaderContent={() => renderHeader(columns)}
-                itemContent={rowContent}
-                // Sequential mode auto-follows the tail while scrolled to the
-                // bottom (SRS_visual_ui §5.2); Fixed rewrites in place — no follow.
-                followOutput={mode === "sequential" ? "auto" : false}
-                style={{ height: "100%" }}
-              />
+            <Box sx={{ height: "100%", position: "relative" }}>
+              {/* Keep the header (and filter glyphs) mounted when filters match
+                  nothing so the operator can clear them; overlay the empty copy. */}
+              {filterActive && displayRows.length === 0 ? (
+                <Box
+                  sx={{
+                    position: "absolute",
+                    inset: 0,
+                    zIndex: 2,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    pointerEvents: "none",
+                    pt: "40px",
+                  }}
+                >
+                  <EmptyState
+                    text="No rows match the active filters"
+                    testId="trace-empty-filtered"
+                  />
+                </Box>
+              ) : null}
+              <Box
+                sx={TABLE_WRAP_SX}
+                data-testid="trace-table"
+                data-trace-mode={mode}
+                data-row-total={displayRows.length}
+              >
+                <TableVirtuoso
+                  data={displayRows as TraceFrame[]}
+                  context={tableContext}
+                  // Default 32 px; drop fixed height so an open dissection row can grow.
+                  defaultItemHeight={32}
+                  components={tableComponents}
+                  fixedHeaderContent={() => renderHeader(columns, filter, openFilter)}
+                  itemContent={rowContent}
+                  // Sequential mode auto-follows the tail while scrolled to the
+                  // bottom (SRS_visual_ui §5.2); Fixed rewrites in place — no follow.
+                  followOutput={mode === "sequential" ? "auto" : false}
+                  style={{ height: "100%" }}
+                />
+              </Box>
             </Box>
           )}
+          {filterColumn !== null ? (
+            <TraceFilterPopover
+              open={filterAnchor !== null}
+              anchorEl={filterAnchor}
+              column={filterColumn}
+              options={filterOptions}
+              committed={committedKeys(filter, filterColumn)}
+              onApply={applyColumnFilter}
+              onCancel={closeFilter}
+            />
+          ) : null}
         </Box>
       </Box>
     </Box>

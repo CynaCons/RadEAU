@@ -368,6 +368,107 @@ const NETWORK_CONNECTION_PROBE = `(() => {
   };
 })()`;
 
+// --- Trace filter probes (v0.1.7 / SRS §5.2) --------------------------------
+
+/** PROTO_GPTP = 2 — option keys are the numeric protocol class. */
+const FILTER_PROTO_GPTP_KEY = "2";
+/** LidarClusters service 0x1103 method 0x8001 → `${sv}:${m}`. */
+const FILTER_LIDAR_NAME_KEY = "4355:32769";
+
+function openFilterBtnProbe(testId) {
+  return `(() => {
+    if (document.querySelector('[data-testid="trace-filter-popover"]')) return true;
+    const btn = document.querySelector('[data-testid="${testId}"]');
+    if (!btn) return false;
+    btn.click();
+    return !!document.querySelector('[data-testid="trace-filter-popover"]');
+  })()`;
+}
+
+const FILTER_SELECT_ALL_PROBE = `(() => {
+  const btn = document.querySelector('[data-testid="trace-filter-select-all"]');
+  if (!btn) return false;
+  btn.click();
+  return true;
+})()`;
+
+const FILTER_APPLY_PROBE = `(() => {
+  const btn = document.querySelector('[data-testid="trace-filter-apply"]');
+  if (!btn) return false;
+  btn.click();
+  return true;
+})()`;
+
+function filterToggleOptionProbe(key) {
+  return `(() => {
+    const opt = document.querySelector('[data-testid="trace-filter-option-${key}"]');
+    if (!opt) return { ok: false, reason: "option missing" };
+    const input = opt.querySelector('input[type="checkbox"]');
+    if (!input) return { ok: false, reason: "checkbox input missing" };
+    input.click();
+    return { ok: true, checked: input.checked };
+  })()`;
+}
+
+function filterSearchProbe(text) {
+  return `(() => {
+    const root = document.querySelector('[data-testid="trace-filter-search"]');
+    const input = root ? root.querySelector("input") : null;
+    if (!input) return false;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, "value").set;
+    setter.call(input, ${JSON.stringify(text)});
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`;
+}
+
+const FILTER_STATE_PROBE = `(() => {
+  const q = (t) => document.querySelector('[data-testid="' + t + '"]');
+  const table = q("trace-table");
+  const chip = q("trace-filtered-chip");
+  const emptyFiltered = q("trace-empty-filtered");
+  const rows = table
+    ? [...table.querySelectorAll("tbody tr")].filter(
+        (r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"),
+      )
+    : [];
+  // Protocol is column index 4 (expand, time, dir, source, protocol, …).
+  const protocolCells = rows.map((r) => (r.querySelectorAll("td")[4]?.textContent || "").trim());
+  // Name is column index 6.
+  const nameCells = rows.map((r) => (r.querySelectorAll("td")[6]?.textContent || "").trim());
+  const chipText = chip ? (chip.textContent || "").trim() : null;
+  let shown = null;
+  let total = null;
+  if (chipText) {
+    const m = chipText.match(/Filtered\\s*·\\s*([\\d,]+)\\s*\\/\\s*([\\d,]+)/);
+    if (m) {
+      shown = Number(m[1].replace(/,/g, ""));
+      total = Number(m[2].replace(/,/g, ""));
+    }
+  }
+  const totalAttr = table ? table.getAttribute("data-row-total") : null;
+  return {
+    tablePresent: !!table,
+    emptyFiltered: !!emptyFiltered,
+    emptyFilteredText: emptyFiltered ? (emptyFiltered.textContent || "").trim() : null,
+    chipPresent: !!chip,
+    chipText,
+    shown,
+    total,
+    rowCount: totalAttr != null ? Number(totalAttr) : rows.length,
+    protocolCells,
+    nameCells,
+    allProtocolGptp: protocolCells.length > 0 && protocolCells.every((p) => p === "gPTP"),
+    allNamesLidarClusters:
+      nameCells.length > 0 && nameCells.every((n) => n.includes("LidarClusters")),
+    protoBtnPressed: q("trace-filter-btn-protocol")?.getAttribute("aria-pressed") === "true",
+    nameBtnPressed: q("trace-filter-btn-name")?.getAttribute("aria-pressed") === "true",
+    dirBtnPressed: q("trace-filter-btn-dir")?.getAttribute("aria-pressed") === "true",
+    popoverOpen: !!q("trace-filter-popover"),
+  };
+})()`;
+
 // --- scenario ---------------------------------------------------------------
 
 async function main() {
@@ -825,11 +926,151 @@ async function main() {
       scaled: decoded.scaled,
     }));
 
+    // Phase 6 — per-column Trace filtering (§5.2 / v0.1.7), sim still streaming.
+    await session.eval(COLLAPSE_EXPANDED_PROBE);
+
+    // 6a — Protocol → gPTP only.
+    await waitFor(
+      () => session.eval(openFilterBtnProbe("trace-filter-btn-protocol")),
+      5_000,
+      "Protocol filter popover",
+    );
+    if (!(await session.eval(FILTER_SELECT_ALL_PROBE)))
+      fail("Protocol filter: could not deselect-all");
+    {
+      const toggled = await session.eval(filterToggleOptionProbe(FILTER_PROTO_GPTP_KEY));
+      if (!toggled || !toggled.ok)
+        fail(`Protocol filter: could not select gPTP (${JSON.stringify(toggled)})`);
+    }
+    if (!(await session.eval(FILTER_APPLY_PROBE)))
+      fail("Protocol filter: Apply failed");
+    const gptpFilter = await waitFor(async () => {
+      const s = await session.eval(FILTER_STATE_PROBE);
+      return s.chipPresent && s.allProtocolGptp && s.shown != null && s.total != null && s.shown < s.total
+        ? s
+        : null;
+    }, 10_000, "Protocol=gPTP filter: all cells gPTP + Filtered chip shown<total");
+    console.log("filter protocol=gPTP:", JSON.stringify({
+      shown: gptpFilter.shown,
+      total: gptpFilter.total,
+      rowCount: gptpFilter.rowCount,
+      protoBtnPressed: gptpFilter.protoBtnPressed,
+    }));
+
+    // 6b — Direction deselect-all → filtered empty state (empty selection is allowed).
+    await waitFor(
+      () => session.eval(openFilterBtnProbe("trace-filter-btn-dir")),
+      5_000,
+      "Direction filter popover",
+    );
+    if (!(await session.eval(FILTER_SELECT_ALL_PROBE)))
+      fail("Direction filter: could not deselect-all");
+    if (!(await session.eval(FILTER_APPLY_PROBE)))
+      fail("Direction filter: Apply (empty) failed");
+    const emptyFiltered = await waitFor(async () => {
+      const s = await session.eval(FILTER_STATE_PROBE);
+      return s.emptyFiltered ? s : null;
+    }, 10_000, "filtered empty state after Direction deselect-all");
+    if (!/No rows match the active filters/i.test(emptyFiltered.emptyFilteredText || ""))
+      fail(`unexpected filtered empty copy: "${emptyFiltered.emptyFilteredText}"`);
+    console.log("filter dir=empty:", JSON.stringify({
+      emptyFiltered: emptyFiltered.emptyFiltered,
+      chipPresent: emptyFiltered.chipPresent,
+    }));
+
+    // 6c — Direction select-all clears that column → matching rows return (Protocol still gPTP).
+    await waitFor(
+      () => session.eval(openFilterBtnProbe("trace-filter-btn-dir")),
+      5_000,
+      "Direction filter popover (clear)",
+    );
+    if (!(await session.eval(FILTER_SELECT_ALL_PROBE)))
+      fail("Direction filter: could not select-all");
+    if (!(await session.eval(FILTER_APPLY_PROBE)))
+      fail("Direction filter: Apply (select-all) failed");
+    await waitFor(async () => {
+      const s = await session.eval(FILTER_STATE_PROBE);
+      return !s.emptyFiltered && s.tablePresent && s.rowCount > 0 && s.allProtocolGptp ? s : null;
+    }, 10_000, "rows return after Direction select-all");
+
+    // Clear Protocol before Name — LidarClusters is SOME/IP; AND with gPTP yields nothing.
+    await waitFor(
+      () => session.eval(openFilterBtnProbe("trace-filter-btn-protocol")),
+      5_000,
+      "Protocol filter popover (clear)",
+    );
+    if (!(await session.eval(FILTER_SELECT_ALL_PROBE)))
+      fail("Protocol filter: could not select-all to clear");
+    if (!(await session.eval(FILTER_APPLY_PROBE)))
+      fail("Protocol filter: Apply (clear) failed");
+
+    // 6d — Name search "Lidar", select only LidarClusters.
+    await waitFor(
+      () => session.eval(openFilterBtnProbe("trace-filter-btn-name")),
+      5_000,
+      "Name filter popover",
+    );
+    if (!(await session.eval(filterSearchProbe("Lidar"))))
+      fail("Name filter: search field missing");
+    if (!(await session.eval(FILTER_SELECT_ALL_PROBE)))
+      fail("Name filter: could not deselect-all");
+    {
+      const toggled = await session.eval(filterToggleOptionProbe(FILTER_LIDAR_NAME_KEY));
+      if (!toggled || !toggled.ok)
+        fail(`Name filter: could not select LidarClusters (${JSON.stringify(toggled)})`);
+    }
+    if (!(await session.eval(FILTER_APPLY_PROBE)))
+      fail("Name filter: Apply failed");
+    const nameFilter = await waitFor(async () => {
+      const s = await session.eval(FILTER_STATE_PROBE);
+      return s.chipPresent && s.allNamesLidarClusters ? s : null;
+    }, 10_000, "Name=LidarClusters filter: all Name cells contain LidarClusters");
+    console.log("filter name=LidarClusters:", JSON.stringify({
+      shown: nameFilter.shown,
+      total: nameFilter.total,
+      nameCells: nameFilter.nameCells.slice(0, 8),
+    }));
+
+    // 6e — select-all on Name (and Protocol if still active) → chip absent.
+    // Protocol was cleared before the Name step so LidarClusters (SOME/IP) can
+    // surface; only re-touch a column when its glyph is still pressed — opening
+    // an already-clear column and hitting select-all would deselect everything
+    // and Apply would re-activate an empty filter.
+    async function clearColumnIfActive(btnTestId, label) {
+      const pressed = await session.eval(`(() => {
+        const btn = document.querySelector('[data-testid="${btnTestId}"]');
+        return btn && btn.getAttribute("aria-pressed") === "true";
+      })()`);
+      if (!pressed) return;
+      await waitFor(
+        () => session.eval(openFilterBtnProbe(btnTestId)),
+        5_000,
+        `${label} filter popover (clear)`,
+      );
+      if (!(await session.eval(FILTER_SELECT_ALL_PROBE)))
+        fail(`${label} filter: could not select-all to clear`);
+      if (!(await session.eval(FILTER_APPLY_PROBE)))
+        fail(`${label} filter: Apply (clear) failed`);
+    }
+    await clearColumnIfActive("trace-filter-btn-name", "Name");
+    await clearColumnIfActive("trace-filter-btn-protocol", "Protocol");
+    const cleared = await waitFor(async () => {
+      const s = await session.eval(FILTER_STATE_PROBE);
+      return !s.chipPresent && !s.protoBtnPressed && !s.nameBtnPressed && !s.dirBtnPressed
+        ? s
+        : null;
+    }, 10_000, "Filtered chip absent after clearing filters");
+    console.log("filter cleared:", JSON.stringify({
+      chipPresent: cleared.chipPresent,
+      rowCount: cleared.rowCount,
+    }));
+
     console.log(
       `PASS — devgen ${trace.rowCount} rows (Fixed→Sequential); simulator link ${sim.rowCount} rows, ` +
         `degraded chip absent, protocols [${[...protocolsRendered].join(", ")}], ` +
         `LidarClusters + Dir Rx + VLAN 802.1Q; Network Connection "${network.sourceKind}" / "${network.linkLabel}" ` +
-        `received=${network.receivedN}; catalog names + clean dissections + decoded signals`,
+        `received=${network.receivedN}; catalog names + clean dissections + decoded signals; ` +
+        `filters Protocol/Dir/Name`,
     );
   } catch (err) {
     failures += 1;

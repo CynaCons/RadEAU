@@ -2,9 +2,17 @@
  * Trace display projection (SRS_visual_ui.md §5.2): Fixed collapses the
  * chronological ring to one live row per key; Sequential windows the ring
  * tail. Pure helpers — pin set and mode live in the Trace view (session-scoped).
+ * Column filters compose BEFORE collapse / window (never an ingest filter).
  */
 
 import type { TraceFrame } from "./frameModel";
+import {
+  applyFilter,
+  EMPTY_FILTER,
+  isFilterActive,
+  type TraceFilter,
+  windowSequentialFiltered,
+} from "./traceFilter";
 
 export type TraceDisplayMode = "fixed" | "sequential";
 
@@ -58,13 +66,25 @@ export function windowSequential(
   return rows.slice(rows.length - window);
 }
 
-/** Projects ring rows into the table data for the active display mode. */
+/**
+ * Projects ring rows into the table data for the active display mode.
+ * When a filter is active it runs first: Fixed shows the latest *matching*
+ * frame per key; Sequential's history window holds the last N *matching* rows
+ * (backward tail scan — no full-ring allocation when the tail fills the window).
+ */
 export function projectDisplayRows(
   rows: readonly TraceFrame[],
   mode: TraceDisplayMode,
   pinned: ReadonlySet<string>,
   historyWindow: number,
+  filter: TraceFilter = EMPTY_FILTER,
 ): readonly TraceFrame[] {
-  if (mode === "fixed") return collapseFixed(rows, pinned);
-  return windowSequential(rows, historyWindow);
+  if (!isFilterActive(filter)) {
+    if (mode === "fixed") return collapseFixed(rows, pinned);
+    return windowSequential(rows, historyWindow);
+  }
+  if (mode === "fixed") {
+    return collapseFixed(applyFilter(rows, filter) as TraceFrame[], pinned);
+  }
+  return windowSequentialFiltered(rows, historyWindow, filter);
 }
