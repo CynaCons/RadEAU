@@ -150,3 +150,30 @@ session (source, link state, final stats), catalog state (source, services,
 diagnostics), and the last 20 warn/error log lines — plain text, ready to
 paste. Both commands feed the Settings Dependencies and Diagnostics groups
 ([SRS_visual_ui.md](SRS_visual_ui.md) §5.7).
+
+## 6. Live capture backend — Npcap / libpcap (CP-010..013)
+
+| ID | Requirement | Priority | Status | Acceptance criteria |
+|---|---|---|---|---|
+| CP-010 | The live backend binds libpcap **dynamically at runtime** (`wpcap.dll` from `System32\Npcap` on Windows, `libpcap.so.1` / `.so.0.8` on Linux) through a hand-written FFI over the functions it uses — no SDK at build time, no link-time dependency, the app launches without the library and every failure is a diagnostic | Must | Planned | Build succeeds on a machine without the Npcap SDK; with the DLL renamed the app starts, the Dependencies row reads Missing, and `capture_start(live)` returns "Npcap not installed" |
+| CP-011 | `capture_list_interfaces()` enumerates devices with stable ids (`\Device\NPF_{GUID}` / ifname), friendly descriptions, addresses, up/loopback flags; the loopback device is listed when the library offers it | Must | Planned | The list is stable across calls; on this machine it contains the Npcap loopback device |
+| CP-012 | A live session opens promiscuous with snaplen 65,535, immediate mode, a 100 ms read timeout (so stop stays responsive), nanosecond precision when negotiable (achieved precision recorded), and a default BPF filter aligned with the classifier that can be widened; every frame is Rx; `capture:stats.kernelDropped` carries `ps_drop` | Must | Planned | Real UDP SOME/IP traffic sent to 127.0.0.1 by the simulator renders as SOME/IP rows through the loopback device; a deliberately tiny snaplen test shows truncated frames flagged in the dissection |
+| CP-013 | Privilege and access failures (admin-restricted Npcap, missing CAP_NET_RAW on Linux, device busy) surface as `capture:link {state:"error", detail}` naming the exact remedy, never a crash or an empty trace | Must | Planned | Each failure class is mapped from the library's error string to a remedy sentence with a unit test |
+
+**Design.** A `radeau-livecap` crate wraps `libloading`: it resolves
+`pcap_lib_version`, `pcap_findalldevs`, `pcap_freealldevs`, `pcap_create`,
+`pcap_set_snaplen`, `pcap_set_promisc`, `pcap_set_timeout`,
+`pcap_set_immediate_mode`, `pcap_set_tstamp_precision`, `pcap_activate`,
+`pcap_next_ex`, `pcap_stats`, `pcap_compile`, `pcap_setfilter`,
+`pcap_freecode`, `pcap_geterr`, `pcap_close` (and `pcap_statustostr`) once,
+keeps the library handle for the process lifetime, and exposes a safe
+`Device` list and a `LiveCapture` reader. The channel variant `Live` feeds
+the generic reader loop with host timestamps (`ts_ns` from `pcap_pkthdr`,
+µs or ns per the achieved precision) and `DIR_RX`; the endpoint table keys by
+address as for every source. The default filter is `udp or ether proto
+0x88f7 or arp or vlan` (widen with a setting later); Windows NIC drivers may
+strip 802.1Q tags before Npcap sees them — documented in the Dependencies
+row detail. `SourceSpec` gains `{kind:"live", interfaceId, filter?}`. The
+dependency probe may call `pcap_lib_version` through the same loader (it
+opens no device). Verification on this laptop uses the Npcap loopback device
+with `ecu-netsim --udp-target 127.0.0.1` emitting real datagrams.

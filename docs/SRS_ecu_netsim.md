@@ -114,6 +114,16 @@ VehicleDynECU emits one 10-byte runt frame every 10 s. Together they make the
 honest-classification path (SP-006..SP-008) observable in the default demo
 and assertable by the E2E.
 
+**Real-socket emission (`--udp-target <ip>`).** Besides the monitor link, the
+simulator can transmit every SOME/IP and SD datagram it generates as a real
+UDP datagram from a host socket to the given address (destination port = the
+frame's UDP destination port, source port bound per ECU when free), so a live
+capture backend can be verified on a laptop with no bench: capturing the
+loopback device while `--udp-target 127.0.0.1` runs shows the same services
+as real traffic (SRS_capture CP-012). Raw-Ethernet classes (gPTP, ARP, VLAN
+tags, runts) cannot be sent from a host socket and are only on the monitor
+link; the flag documents that limitation in its help text.
+
 ## 7. Fault injection
 
 Verbs, all via the control channel, all deterministic under seed + accelerated
