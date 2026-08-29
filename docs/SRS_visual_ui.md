@@ -476,7 +476,8 @@ title and a 14 px `text-secondary` sentence explaining what the group is for —
 the subtitle is mandatory. Groups: **Interface** (capture-source select — dev
 generator, simulator link, physical NIC when available — with the selected
 source's address field; this is the ONLY place the interface is chosen, per
-§4.3; transmit-only switch), **Performance** (refresh-rate select with three discrete options,
+§4.3; transmit-only switch), **Dependencies** (runtime dependencies of the
+capture backends, detected — see below), **Performance** (refresh-rate select with three discrete options,
 low-overhead switch), **Automation** (port, bind host, token, allowlist),
 **Diagnostics** (collection switches, thresholds, read-only reports),
 **Memory** (reclaim controls, anything destructive behind a confirmation
@@ -488,6 +489,24 @@ multiline `font-mono` field at 12.5 px, 8 rows minimum and 16 maximum, with a
 Copy button; status uses small outlined chips with a leading glyph. Any setting
 that cannot change while a session runs is disabled with a tooltip stating why
 — never silently ignored.
+
+**Dependencies group.** One row per optional runtime dependency a capture
+backend needs — Npcap (Windows live capture), libpcap (Linux live capture),
+the Vector XL Driver Library and Vector driver package (Vector VN interfaces,
+Windows). Each row carries: the dependency name and the sources it enables in
+`text-secondary`; a small outlined status chip — `Installed · <version>`,
+`Missing`, `Incompatible · <version>` (below the minimum the backend needs),
+or `Blocked` (present but unusable, e.g. Npcap installed with driver access
+restricted to administrators); the detected path/version in `font-mono`; and,
+whenever the chip is not `Installed`, an **Open download page** action that
+opens the official vendor page in the system browser. The app never bundles,
+downloads, or installs a dependency and never elevates — installing is the
+user's act; the row tells them exactly what and where. A **Refresh** button
+re-runs the probes; probes are read-only (presence, version, and a
+capability query — never a capture side effect). Sources whose dependency is
+not `Installed` appear in the Interface select disabled with the reason
+("requires Npcap — see Dependencies"). The same probe results are included
+verbatim in the Diagnostics report.
 
 ### 5.8 Network
 
