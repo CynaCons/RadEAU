@@ -10,24 +10,16 @@
 
 use std::io::{self, Read};
 
-use radeau_proto::ethernet::{self, EthernetFrame};
-use radeau_proto::gptp;
-use radeau_proto::ipv4::{self, Ipv4Packet};
-use radeau_proto::sd;
-use radeau_proto::someip::{self, SomeIpHeader};
-use radeau_proto::udp::UdpDatagram;
 use serde::Deserialize;
 
-use crate::devgen::{
-    GenFrame, MSG_EVENT, MSG_OFFER, MSG_SYNC, PROTO_GPTP, PROTO_SD, PROTO_SOMEIP, SNAP_LEN,
-};
+use crate::classify::{classify_frame, sim_direction};
+use crate::endpoints::EndpointTable;
+use crate::frame::GenFrame;
 
 /// Bytes after the length field for a frame record header (time + port + dir).
 pub const RECORD_HEADER_LEN: usize = 11;
 /// Sane max for the length field (64 KiB); larger → link error.
 pub const MAX_RECORD_LEN: u32 = 64 * 1024;
-/// SOME/IP / SD UDP port (SRS_protocols.md §2).
-pub const UDP_PORT_SOMEIP: u16 = 30490;
 /// Gap record markers.
 pub const GAP_PORT_ID: u16 = 0xFFFF;
 pub const GAP_DIRECTION: u8 = 0xFF;
@@ -79,21 +71,6 @@ pub fn validate_handshake_line(line: &str) -> Result<Handshake, String> {
         scenario: raw.scenario,
         ports: raw.ports,
     })
-}
-
-/// Build the session endpoint table indexed by `port_id - 1`.
-pub fn endpoints_from_handshake(ports: &[HandshakePort]) -> Vec<(String, String)> {
-    let max_id = ports.iter().map(|p| p.id).max().unwrap_or(0);
-    if max_id == 0 {
-        return Vec::new();
-    }
-    let mut out = vec![("?".to_string(), "0.0.0.0".to_string()); max_id as usize];
-    for p in ports {
-        if p.id >= 1 {
-            out[(p.id - 1) as usize] = (p.name.clone(), p.ip.clone());
-        }
-    }
-    out
 }
 
 /// A de-framed monitor record (frame or gap).
@@ -207,101 +184,15 @@ pub fn read_handshake_line<R: Read>(
     }
 }
 
-fn snap_from(payload: &[u8]) -> [u8; SNAP_LEN] {
-    let mut snap = [0; SNAP_LEN];
-    let n = payload.len().min(SNAP_LEN);
-    snap[..n].copy_from_slice(&payload[..n]);
-    snap
-}
-
-fn map_someip_msg_type(message_type: u8) -> u8 {
-    if message_type == someip::MSG_NOTIFICATION {
-        MSG_EVENT
-    } else {
-        10u8.saturating_add(message_type)
-    }
-}
-
-/// Classify a raw Ethernet frame into a `GenFrame`, or `None` to skip (other).
-/// `gptp::parse` / `sd::parse` may still be stubs — on `Err` we keep the
-/// protocol class with sync/offer display defaults.
-pub fn classify_frame(frame: &[u8], idx: u64, t_s: f64, port_id: u16) -> Option<GenFrame> {
-    let src_ep = (port_id as usize).saturating_sub(1);
-    let eth = EthernetFrame::parse(frame).ok()?;
-
-    if eth.ethertype == ethernet::ETHERTYPE_GPTP {
-        // Prefer Sync display defaults when the codec is still a placeholder.
-        let _ = gptp::parse(eth.payload);
-        return Some(GenFrame {
-            idx,
-            t_s,
-            rx: true,
-            src_ep,
-            proto: PROTO_GPTP,
-            svc: 0,
-            method: 0,
-            msg_type: MSG_SYNC,
-            session: -1,
-            wire_len: frame.len() as u32,
-            snap: snap_from(eth.payload),
-        });
-    }
-
-    if eth.ethertype != ethernet::ETHERTYPE_IPV4 {
-        return None;
-    }
-    let ip = Ipv4Packet::parse(eth.payload).ok()?;
-    if ip.protocol != ipv4::PROTOCOL_UDP {
-        return None;
-    }
-    let udp = UdpDatagram::parse(ip.payload).ok()?;
-    if udp.dst_port != UDP_PORT_SOMEIP && udp.src_port != UDP_PORT_SOMEIP {
-        return None;
-    }
-    let (hdr, _payload): (SomeIpHeader, &[u8]) = someip::parse(udp.payload).ok()?;
-    let snap = snap_from(udp.payload);
-
-    if hdr.service_id == someip::SD_SERVICE_ID && hdr.method_id == someip::SD_METHOD_ID {
-        let _ = sd::parse(_payload);
-        return Some(GenFrame {
-            idx,
-            t_s,
-            rx: true,
-            src_ep,
-            proto: PROTO_SD,
-            svc: someip::SD_SERVICE_ID,
-            method: someip::SD_METHOD_ID,
-            msg_type: MSG_OFFER,
-            session: hdr.session_id as i32,
-            wire_len: frame.len() as u32,
-            snap,
-        });
-    }
-
-    Some(GenFrame {
-        idx,
-        t_s,
-        rx: true,
-        src_ep,
-        proto: PROTO_SOMEIP,
-        svc: hdr.service_id,
-        method: hdr.method_id,
-        msg_type: map_someip_msg_type(hdr.message_type),
-        session: hdr.session_id as i32,
-        wire_len: frame.len() as u32,
-        snap,
-    })
-}
-
-/// Session-scoped mapper: assigns monotonic idx / relative time, counts skips
+/// Session-scoped mapper: assigns monotonic idx / relative time and counts
 /// and gaps. Pure over pushed records — the capture thread owns networking.
 #[derive(Debug, Default)]
 pub struct FrameMapper {
     pub idx: u64,
     pub first_ns: Option<u64>,
-    pub skipped_other: u64,
     pub gap_count: u64,
     pub gap_dropped_total: u64,
+    pub endpoints: EndpointTable,
 }
 
 impl FrameMapper {
@@ -320,36 +211,31 @@ impl FrameMapper {
         match record {
             MonitorRecord::Gap {
                 dropped_count,
-                span_ns,
+                span_ns: _,
                 ..
             } => {
                 self.gap_count += 1;
                 self.gap_dropped_total += dropped_count as u64;
-                eprintln!(
-                    "simlink gap: dropped={dropped_count} span_ns={span_ns} (total gaps={})",
-                    self.gap_count
-                );
                 None
             }
             MonitorRecord::Frame {
                 switch_time_ns,
-                port_id,
-                direction: _,
+                port_id: _,
+                direction,
                 frame,
             } => {
                 let first = *self.first_ns.get_or_insert(switch_time_ns);
                 let t_s = (switch_time_ns.saturating_sub(first)) as f64 / 1_000_000_000.0;
                 let idx = self.idx;
-                match classify_frame(&frame, idx, t_s, port_id) {
-                    Some(f) => {
-                        self.idx += 1;
-                        Some((f, frame))
-                    }
-                    None => {
-                        self.skipped_other += 1;
-                        None
-                    }
-                }
+                let classified = classify_frame(
+                    &frame,
+                    idx,
+                    t_s,
+                    sim_direction(direction),
+                    &mut self.endpoints,
+                );
+                self.idx += 1;
+                Some((classified, frame))
             }
         }
     }
@@ -387,10 +273,19 @@ pub fn encode_gap_record(switch_time_ns: u64, dropped_count: u32, span_ns: u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use radeau_proto::ethernet::EthernetFrame;
-    use radeau_proto::ipv4::Ipv4Packet;
+    use crate::codes::{
+        DIR_RX, GPTP_TY_OTHER, PROTO_ARP, PROTO_GPTP, PROTO_SD, PROTO_SOMEIP,
+        SOMEIP_TY_NOTIFICATION, SOMEIP_TY_REQUEST,
+    };
     use radeau_proto::udp::UdpDatagram;
+    use radeau_proto::{
+        ethernet::{self, EthernetFrame},
+        gptp,
+        ipv4::{self, Ipv4Packet},
+        someip::{self, SomeIpHeader},
+    };
 
+    const UDP_PORT_SOMEIP: u16 = 30490;
     const HANDSHAKE: &str = r#"{"link":"ecu-netsim-monitor","version":1,"scenario":"sensor-fusion","ports":[{"id":1,"name":"camera","ip":"10.42.0.11"},{"id":2,"name":"radar","ip":"10.42.0.12"},{"id":3,"name":"lidar","ip":"10.42.0.13"},{"id":4,"name":"dynamics","ip":"10.42.0.14"},{"id":5,"name":"fusion","ip":"10.42.0.20"}]}"#;
 
     #[test]
@@ -399,9 +294,8 @@ mod tests {
         assert_eq!(h.scenario, "sensor-fusion");
         assert_eq!(h.ports.len(), 5);
         assert_eq!(h.ports[4].name, "fusion");
-        let eps = endpoints_from_handshake(&h.ports);
-        assert_eq!(eps[0].0, "camera");
-        assert_eq!(eps[4].1, "10.42.0.20");
+        assert_eq!(h.ports[0].name, "camera");
+        assert_eq!(h.ports[4].ip, "10.42.0.20");
     }
 
     #[test]
@@ -572,24 +466,25 @@ mod tests {
 
     #[test]
     fn classify_maps_someip_sd_gptp() {
-        let someip = classify_frame(&someip_notification_frame(), 0, 0.0, 1).unwrap();
+        let mut endpoints = EndpointTable::default();
+        let someip = classify_frame(&someip_notification_frame(), 0, 0.0, DIR_RX, &mut endpoints);
         assert_eq!(someip.proto, PROTO_SOMEIP);
         assert_eq!(someip.svc, 0x1101);
         assert_eq!(someip.method, 0x8001);
-        assert_eq!(someip.msg_type, MSG_EVENT);
+        assert_eq!(someip.msg_type, SOMEIP_TY_NOTIFICATION);
         assert_eq!(someip.session, 42);
         assert_eq!(someip.src_ep, 0);
-        assert!(someip.rx);
+        assert_eq!(someip.dir, DIR_RX);
 
-        let sd = classify_frame(&sd_offer_frame(), 1, 0.1, 3).unwrap();
+        let sd = classify_frame(&sd_offer_frame(), 1, 0.1, DIR_RX, &mut endpoints);
         assert_eq!(sd.proto, PROTO_SD);
-        assert_eq!(sd.msg_type, MSG_OFFER);
+        assert_eq!(sd.msg_type, crate::codes::SD_TY_EMPTY);
         assert_eq!(sd.session, 1); // from SOME/IP header; only gPTP forces -1
-        assert_eq!(sd.src_ep, 2);
+        assert_eq!(sd.src_ep, 0);
 
-        let g = classify_frame(&gptp_frame(), 2, 0.2, 1).unwrap();
+        let g = classify_frame(&gptp_frame(), 2, 0.2, DIR_RX, &mut endpoints);
         assert_eq!(g.proto, PROTO_GPTP);
-        assert_eq!(g.msg_type, MSG_SYNC);
+        assert_eq!(g.msg_type, GPTP_TY_OTHER);
         assert_eq!(g.session, -1);
     }
 
@@ -632,8 +527,8 @@ mod tests {
             &ip_payload,
             &mut wire,
         );
-        let f = classify_frame(&wire, 0, 0.0, 1).unwrap();
-        assert_eq!(f.msg_type, 10); // 10 + MSG_REQUEST(0)
+        let f = classify_frame(&wire, 0, 0.0, DIR_RX, &mut EndpointTable::default());
+        assert_eq!(f.msg_type, SOMEIP_TY_REQUEST);
     }
 
     #[test]
@@ -669,11 +564,11 @@ mod tests {
             .unwrap();
         assert!((f1.t_s - 0.5).abs() < 1e-9);
         assert_eq!(f1.idx, 1);
-        assert_eq!(f1.src_ep, 4);
+        assert_eq!(f1.src_ep, 0);
     }
 
     #[test]
-    fn mapper_skips_non_classified_frames() {
+    fn mapper_keeps_arp_frames() {
         // ARP-like ethertype — not SOME/IP / SD / gPTP.
         let mut wire = Vec::new();
         EthernetFrame::build(
@@ -684,24 +579,23 @@ mod tests {
             &mut wire,
         );
         let mut mapper = FrameMapper::new();
-        assert!(mapper
+        let mapped = mapper
             .map_record(MonitorRecord::Frame {
                 switch_time_ns: 0,
                 port_id: 1,
                 direction: 0,
                 frame: wire,
             })
-            .is_none());
-        assert_eq!(mapper.skipped_other, 1);
-        assert_eq!(mapper.idx, 0);
+            .unwrap();
+        assert_eq!(mapped.proto, PROTO_ARP);
+        assert_eq!(mapper.idx, 1);
     }
 
     #[test]
     fn pinned_stream_projects_into_genframes() {
         // Mapping-layer stand-in for a fake server: handshake → records → frames.
         let h = validate_handshake_line(HANDSHAKE).unwrap();
-        let eps = endpoints_from_handshake(&h.ports);
-        assert_eq!(eps.len(), 5);
+        assert_eq!(h.ports.len(), 5);
 
         let mut stream = Vec::new();
         encode_frame_record(100, 1, 0, &someip_notification_frame(), &mut stream);

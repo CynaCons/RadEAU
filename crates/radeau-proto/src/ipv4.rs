@@ -6,6 +6,8 @@ use super::{internet_checksum, ParseError};
 pub const MIN_HEADER_LEN: usize = 20;
 /// Protocol number for UDP.
 pub const PROTOCOL_UDP: u8 = 17;
+pub const PROTOCOL_TCP: u8 = 6;
+pub const PROTOCOL_ICMP: u8 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ipv4Packet<'a> {

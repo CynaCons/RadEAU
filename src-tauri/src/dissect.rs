@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use radeau_proto::{ethernet, gptp, ipv4, sd, someip, udp, ParseError};
+use radeau_proto::{arp, ethernet, gptp, icmp, ipv4, ipv6, sd, someip, tcp, udp, ParseError};
 use serde::Serialize;
 use tauri::State;
 
@@ -172,6 +172,7 @@ pub fn dissect_with_catalog(
             return detail(idx, t_s, wire, payload_offset, layers);
         }
     };
+    let mut type_offset = 12usize;
     layers.push(FrameLayer {
         protocol: "Ethernet II".into(),
         summary: format!(
@@ -186,11 +187,88 @@ pub fn dissect_with_catalog(
             field("EtherType", format!("0x{:04X}", eth.ethertype), 12, 2),
         ],
     });
+    let mut cursor = 14usize;
+    let mut tag_no = 0;
+    let mut outer_type = u16::from_be_bytes([wire[12], wire[13]]);
+    while matches!(
+        outer_type,
+        ethernet::ETHERTYPE_VLAN | ethernet::ETHERTYPE_QINQ
+    ) && cursor + 4 <= wire.len()
+    {
+        let tci = u16::from_be_bytes([wire[cursor], wire[cursor + 1]]);
+        let inner = u16::from_be_bytes([wire[cursor + 2], wire[cursor + 3]]);
+        tag_no += 1;
+        layers.push(FrameLayer {
+            protocol: "802.1Q".into(),
+            summary: format!("VLAN {} · PCP {}", tci & 0x0fff, tci >> 13),
+            fields: vec![
+                field("PCP", (tci >> 13).to_string(), cursor, 2),
+                field("DEI", ((tci >> 12) & 1).to_string(), cursor, 2),
+                field("VID", (tci & 0x0fff).to_string(), cursor, 2),
+                field("Inner EtherType", format!("0x{inner:04X}"), cursor + 2, 2),
+            ],
+        });
+        type_offset = cursor + 2;
+        cursor += 4;
+        outer_type = inner;
+        if tag_no == 2 {
+            break;
+        }
+    }
+    layers[0].fields[2].offset = type_offset;
+    let l3_offset = eth.header_len;
     if eth.ethertype == ethernet::ETHERTYPE_GPTP {
-        return dissect_gptp(idx, t_s, wire, eth.payload, layers);
+        return dissect_gptp(idx, t_s, wire, eth.payload, l3_offset, layers);
+    }
+    if eth.ethertype == ethernet::ETHERTYPE_ARP {
+        match arp::ArpPacket::parse(eth.payload) {
+            Ok(p) => layers.push(FrameLayer {
+                protocol: "ARP".into(),
+                summary: format!(
+                    "{} → {} · opcode {}",
+                    ip(&p.sender_ip),
+                    ip(&p.target_ip),
+                    p.opcode
+                ),
+                fields: vec![
+                    field("Opcode", p.opcode.to_string(), l3_offset + 6, 2),
+                    field("Sender MAC", mac(&p.sender_mac), l3_offset + 8, 6),
+                    field("Sender IP", ip(&p.sender_ip), l3_offset + 14, 4),
+                    field("Target MAC", mac(&p.target_mac), l3_offset + 18, 6),
+                    field("Target IP", ip(&p.target_ip), l3_offset + 24, 4),
+                ],
+            }),
+            Err(e) => layers.push(malformed("ARP", e)),
+        }
+        return detail(idx, t_s, wire, l3_offset, layers);
+    }
+    if eth.ethertype == ethernet::ETHERTYPE_IPV6 {
+        match ipv6::Ipv6Packet::parse(eth.payload) {
+            Ok(p) => {
+                let src = std::net::Ipv6Addr::from(p.src).to_string();
+                let dst = std::net::Ipv6Addr::from(p.dst).to_string();
+                layers.push(FrameLayer {
+                    protocol: "IPv6".into(),
+                    summary: format!("{src} → {dst} · next header {}", p.next_header),
+                    fields: vec![
+                        field("Source", src, l3_offset + 8, 16),
+                        field("Destination", dst, l3_offset + 24, 16),
+                        field("Next header", p.next_header.to_string(), l3_offset + 6, 1),
+                        field("Hop limit", p.hop_limit.to_string(), l3_offset + 7, 1),
+                    ],
+                });
+                payload_offset = l3_offset + ipv6::HEADER_LEN;
+                if p.next_header == 58 {
+                    add_icmp(&mut layers, p.payload, payload_offset, "ICMPv6");
+                    payload_offset += icmp::HEADER_LEN.min(p.payload.len());
+                }
+            }
+            Err(e) => layers.push(malformed("IPv6", e)),
+        }
+        return detail(idx, t_s, wire, payload_offset, layers);
     }
     if eth.ethertype != ethernet::ETHERTYPE_IPV4 {
-        return detail(idx, t_s, wire, payload_offset, layers);
+        return detail(idx, t_s, wire, l3_offset, layers);
     }
     let ip_packet = match ipv4::Ipv4Packet::parse(eth.payload) {
         Ok(value) => value,
@@ -209,16 +287,69 @@ pub fn dissect_with_catalog(
             ip_packet.protocol
         ),
         fields: vec![
-            field("Source", ip(&ip_packet.src), 26, 4),
-            field("Destination", ip(&ip_packet.dst), 30, 4),
-            field("TTL", ip_packet.ttl.to_string(), 22, 1),
-            field("Protocol", ip_packet.protocol.to_string(), 23, 1),
+            field("Source", ip(&ip_packet.src), l3_offset + 12, 4),
+            field("Destination", ip(&ip_packet.dst), l3_offset + 16, 4),
+            field("TTL", ip_packet.ttl.to_string(), l3_offset + 8, 1),
+            field("Protocol", ip_packet.protocol.to_string(), l3_offset + 9, 1),
         ],
     });
-    if ip_packet.protocol != ipv4::PROTOCOL_UDP {
+    let l4_offset = l3_offset + ihl;
+    if ip_packet.protocol == ipv4::PROTOCOL_TCP {
+        match tcp::TcpSegment::parse(ip_packet.payload) {
+            Ok(s) => {
+                let names = [
+                    (0x100, "NS"),
+                    (0x80, "CWR"),
+                    (0x40, "ECE"),
+                    (0x20, "URG"),
+                    (0x10, "ACK"),
+                    (8, "PSH"),
+                    (4, "RST"),
+                    (2, "SYN"),
+                    (1, "FIN"),
+                ]
+                .into_iter()
+                .filter_map(|(b, n)| (s.flags & b != 0).then_some(n))
+                .collect::<Vec<_>>()
+                .join(" ");
+                layers.push(FrameLayer {
+                    protocol: "TCP".into(),
+                    summary: format!("{} → {} · {names}", s.src_port, s.dst_port),
+                    fields: vec![
+                        field("Source port", s.src_port.to_string(), l4_offset, 2),
+                        field("Destination port", s.dst_port.to_string(), l4_offset + 2, 2),
+                        field("Sequence", s.seq.to_string(), l4_offset + 4, 4),
+                        field("Acknowledgment", s.ack.to_string(), l4_offset + 8, 4),
+                        field("Flags", names, l4_offset + 12, 2),
+                        field("Window", s.window.to_string(), l4_offset + 14, 2),
+                        field(
+                            "Payload length",
+                            s.payload.len().to_string(),
+                            l4_offset + s.data_offset as usize * 4,
+                            0,
+                        ),
+                    ],
+                });
+                payload_offset = l4_offset + s.data_offset as usize * 4;
+            }
+            Err(e) => layers.push(malformed("TCP", e)),
+        }
         return detail(idx, t_s, wire, payload_offset, layers);
     }
-    let udp_offset = ethernet::HEADER_LEN + ihl;
+    if ip_packet.protocol == ipv4::PROTOCOL_ICMP {
+        add_icmp(&mut layers, ip_packet.payload, l4_offset, "ICMP");
+        return detail(
+            idx,
+            t_s,
+            wire,
+            (l4_offset + icmp::HEADER_LEN).min(wire.len()),
+            layers,
+        );
+    }
+    if ip_packet.protocol != ipv4::PROTOCOL_UDP {
+        return detail(idx, t_s, wire, l4_offset, layers);
+    }
+    let udp_offset = l4_offset;
     let datagram = match udp::UdpDatagram::parse(ip_packet.payload) {
         Ok(value) => value,
         Err(error) => {
@@ -251,54 +382,17 @@ pub fn dissect_with_catalog(
         ],
     });
     let someip_offset = udp_offset + udp::HEADER_LEN;
-    let (header, payload) = match someip::parse(datagram.payload) {
-        Ok(value) => value,
-        Err(error) => {
-            layers.push(malformed("SOME/IP", error));
-            return detail(idx, t_s, wire, payload_offset, layers);
-        }
-    };
+    if !crate::classify::someip_plausible(datagram.payload) {
+        layers.push(FrameLayer {
+            protocol: "Data".into(),
+            summary: format!("{} bytes", datagram.payload.len()),
+            fields: vec![],
+        });
+        return detail(idx, t_s, wire, someip_offset, layers);
+    }
+    let (header, payload) = someip::parse(datagram.payload).expect("plausibility checked");
     payload_offset = someip_offset + someip::HEADER_LEN;
-    layers.push(FrameLayer {
-        protocol: "SOME/IP".into(),
-        summary: format!(
-            "0x{:04X}:0x{:04X} · session 0x{:04X}",
-            header.service_id, header.method_id, header.session_id
-        ),
-        fields: vec![
-            field(
-                "Service ID",
-                format!("0x{:04X}", header.service_id),
-                someip_offset,
-                2,
-            ),
-            field(
-                "Method ID",
-                format!("0x{:04X}", header.method_id),
-                someip_offset + 2,
-                2,
-            ),
-            field("Length", header.length.to_string(), someip_offset + 4, 4),
-            field(
-                "Client ID",
-                format!("0x{:04X}", header.client_id),
-                someip_offset + 8,
-                2,
-            ),
-            field(
-                "Session ID",
-                format!("0x{:04X}", header.session_id),
-                someip_offset + 10,
-                2,
-            ),
-            field(
-                "Message type",
-                format!("0x{:02X}", header.message_type),
-                someip_offset + 14,
-                1,
-            ),
-        ],
-    });
+    add_someip_layer(&mut layers, &header, someip_offset, 1);
     if header.service_id == someip::SD_SERVICE_ID && header.method_id == someip::SD_METHOD_ID {
         match sd::parse(payload) {
             Ok(message) => {
@@ -339,7 +433,69 @@ pub fn dissect_with_catalog(
     let decoded = catalog
         .and_then(|c| c.event(header.service_id, header.method_id))
         .map(|event| radeau_catalog::decode(&event.signals, payload));
+    let first_len = 8usize.saturating_add(header.length as usize);
+    let mut remaining = datagram.payload.get(first_len..).unwrap_or_default();
+    let mut offset = someip_offset + first_len;
+    let mut number = 2;
+    while crate::classify::someip_plausible(remaining) {
+        let (next, _) = someip::parse(remaining).expect("plausibility checked");
+        add_someip_layer(&mut layers, &next, offset, number);
+        let size = 8usize.saturating_add(next.length as usize);
+        remaining = remaining.get(size..).unwrap_or_default();
+        offset += size;
+        number += 1;
+    }
     detail_with_decoded(idx, t_s, wire, payload_offset, layers, decoded)
+}
+
+fn add_someip_layer(
+    layers: &mut Vec<FrameLayer>,
+    h: &someip::SomeIpHeader,
+    offset: usize,
+    number: usize,
+) {
+    layers.push(FrameLayer {
+        protocol: if number == 1 {
+            "SOME/IP".into()
+        } else {
+            format!("SOME/IP ({number})")
+        },
+        summary: format!(
+            "0x{:04X}:0x{:04X} · session 0x{:04X}",
+            h.service_id, h.method_id, h.session_id
+        ),
+        fields: vec![
+            field("Service ID", format!("0x{:04X}", h.service_id), offset, 2),
+            field("Method ID", format!("0x{:04X}", h.method_id), offset + 2, 2),
+            field("Length", h.length.to_string(), offset + 4, 4),
+            field("Client ID", format!("0x{:04X}", h.client_id), offset + 8, 2),
+            field(
+                "Session ID",
+                format!("0x{:04X}", h.session_id),
+                offset + 10,
+                2,
+            ),
+            field(
+                "Message type",
+                format!("0x{:02X}", h.message_type),
+                offset + 14,
+                1,
+            ),
+        ],
+    });
+}
+fn add_icmp(layers: &mut Vec<FrameLayer>, bytes: &[u8], offset: usize, name: &str) {
+    match icmp::IcmpPacket::parse(bytes) {
+        Ok(p) => layers.push(FrameLayer {
+            protocol: name.into(),
+            summary: format!("type {} · code {}", p.icmp_type, p.code),
+            fields: vec![
+                field("Type", p.icmp_type.to_string(), offset, 1),
+                field("Code", p.code.to_string(), offset + 1, 1),
+            ],
+        }),
+        Err(e) => layers.push(malformed(name, e)),
+    }
 }
 
 fn dissect_gptp(
@@ -347,11 +503,12 @@ fn dissect_gptp(
     t_s: f64,
     wire: &[u8],
     payload: &[u8],
+    l2_len: usize,
     mut layers: Vec<FrameLayer>,
 ) -> FrameDetail {
     match gptp::parse(payload) {
         Ok(message) => {
-            let payload_offset = ethernet::HEADER_LEN
+            let payload_offset = l2_len
                 + gptp::HEADER_LEN
                 + if message.origin_timestamp_ns.is_some() {
                     10
@@ -366,10 +523,25 @@ fn dissect_gptp(
                     message.sequence_id
                 ),
                 fields: vec![
-                    field("Message type", gptp_name(message.msg_type).into(), 14, 1),
-                    field("Domain", message.domain.to_string(), 18, 1),
-                    field("Sequence ID", message.sequence_id.to_string(), 44, 2),
-                    field("Correction", message.correction_ns.to_string(), 22, 8),
+                    field(
+                        "Message type",
+                        gptp_name(message.msg_type).into(),
+                        l2_len,
+                        1,
+                    ),
+                    field("Domain", message.domain.to_string(), l2_len + 4, 1),
+                    field(
+                        "Sequence ID",
+                        message.sequence_id.to_string(),
+                        l2_len + 30,
+                        2,
+                    ),
+                    field(
+                        "Correction",
+                        message.correction_ns.to_string(),
+                        l2_len + 8,
+                        8,
+                    ),
                 ],
             });
             detail(idx, t_s, wire, payload_offset.min(wire.len()), layers)

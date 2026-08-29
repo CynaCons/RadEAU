@@ -9,46 +9,17 @@
 //! IPv4 / UDP via `radeau-proto`) and then parsed back through the same
 //! bounded codecs — the parse the live capture path will use.
 
+use crate::codes::{
+    DIR_RX, DIR_TX, GPTP_TY_SYNC, PROTO_GPTP, PROTO_SD, PROTO_SOMEIP, SD_TY_OFFER,
+    SOMEIP_TY_NOTIFICATION,
+};
+use crate::frame::{GenFrame, SNAP_LEN};
 use radeau_proto::ethernet::{self, EthernetFrame};
 use radeau_proto::ipv4::{self, Ipv4Packet};
 use radeau_proto::udp::{self, UdpDatagram};
 
-/// Protocol classification codes shared with the UI.
-pub const PROTO_SOMEIP: u8 = 0;
-pub const PROTO_SD: u8 = 1;
-pub const PROTO_GPTP: u8 = 2;
-
-/// Message-type codes shared with the UI.
-pub const MSG_EVENT: u8 = 0;
-pub const MSG_OFFER: u8 = 1;
-pub const MSG_SYNC: u8 = 2;
-
-/// Payload preview bytes carried per frame in the batched event.
-pub const SNAP_LEN: usize = 12;
-
 const UDP_PORT_SOMEIP: u16 = 30490;
 const IP_IDENT_MASK: u16 = 0xffff;
-
-/// One generated frame: wire bytes plus the projection the UI consumes.
-#[derive(Debug, Clone)]
-pub struct GenFrame {
-    pub idx: u64,
-    /// Seconds since session start (session timebase, decision D3).
-    pub t_s: f64,
-    pub rx: bool,
-    /// Index into the endpoint table (10.42.0.11..15).
-    pub src_ep: usize,
-    pub proto: u8,
-    pub svc: u16,
-    pub method: u16,
-    pub msg_type: u8,
-    /// -1 when the frame kind carries no session id (gPTP).
-    pub session: i32,
-    /// Full wire length incl. Ethernet header.
-    pub wire_len: u32,
-    /// First payload bytes (UDP payload for L3 frames; L2 payload for gPTP).
-    pub snap: [u8; SNAP_LEN],
-}
 
 struct ServiceSpec {
     svc: u16,
@@ -285,15 +256,20 @@ impl DevGen {
         GenFrame {
             idx,
             t_s,
-            rx: !s.tx,
+            dir: if s.tx { DIR_TX } else { DIR_RX },
             src_ep: s.src_ep,
             proto: PROTO_SOMEIP,
             svc: s.svc,
             method: s.method,
-            msg_type: MSG_EVENT,
+            msg_type: SOMEIP_TY_NOTIFICATION,
             session: self.sessions[k],
             wire_len: parsed.0,
             snap: parsed.1,
+            src_ip: u32::from_be_bytes(src_ip),
+            dst_ip: u32::from_be_bytes(dst_ip),
+            src_mac: mac_u64(endpoint_mac(s.src_ep)),
+            vlan: -1,
+            payload_off: 42,
         }
     }
 
@@ -339,15 +315,20 @@ impl DevGen {
         GenFrame {
             idx,
             t_s,
-            rx: true,
+            dir: DIR_RX,
             src_ep,
             proto: PROTO_SD,
             svc: 0xffff,
             method: 0x8100,
-            msg_type: MSG_OFFER,
+            msg_type: SD_TY_OFFER,
             session: -1,
             wire_len: parsed.0,
             snap: parsed.1,
+            src_ip: u32::from_be_bytes(src_ip),
+            dst_ip: u32::from_be_bytes(SD_MCAST_IP),
+            src_mac: mac_u64(endpoint_mac(src_ep)),
+            vlan: -1,
+            payload_off: 42,
         }
     }
 
@@ -369,17 +350,27 @@ impl DevGen {
         GenFrame {
             idx,
             t_s,
-            rx: true,
+            dir: DIR_RX,
             src_ep: gm_ep,
             proto: PROTO_GPTP,
             svc: 0,
             method: 0,
-            msg_type: MSG_SYNC,
+            msg_type: GPTP_TY_SYNC,
             session: -1,
             wire_len: wire.len() as u32,
             snap: snap_from(&payload),
+            src_ip: 0,
+            dst_ip: 0,
+            src_mac: mac_u64(endpoint_mac(gm_ep)),
+            vlan: -1,
+            payload_off: 14,
         }
     }
+}
+
+fn mac_u64(mac: [u8; 6]) -> u64 {
+    mac.into_iter()
+        .fold(0, |value, byte| (value << 8) | u64::from(byte))
 }
 
 /// Runs the wire bytes back through the production codecs and extracts the

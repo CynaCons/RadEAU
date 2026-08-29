@@ -53,6 +53,7 @@ pub const PROTO_IPV4_OTHER: u8 = 8;
 /// Any other EtherType.
 pub const PROTO_OTHER: u8 = 9;
 /// Reserved for v0.1.9; never emitted before then.
+#[allow(dead_code)]
 pub const PROTO_DOIP: u8 = 10;
 /// Ethernet header unparseable (runt frame).
 pub const PROTO_MALFORMED: u8 = 11;
@@ -62,6 +63,7 @@ pub const PROTO_CLASS_COUNT: usize = 12;
 pub const DIR_TX: u8 = 0;
 pub const DIR_RX: u8 = 1;
 /// The source cannot say (e.g. a pcap file without direction metadata).
+#[allow(dead_code)]
 pub const DIR_UNKNOWN: u8 = 2;
 
 /// SOME/IP message types (`ty` when `p == PROTO_SOMEIP`).

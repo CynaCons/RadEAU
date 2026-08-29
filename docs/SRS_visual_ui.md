@@ -418,11 +418,24 @@ with a CAN trace keyed by arbitration id. Mode, history window and column
 order live in the settings panel rather than on screen, being set once per
 session.
 
-Service and name columns offer filtering through a header glyph that tints
-`accent-primary` while active, opening a 250 px popover: search field, a
-select-all/deselect-all button paired with a `selected / total` count, a
-checkbox list capped at 250 px, and Cancel/Apply. Selecting everything clears
-the filter rather than storing a no-op.
+The Service:Method, Name, Protocol and Direction columns offer filtering
+through a header glyph that tints `accent-primary` while active, opening a
+250 px popover: search field (omitted for the small fixed value sets of
+Protocol and Direction), a select-all/deselect-all button paired with a
+`selected / total` count, a checkbox list capped at 250 px, and Cancel/Apply.
+Selecting everything clears the filter rather than storing a no-op; filters
+apply on Apply, not per checkbox. Values are the distinct values present in
+the buffered ring; Service and Name selections are keyed by (service, method)
+ids so a catalog load mid-session renames rows without invalidating the
+selection. Filtering is a projection over the untouched ring — never an
+ingest filter — and runs **before** the mode projection: Fixed shows the
+latest *matching* frame per key, Sequential's history window holds the last N
+*matching* rows. Pinned keys do not bypass filters. While any filter is
+active a `Filtered · shown / total` chip joins the top-right chip family, the
+empty state reads "No rows match the active filters" when the ring is not
+empty, and applying a filter clears the row expansion the way a mode change
+does. The paused chip's buffered count stays the raw ingest count. Filters
+are session-scoped, like mode and pins.
 
 Any row expands to a **protocol-layer dissection** on `fill-subtle`, indented
 48 px — the Wireshark model. One collapsible section per layer in wire order

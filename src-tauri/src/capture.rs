@@ -13,7 +13,7 @@
 use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -21,12 +21,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::devgen::{DevGen, GenFrame, RateProfile};
+use crate::devgen::{DevGen, RateProfile};
 use crate::dissect::{FrameDetail, FrameRing};
-use crate::simlink::{
-    endpoints_from_handshake, read_handshake_line, validate_handshake_line, FrameMapper,
-    RecordDeframer,
-};
+use crate::endpoints::{ipv4_u32, EndpointDto, EndpointTable};
+use crate::frame::{GenFrame, SNAP_LEN};
+use crate::simlink::{read_handshake_line, validate_handshake_line, FrameMapper, RecordDeframer};
 
 /// Batch cadence (SRS §1): one event per deadline interval, 16 ms default.
 pub const BATCH_INTERVAL_MS: u64 = 16;
@@ -45,6 +44,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(2);
 const EVENT_FRAMES_BATCH: &str = "frames:batch";
 const EVENT_CAPTURE_SESSION: &str = "capture:session";
 const EVENT_CAPTURE_LINK: &str = "capture:link";
+const EVENT_CAPTURE_STATS: &str = "capture:stats";
 
 /// Tagged capture source — mirrors the UI `CaptureSource` union.
 #[derive(Debug, Clone, Deserialize)]
@@ -87,7 +87,12 @@ struct FrameBatch {
     /// Full wire length incl. Ethernet header.
     l: Vec<u32>,
     /// Payload preview bytes.
-    pb: Vec<[u8; crate::devgen::SNAP_LEN]>,
+    pb: Vec<[u8; SNAP_LEN]>,
+    sa: Vec<u32>,
+    da: Vec<u32>,
+    sm: Vec<u64>,
+    vl: Vec<i16>,
+    po: Vec<u16>,
 }
 
 impl FrameBatch {
@@ -105,13 +110,18 @@ impl FrameBatch {
             se: Vec::with_capacity(cap),
             l: Vec::with_capacity(cap),
             pb: Vec::with_capacity(cap),
+            sa: Vec::with_capacity(cap),
+            da: Vec::with_capacity(cap),
+            sm: Vec::with_capacity(cap),
+            vl: Vec::with_capacity(cap),
+            po: Vec::with_capacity(cap),
         }
     }
 
     fn push(&mut self, f: &GenFrame) {
         self.i.push(f.idx);
         self.t.push(f.t_s);
-        self.d.push(u8::from(f.rx));
+        self.d.push(f.dir);
         self.s.push(f.src_ep as u8);
         self.p.push(f.proto);
         self.sv.push(f.svc);
@@ -120,6 +130,11 @@ impl FrameBatch {
         self.se.push(f.session);
         self.l.push(f.wire_len);
         self.pb.push(f.snap);
+        self.sa.push(f.src_ip);
+        self.da.push(f.dst_ip);
+        self.sm.push(f.src_mac);
+        self.vl.push(f.vlan);
+        self.po.push(f.payload_off);
     }
 
     #[cfg(test)]
@@ -131,13 +146,6 @@ impl FrameBatch {
         }
         batch
     }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct EndpointDto {
-    name: String,
-    ip: String,
 }
 
 #[derive(Serialize)]
@@ -175,10 +183,81 @@ fn emit_session(
     );
 }
 
-fn push_frame(acc: &Arc<Mutex<VecDeque<GenFrame>>>, f: GenFrame) {
+#[derive(Debug)]
+struct CaptureStats {
+    received: AtomicU64,
+    emitted: AtomicU64,
+    accumulator_dropped: AtomicU64,
+    gap_records: AtomicU64,
+    gap_dropped: AtomicU64,
+    malformed: AtomicU64,
+    kernel_dropped: AtomicU64,
+    by_class: [AtomicU64; crate::codes::PROTO_CLASS_COUNT],
+}
+impl Default for CaptureStats {
+    fn default() -> Self {
+        Self {
+            received: 0.into(),
+            emitted: 0.into(),
+            accumulator_dropped: 0.into(),
+            gap_records: 0.into(),
+            gap_dropped: 0.into(),
+            malformed: 0.into(),
+            kernel_dropped: 0.into(),
+            by_class: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureStatsEvent {
+    seq: u64,
+    elapsed_s: f64,
+    received: u64,
+    emitted: u64,
+    accumulator_dropped: u64,
+    gap_records: u64,
+    gap_dropped: u64,
+    malformed: u64,
+    kernel_dropped: u64,
+    by_class: [u64; crate::codes::PROTO_CLASS_COUNT],
+}
+impl CaptureStats {
+    fn observe(&self, f: &GenFrame) {
+        self.received.fetch_add(1, Ordering::Relaxed);
+        if f.proto == crate::codes::PROTO_MALFORMED {
+            self.malformed.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(c) = self.by_class.get(f.proto as usize) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    fn event(&self, seq: u64, elapsed_s: f64) -> CaptureStatsEvent {
+        CaptureStatsEvent {
+            seq,
+            elapsed_s,
+            received: self.received.load(Ordering::Relaxed),
+            emitted: self.emitted.load(Ordering::Relaxed),
+            accumulator_dropped: self.accumulator_dropped.load(Ordering::Relaxed),
+            gap_records: self.gap_records.load(Ordering::Relaxed),
+            gap_dropped: self.gap_dropped.load(Ordering::Relaxed),
+            malformed: self.malformed.load(Ordering::Relaxed),
+            kernel_dropped: self.kernel_dropped.load(Ordering::Relaxed),
+            by_class: std::array::from_fn(|n| self.by_class[n].load(Ordering::Relaxed)),
+        }
+    }
+}
+fn emit_stats(app: &AppHandle, stats: &CaptureStats, start: Instant, seq: &mut u64) {
+    let event = stats.event(*seq, start.elapsed().as_secs_f64());
+    *seq += 1;
+    let _ = app.emit(EVENT_CAPTURE_STATS, event);
+}
+
+fn push_frame(acc: &Arc<Mutex<VecDeque<GenFrame>>>, f: GenFrame, stats: &CaptureStats) {
     if let Ok(mut guard) = acc.lock() {
         if guard.len() >= ACCUMULATOR_CAP {
             guard.pop_front();
+            stats.accumulator_dropped.fetch_add(1, Ordering::Relaxed);
         }
         guard.push_back(f);
     }
@@ -191,6 +270,7 @@ fn try_emit_batch(
     start: Instant,
     last_emit_ms: &mut u64,
     seq: &mut u64,
+    stats: &CaptureStats,
 ) {
     let elapsed_ms = Instant::now().duration_since(start).as_millis() as u64;
     let pending = accumulator.lock().map(|a| !a.is_empty()).unwrap_or(false);
@@ -202,6 +282,9 @@ fn try_emit_batch(
                 batch.push(&f);
             }
         }
+        stats
+            .emitted
+            .fetch_add(batch.i.len() as u64, Ordering::Relaxed);
         batch.seq = *seq;
         *seq += 1;
         *last_emit_ms = elapsed_ms;
@@ -210,16 +293,15 @@ fn try_emit_batch(
 }
 
 fn devgen_endpoints() -> Vec<EndpointDto> {
-    (0..5)
-        .map(|ep| {
-            let ip = crate::devgen::endpoint_ip(ep);
-            let s = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-            EndpointDto {
-                name: s.clone(),
-                ip: s,
-            }
-        })
-        .collect()
+    let mut table = EndpointTable::default();
+    for ep in 0..5 {
+        let ip = crate::devgen::endpoint_ip(ep);
+        table.with_hint(
+            ipv4_u32(ip),
+            format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
+        );
+    }
+    table.to_dtos()
 }
 
 struct Session {
@@ -288,6 +370,7 @@ fn emitter_loop_devgen(
     accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
     frame_ring: Arc<Mutex<FrameRing>>,
     profile: RateProfile,
+    stats: Arc<CaptureStats>,
 ) {
     emit_session(&app, "devgen", None, devgen_endpoints());
     emit_link(&app, "connected", None);
@@ -299,6 +382,8 @@ fn emitter_loop_devgen(
     let mut carry = 0.0f64;
     let mut last_emit_ms: u64 = 0;
     let mut seq: u64 = 0;
+    let mut stats_seq = 0;
+    let mut last_stats = 0u64;
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -320,9 +405,11 @@ fn emitter_loop_devgen(
             gen.gen_frames_with_wire(n, rate, &mut scratch_out);
             if let Ok(mut acc) = accumulator.lock() {
                 for (f, wire) in scratch_out.drain(..) {
+                    stats.observe(&f);
                     retain_frame(&frame_ring, &f, wire);
                     if acc.len() >= ACCUMULATOR_CAP {
                         acc.pop_front();
+                        stats.accumulator_dropped.fetch_add(1, Ordering::Relaxed);
                     }
                     acc.push_back(f);
                 }
@@ -336,8 +423,15 @@ fn emitter_loop_devgen(
             start,
             &mut last_emit_ms,
             &mut seq,
+            &stats,
         );
+        let ms = start.elapsed().as_millis() as u64;
+        if ms.saturating_sub(last_stats) >= 1000 {
+            emit_stats(&app, &stats, start, &mut stats_seq);
+            last_stats = ms;
+        }
     }
+    emit_stats(&app, &stats, start, &mut stats_seq);
     emit_link(&app, "closed", None);
 }
 
@@ -384,10 +478,13 @@ fn emitter_loop_sim(
     accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
     frame_ring: Arc<Mutex<FrameRing>>,
     addr: String,
+    stats: Arc<CaptureStats>,
 ) {
     let start = Instant::now();
     let mut last_emit_ms: u64 = 0;
     let mut seq: u64 = 0;
+    let mut stats_seq = 0;
+    let mut last_stats = 0u64;
     let mut mapper = FrameMapper::new();
     let mut session_emitted = false;
     let mut backoff = BACKOFF_START;
@@ -440,6 +537,7 @@ fn emitter_loop_sim(
                         start,
                         &mut last_emit_ms,
                         &mut seq,
+                        &stats,
                     );
                     continue;
                 }
@@ -473,11 +571,19 @@ fn emitter_loop_sim(
         };
 
         if !session_emitted {
-            let endpoints = endpoints_from_handshake(&hs.ports)
-                .into_iter()
-                .map(|(name, ip)| EndpointDto { name, ip })
-                .collect();
-            emit_session(&app, "sim", Some(hs.scenario.clone()), endpoints);
+            let mut ports = hs.ports.clone();
+            ports.sort_by_key(|p| p.id);
+            for p in ports {
+                if let Ok(ip) = p.ip.parse::<std::net::Ipv4Addr>() {
+                    mapper.endpoints.with_hint(u32::from(ip), p.name);
+                }
+            }
+            emit_session(
+                &app,
+                "sim",
+                Some(hs.scenario.clone()),
+                mapper.endpoints.to_dtos(),
+            );
             session_emitted = true;
         }
         emit_link(&app, "connected", Some(hs.scenario.clone()));
@@ -501,9 +607,28 @@ fn emitter_loop_sim(
                     loop {
                         match deframer.next_record() {
                             Ok(Some(rec)) => {
+                                if let crate::simlink::MonitorRecord::Gap {
+                                    dropped_count, ..
+                                } = &rec
+                                {
+                                    stats.gap_records.fetch_add(1, Ordering::Relaxed);
+                                    stats
+                                        .gap_dropped
+                                        .fetch_add(*dropped_count as u64, Ordering::Relaxed);
+                                }
+                                let endpoint_count = mapper.endpoints.len();
                                 if let Some((f, wire)) = mapper.map_record_with_wire(rec) {
+                                    stats.observe(&f);
                                     retain_frame(&frame_ring, &f, wire);
-                                    push_frame(&accumulator, f);
+                                    push_frame(&accumulator, f, &stats);
+                                    if mapper.endpoints.len() > endpoint_count {
+                                        emit_session(
+                                            &app,
+                                            "sim",
+                                            Some(hs.scenario.clone()),
+                                            mapper.endpoints.to_dtos(),
+                                        );
+                                    }
                                 }
                             }
                             Ok(None) => break,
@@ -528,7 +653,13 @@ fn emitter_loop_sim(
                 start,
                 &mut last_emit_ms,
                 &mut seq,
+                &stats,
             );
+            let ms = start.elapsed().as_millis() as u64;
+            if ms.saturating_sub(last_stats) >= 1000 {
+                emit_stats(&app, &stats, start, &mut stats_seq);
+                last_stats = ms;
+            }
         }
 
         if stop.load(Ordering::Relaxed) {
@@ -541,6 +672,7 @@ fn emitter_loop_sim(
             backoff = (backoff * 2).min(BACKOFF_MAX);
         }
     }
+    emit_stats(&app, &stats, start, &mut stats_seq);
     emit_link(&app, "closed", None);
 }
 
@@ -552,6 +684,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     let stop = Arc::new(AtomicBool::new(false));
     let credits = Arc::new(AtomicU32::new(MAX_CREDITS));
     let accumulator = Arc::new(Mutex::new(VecDeque::with_capacity(ACCUMULATOR_CAP)));
+    let stats = Arc::new(CaptureStats::default());
     if let Ok(mut ring) = state.frame_ring.lock() {
         ring.clear();
     }
@@ -559,6 +692,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     let thread_credits = Arc::clone(&credits);
     let thread_acc = Arc::clone(&accumulator);
     let thread_ring = Arc::clone(&state.frame_ring);
+    let thread_stats = Arc::clone(&stats);
 
     let handle = match source {
         SourceSpec::Devgen { profile } => {
@@ -574,6 +708,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
                         thread_acc,
                         thread_ring,
                         profile,
+                        thread_stats,
                     );
                 })
                 .map_err(|e| format!("failed to spawn emitter: {e}"))?
@@ -592,6 +727,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
                         thread_acc,
                         thread_ring,
                         addr,
+                        thread_stats,
                     );
                 })
                 .map_err(|e| format!("failed to spawn reader: {e}"))?
@@ -659,9 +795,9 @@ pub fn ack_frames(state: State<CaptureState>, n: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classify::classify_frame;
     use crate::simlink::{
-        classify_frame, encode_frame_record, validate_handshake_line, FrameMapper, MonitorRecord,
-        RecordDeframer,
+        encode_frame_record, validate_handshake_line, FrameMapper, MonitorRecord, RecordDeframer,
     };
 
     #[test]
@@ -710,6 +846,11 @@ mod tests {
         assert_eq!(batch.se.len(), 50);
         assert_eq!(batch.l.len(), 50);
         assert_eq!(batch.pb.len(), 50);
+        assert_eq!(batch.sa.len(), 50);
+        assert_eq!(batch.da.len(), 50);
+        assert_eq!(batch.sm.len(), 50);
+        assert_eq!(batch.vl.len(), 50);
+        assert_eq!(batch.po.len(), 50);
     }
 
     #[test]
@@ -785,21 +926,22 @@ mod tests {
             }
         }
         assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].proto, crate::devgen::PROTO_GPTP);
+        assert_eq!(frames[0].proto, crate::codes::PROTO_GPTP);
         assert_eq!(frames[0].src_ep, 0);
         assert!((frames[0].t_s - 0.0).abs() < f64::EPSILON);
 
         let batch = FrameBatch::from_frames(0, &frames);
         assert_eq!(batch.i, vec![0]);
-        assert_eq!(batch.p, vec![crate::devgen::PROTO_GPTP]);
+        assert_eq!(batch.p, vec![crate::codes::PROTO_GPTP]);
         assert_eq!(batch.d, vec![1]);
-        assert_eq!(batch.ty, vec![crate::devgen::MSG_SYNC]);
+        assert_eq!(batch.ty, vec![crate::codes::GPTP_TY_OTHER]);
         assert_eq!(batch.se, vec![-1]);
         assert_eq!(batch.l[0], gptp_wire.len() as u32);
 
         // Direct classify also covers SOME/IP notification → event.
-        let classified = classify_frame(&gptp_wire, 7, 1.5, 5).unwrap();
-        assert_eq!(classified.src_ep, 4);
+        let mut endpoints = EndpointTable::default();
+        let classified = classify_frame(&gptp_wire, 7, 1.5, crate::codes::DIR_RX, &mut endpoints);
+        assert_eq!(classified.src_ep, 0);
         assert_eq!(classified.idx, 7);
 
         let _ = MonitorRecord::Gap {

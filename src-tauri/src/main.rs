@@ -13,9 +13,12 @@ use tauri::Manager;
 // capture profile, and superseded as the default source by ecu-netsim (v0.4).
 mod capture;
 mod catalog;
+mod classify;
 mod codes;
 mod devgen;
 mod dissect;
+mod endpoints;
+mod frame;
 mod simlink;
 
 fn main() {

@@ -15,6 +15,8 @@ use crate::ParseError;
 /// Entry type codes (service entry family).
 pub const ENTRY_FIND_SERVICE: u8 = 0x00;
 pub const ENTRY_OFFER_SERVICE: u8 = 0x01;
+pub const ENTRY_SUBSCRIBE_EVENTGROUP: u8 = 0x06;
+pub const ENTRY_SUBSCRIBE_EVENTGROUP_ACK: u8 = 0x07;
 
 /// One type-1 (service) SD entry. TTL 0 on an Offer means StopOffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +69,13 @@ pub fn parse(payload: &[u8]) -> Result<SdMessage, ParseError> {
 
     let mut entries = Vec::with_capacity(entries_len / ENTRY_LEN);
     for entry in payload[PREFIX_LEN..entries_end].chunks_exact(ENTRY_LEN) {
-        if entry[0] != ENTRY_FIND_SERVICE && entry[0] != ENTRY_OFFER_SERVICE {
+        if !matches!(
+            entry[0],
+            ENTRY_FIND_SERVICE
+                | ENTRY_OFFER_SERVICE
+                | ENTRY_SUBSCRIBE_EVENTGROUP
+                | ENTRY_SUBSCRIBE_EVENTGROUP_ACK
+        ) {
             return Err(ParseError::Malformed);
         }
         entries.push(SdEntry {

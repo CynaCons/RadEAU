@@ -6,9 +6,12 @@
 
 use radeau_catalog::{BaseType, Catalog, Signal};
 use radeau_proto::{
-    ethernet::EthernetFrame,
+    arp::{self, ArpPacket},
+    ethernet::{EthernetFrame, VlanTag},
     gptp,
+    icmp::IcmpPacket,
     ipv4::{self, Ipv4Packet},
+    ipv6::Ipv6Packet,
     sd, someip,
     udp::UdpDatagram,
 };
@@ -158,6 +161,10 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
     let mut sd_at = start;
     let mut ptp_at = start;
     let mut fusion_stats_at = start;
+    let mut arp_at = start + Duration::from_secs(2);
+    let mut router_at = start + Duration::from_secs(5);
+    let mut runt_at = start + Duration::from_secs(10);
+    let mut arp_node = 0usize;
     let mut sessions = [1u16; 5];
     let mut seq = 1;
     let mut rng = seed;
@@ -221,6 +228,49 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
             }
             seq = next_id(seq);
             ptp_at += Duration::from_millis(125);
+        }
+        if now >= arp_at {
+            let asker = NODES[arp_node];
+            fanout(
+                &mut clients,
+                Record {
+                    time: ns(start),
+                    port: asker.port,
+                    frame: arp_frame(asker, NODES[4], false),
+                },
+            );
+            fanout(
+                &mut clients,
+                Record {
+                    time: ns(start),
+                    port: 5,
+                    frame: arp_frame(NODES[4], asker, true),
+                },
+            );
+            arp_node = (arp_node + 1) % 4;
+            arp_at += Duration::from_secs(2);
+        }
+        if now >= router_at {
+            fanout(
+                &mut clients,
+                Record {
+                    time: ns(start),
+                    port: 5,
+                    frame: router_solicitation(),
+                },
+            );
+            router_at += Duration::from_secs(5);
+        }
+        if now >= runt_at {
+            fanout(
+                &mut clients,
+                Record {
+                    time: ns(start),
+                    port: 4,
+                    frame: runt_frame(),
+                },
+            );
+            runt_at += Duration::from_secs(10);
         }
         thread::sleep(Duration::from_millis(1));
     }
@@ -434,7 +484,12 @@ fn offer(node: Node, session: u16, ident: &mut u16) -> Vec<u8> {
 }
 fn ip_frame(node: Node, dst: [u8; 4], message: &[u8], ident: &mut u16) -> Vec<u8> {
     let mut udp = Vec::new();
-    UdpDatagram::build(node.ip, dst, 30490, 30490, message, &mut udp);
+    let port = if node.port == 3 && message.get(..2) != Some(&someip::SD_SERVICE_ID.to_be_bytes()) {
+        30501
+    } else {
+        30490
+    };
+    UdpDatagram::build(node.ip, dst, port, port, message, &mut udp);
     let mut ip = Vec::new();
     Ipv4Packet::build(
         node.ip,
@@ -448,14 +503,136 @@ fn ip_frame(node: Node, dst: [u8; 4], message: &[u8], ident: &mut u16) -> Vec<u8
     );
     *ident = next_id(*ident);
     let mut out = Vec::new();
+    let dmac = [1, 0, 0x5e, dst[1] & 0x7f, dst[2], dst[3]];
+    let smac = node_mac(node);
+    if node.port == 3 {
+        EthernetFrame::build_tagged(
+            dmac,
+            smac,
+            VlanTag {
+                pcp: 5,
+                dei: false,
+                vid: 10,
+            },
+            radeau_proto::ethernet::ETHERTYPE_IPV4,
+            &ip,
+            &mut out,
+        );
+    } else {
+        EthernetFrame::build(
+            dmac,
+            smac,
+            radeau_proto::ethernet::ETHERTYPE_IPV4,
+            &ip,
+            &mut out,
+        );
+    }
+    out
+}
+fn node_mac(node: Node) -> [u8; 6] {
+    [2, 0x52, 0x41, 0x44, 0, node.port as u8]
+}
+fn arp_frame(sender: Node, target: Node, reply: bool) -> Vec<u8> {
+    let mut payload = Vec::new();
+    ArpPacket::build(
+        &ArpPacket {
+            hw_type: arp::HTYPE_ETHERNET,
+            proto_type: arp::PTYPE_IPV4,
+            hw_len: 6,
+            proto_len: 4,
+            opcode: if reply {
+                arp::OPCODE_REPLY
+            } else {
+                arp::OPCODE_REQUEST
+            },
+            sender_mac: node_mac(sender),
+            sender_ip: sender.ip,
+            target_mac: if reply { node_mac(target) } else { [0; 6] },
+            target_ip: target.ip,
+        },
+        &mut payload,
+    );
+    let dst = if reply { node_mac(target) } else { [0xff; 6] };
+    let mut out = Vec::new();
+    if sender.port == 3 {
+        EthernetFrame::build_tagged(
+            dst,
+            node_mac(sender),
+            VlanTag {
+                pcp: 5,
+                dei: false,
+                vid: 10,
+            },
+            radeau_proto::ethernet::ETHERTYPE_ARP,
+            &payload,
+            &mut out,
+        )
+    } else {
+        EthernetFrame::build(
+            dst,
+            node_mac(sender),
+            radeau_proto::ethernet::ETHERTYPE_ARP,
+            &payload,
+            &mut out,
+        )
+    }
+    out
+}
+fn router_solicitation() -> Vec<u8> {
+    let mac = node_mac(NODES[4]);
+    let src = [
+        0xfe,
+        0x80,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        mac[0] ^ 0x02,
+        mac[1],
+        mac[2],
+        0xff,
+        0xfe,
+        mac[3],
+        mac[4],
+        mac[5],
+    ];
+    let dst = [0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+    let mut icmp = Vec::new();
+    IcmpPacket::build(133, 0, 0, [0; 4], &[], &mut icmp);
+    let sum = icmpv6_checksum(src, dst, &icmp);
+    icmp[2..4].copy_from_slice(&sum.to_be_bytes());
+    let mut ip = Vec::new();
+    Ipv6Packet::build(src, dst, 58, 255, &icmp, &mut ip);
+    let mut out = Vec::new();
     EthernetFrame::build(
-        [1, 0, 0x5e, dst[1] & 0x7f, dst[2], dst[3]],
-        [2, 0x52, 0x41, 0x44, 0, node.port as u8],
-        radeau_proto::ethernet::ETHERTYPE_IPV4,
+        [0x33, 0x33, 0, 0, 0, 2],
+        mac,
+        radeau_proto::ethernet::ETHERTYPE_IPV6,
         &ip,
         &mut out,
     );
     out
+}
+
+fn icmpv6_checksum(src: [u8; 16], dst: [u8; 16], message: &[u8]) -> u16 {
+    let length = (message.len() as u32).to_be_bytes();
+    let next_header = [0, 0, 0, 58];
+    radeau_proto::internet_checksum(&[&src, &dst, &length, &next_header, message])
+}
+
+fn runt_frame() -> Vec<u8> {
+    let mut header = Vec::new();
+    EthernetFrame::build(
+        node_mac(NODES[4]),
+        node_mac(NODES[3]),
+        radeau_proto::ethernet::ETHERTYPE_IPV4,
+        &[],
+        &mut header,
+    );
+    header.truncate(10);
+    header
 }
 fn ptp(kind: u8, sequence: u16, stamp: u64) -> Vec<u8> {
     let mut payload = Vec::new();
@@ -546,13 +723,19 @@ mod tests {
                     ];
                     assert_eq!(radeau_proto::internet_checksum(&[&pseudo, ip.payload]), 0);
                     let udp = UdpDatagram::parse(ip.payload).unwrap();
-                    assert_eq!((udp.src_port, udp.dst_port), (30490, 30490));
                     let (someip, payload) = someip::parse(udp.payload).unwrap();
                     if someip.service_id == someip::SD_SERVICE_ID {
+                        assert_eq!((udp.src_port, udp.dst_port), (30490, 30490));
                         assert_eq!(someip.method_id, someip::SD_METHOD_ID);
                         assert_eq!(sd::parse(payload).unwrap().entries[0].ttl, 3);
                         saw_offer = true;
                     } else {
+                        let expected = if someip.service_id == 0x1103 {
+                            30501
+                        } else {
+                            30490
+                        };
+                        assert_eq!((udp.src_port, udp.dst_port), (expected, expected));
                         assert_eq!(someip.message_type, someip::MSG_NOTIFICATION);
                         assert_ne!(someip.method_id & 0x8000, 0);
                         saw_event = true;
@@ -598,5 +781,52 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(payload[used..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn background_frames_and_lidar_wire_policy() {
+        let request = arp_frame(NODES[2], NODES[4], false);
+        let eth = EthernetFrame::parse(&request).unwrap();
+        assert_eq!(eth.vlan.map(|v| (v.vid, v.pcp)), Some((10, 5)));
+        assert_eq!(
+            ArpPacket::parse(eth.payload).unwrap().opcode,
+            arp::OPCODE_REQUEST
+        );
+        let reply = arp_frame(NODES[4], NODES[2], true);
+        assert_eq!(
+            ArpPacket::parse(EthernetFrame::parse(&reply).unwrap().payload)
+                .unwrap()
+                .opcode,
+            arp::OPCODE_REPLY
+        );
+        let rs = router_solicitation();
+        let eth = EthernetFrame::parse(&rs).unwrap();
+        let ip = Ipv6Packet::parse(eth.payload).unwrap();
+        assert_eq!(
+            ip.src,
+            [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x52, 0x41, 0xff, 0xfe, 0x44, 0, 5]
+        );
+        assert_eq!(ip.next_header, 58);
+        assert_eq!(IcmpPacket::parse(ip.payload).unwrap().icmp_type, 133);
+        let mut pseudo = Vec::new();
+        pseudo.extend_from_slice(&ip.src);
+        pseudo.extend_from_slice(&ip.dst);
+        pseudo.extend_from_slice(&(ip.payload.len() as u32).to_be_bytes());
+        pseudo.extend_from_slice(&[0, 0, 0, 58]);
+        assert_eq!(radeau_proto::internet_checksum(&[&pseudo, ip.payload]), 0);
+        assert_eq!(
+            runt_frame(),
+            vec![0x02, 0x52, 0x41, 0x44, 0, 5, 0x02, 0x52, 0x41, 0x44]
+        );
+    }
+
+    #[test]
+    fn icmpv6_checksum_matches_fixed_vector() {
+        let src = [
+            0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x52, 0x41, 0xff, 0xfe, 0x44, 0, 5,
+        ];
+        let dst = [0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+        let message = [133, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(icmpv6_checksum(src, dst, &message), 0x3c9c);
     }
 }

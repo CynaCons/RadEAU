@@ -10,9 +10,12 @@
 //! multi-byte wire fields big-endian; an input shorter than a field's extent
 //! yields *missing* (`ParseError::Truncated`), never a partial value.
 
+pub mod arp;
 pub mod ethernet;
 pub mod gptp;
+pub mod icmp;
 pub mod ipv4;
+pub mod ipv6;
 pub mod sd;
 pub mod someip;
 pub mod udp;
@@ -85,3 +88,4 @@ mod tests {
         assert_eq!(super::CRATE_NAME, "radeau-proto");
     }
 }
+pub mod tcp;
