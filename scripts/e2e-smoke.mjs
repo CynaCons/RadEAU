@@ -1295,7 +1295,10 @@ async function main() {
         })()`);
         return d && !d.empty && d.layerCount >= 1 ? d : null;
       }, 10_000, "DoIP TesterPresent dissection panel");
-      if (!doipDetail.hasTcp) fail("DoIP dissection missing TCP layer");
+      if (!doipDetail.hasTcp)
+        fail(
+          `DoIP dissection missing TCP layer (idx ${doipExpand.idx}): layers=${JSON.stringify(doipDetail.layers)} text=${doipDetail.text.slice(0, 400)}`,
+        );
       else if (!doipDetail.hasDoip) fail("DoIP dissection missing DoIP layer");
       else if (!doipDetail.hasUds) fail("DoIP dissection missing UDS layer");
       else if (!doipDetail.hasTesterPresent)

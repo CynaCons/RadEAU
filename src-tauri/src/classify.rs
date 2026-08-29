@@ -5,7 +5,7 @@ use crate::{
     frame::{GenFrame, SNAP_LEN},
 };
 use radeau_proto::{
-    arp,
+    arp, doip,
     ethernet::{self, EthernetFrame},
     gptp, icmp,
     ipv4::{self, Ipv4Packet},
@@ -15,6 +15,48 @@ use radeau_proto::{
     tcp::TcpSegment,
     udp::{self, UdpDatagram},
 };
+
+fn set_doip_columns(base: &mut GenFrame, header: doip::DoipHeader, body: &[u8]) {
+    base.proto = PROTO_DOIP;
+    base.svc = 0;
+    base.method = 0;
+    base.msg_type = doip::ty_code(header.payload_type);
+    base.session = -1;
+    if let Ok(payload) = doip::parse_payload(header, body) {
+        use doip::DoipPayload::*;
+        match payload {
+            VehicleAnnouncement {
+                logical_address, ..
+            } => base.svc = logical_address,
+            RoutingActivationRequest { source_address, .. }
+            | AliveCheckResponse { source_address } => base.svc = source_address,
+            RoutingActivationResponse { entity_address, .. } => base.method = entity_address,
+            Diagnostic {
+                source_address,
+                target_address,
+                uds,
+            } => {
+                base.svc = source_address;
+                base.method = target_address;
+                base.session = uds.first().copied().map_or(-1, i32::from);
+            }
+            DiagnosticAck {
+                source_address,
+                target_address,
+                ..
+            }
+            | DiagnosticNack {
+                source_address,
+                target_address,
+                ..
+            } => {
+                base.svc = source_address;
+                base.method = target_address;
+            }
+            _ => {}
+        }
+    }
+}
 
 fn mac_u64(mac: [u8; 6]) -> u64 {
     mac.into_iter().fold(0, |v, b| (v << 8) | u64::from(b))
@@ -235,7 +277,13 @@ fn classify_ipv4(
                 base.svc = u.src_port;
                 base.method = u.dst_port;
                 base.snap = snap(frame, base.payload_off as usize);
-                if someip_plausible(u.payload) {
+                if u.src_port == doip::DOIP_PORT || u.dst_port == doip::DOIP_PORT {
+                    if let Ok((h, body)) = doip::parse_header(u.payload) {
+                        base.payload_off = (l4off + udp::HEADER_LEN + doip::HEADER_LEN) as u16;
+                        base.snap = snap(frame, base.payload_off as usize);
+                        set_doip_columns(base, h, body);
+                    }
+                } else if someip_plausible(u.payload) {
                     let (h, p): (SomeIpHeader, &[u8]) =
                         someip::parse(u.payload).expect("plausibility bounds header");
                     base.svc = h.service_id;
@@ -258,7 +306,15 @@ fn classify_ipv4(
                 base.svc = t.src_port;
                 base.method = t.dst_port;
                 base.payload_off = (l4off + t.data_offset as usize * 4) as u16;
-                base.snap = snap(frame, base.payload_off as usize)
+                base.snap = snap(frame, base.payload_off as usize);
+                if (t.src_port == doip::DOIP_PORT || t.dst_port == doip::DOIP_PORT)
+                    && doip::plausible(t.payload)
+                {
+                    let (h, body) = doip::parse_header(t.payload).expect("plausibility checked");
+                    base.payload_off += doip::HEADER_LEN as u16;
+                    base.snap = snap(frame, base.payload_off as usize);
+                    set_doip_columns(base, h, body);
+                }
             } else {
                 base.payload_off = l4off as u16;
                 base.snap = snap(frame, l4off)
@@ -286,6 +342,41 @@ fn classify_ipv4(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use radeau_proto::ethernet::EthernetFrame;
+
+    fn ip_frame(protocol: u8, transport: &[u8]) -> Vec<u8> {
+        let mut ip = Vec::new();
+        Ipv4Packet::build(
+            [10, 42, 0, 99],
+            [10, 42, 0, 20],
+            protocol,
+            1,
+            64,
+            0,
+            transport,
+            &mut ip,
+        );
+        let mut wire = Vec::new();
+        EthernetFrame::build(
+            [2, 0x52, 0x41, 0x44, 0, 2],
+            [2, 0x52, 0x41, 0x44, 0, 1],
+            ethernet::ETHERTYPE_IPV4,
+            &ip,
+            &mut wire,
+        );
+        wire
+    }
+
+    fn classified(protocol: u8, transport: &[u8]) -> GenFrame {
+        let mut endpoints = EndpointTable::default();
+        classify_frame(
+            &ip_frame(protocol, transport),
+            0,
+            0.0,
+            DIR_RX,
+            &mut endpoints,
+        )
+    }
     #[test]
     fn direction_is_always_observed() {
         for b in [0, 1, 255] {
@@ -298,5 +389,89 @@ mod tests {
         let f = classify_frame(&[0; 10], 0, 0.0, DIR_RX, &mut e);
         assert_eq!(f.proto, PROTO_MALFORMED);
         assert_eq!(f.src_ep, ENDPOINT_OVERFLOW as usize);
+    }
+
+    #[test]
+    fn udp_doip_discovery_is_classified() {
+        let mut message = Vec::new();
+        doip::build_message(2, 0x0001, &[], &mut message);
+        let mut datagram = Vec::new();
+        UdpDatagram::build(
+            [10, 42, 0, 99],
+            [10, 42, 0, 20],
+            doip::DOIP_PORT,
+            doip::DOIP_PORT,
+            &message,
+            &mut datagram,
+        );
+        let frame = classified(ipv4::PROTOCOL_UDP, &datagram);
+        assert_eq!(
+            (frame.proto, frame.msg_type),
+            (PROTO_DOIP, DOIP_TY_VEHICLE_ID_REQ)
+        );
+        assert_eq!(frame.payload_off, 50);
+    }
+
+    #[test]
+    fn tcp_diagnostic_columns_and_midstream_fallback() {
+        let mut message = Vec::new();
+        doip::build_message(2, 0x8001, &[0x0e, 0x80, 0x12, 0x34, 0x3e, 0], &mut message);
+        let mut segment = Vec::new();
+        TcpSegment::build(
+            doip::DOIP_PORT,
+            50_000,
+            1,
+            0,
+            0x18,
+            4096,
+            &message,
+            &mut segment,
+        );
+        let frame = classified(ipv4::PROTOCOL_TCP, &segment);
+        assert_eq!((frame.proto, frame.msg_type), (PROTO_DOIP, DOIP_TY_DIAG));
+        assert_eq!(
+            (frame.svc, frame.method, frame.session),
+            (0x0e80, 0x1234, 0x3e)
+        );
+        assert_eq!(frame.payload_off, 62);
+
+        let mut middle = Vec::new();
+        TcpSegment::build(
+            doip::DOIP_PORT,
+            50_000,
+            2,
+            0,
+            0x18,
+            4096,
+            &[1; 12],
+            &mut middle,
+        );
+        assert_eq!(classified(ipv4::PROTOCOL_TCP, &middle).proto, PROTO_TCP);
+    }
+
+    #[test]
+    fn someip_on_sd_port_is_untouched() {
+        let mut message = Vec::new();
+        someip::build(
+            &SomeIpHeader {
+                service_id: 0x1234,
+                method_id: 0x8001,
+                length: 0,
+                client_id: 1,
+                session_id: 2,
+                protocol_version: 1,
+                interface_version: 1,
+                message_type: someip::MSG_NOTIFICATION,
+                return_code: 0,
+            },
+            &[],
+            &mut message,
+        );
+        let mut datagram = Vec::new();
+        UdpDatagram::build([1; 4], [2; 4], 30_490, 30_490, &message, &mut datagram);
+        assert_eq!(
+            classified(ipv4::PROTOCOL_UDP, &datagram).proto,
+            PROTO_SOMEIP
+        );
     }
 }

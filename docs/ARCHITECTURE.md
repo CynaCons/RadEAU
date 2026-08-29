@@ -5,30 +5,39 @@ Diagram companion to the normative documents — [PRD.md](../PRD.md) §3–§4,
 [SRS_ecu_netsim.md](SRS_ecu_netsim.md). Where this page and those documents
 disagree, the documents win.
 
-## 1. Current data path (v0.1.5 — as built)
+## 1. Current data path (v0.1.6 — as built)
 
-One pipeline exists end to end, with **two selectable sources behind one
-capture session** (the dev frame generator and the `ecu-netsim` monitor link;
-the pcap file/stream sources and the channel enum land with v0.1.6,
-[SRS_capture.md](SRS_capture.md)). Every frame a source delivers becomes a
-row: the classifier never drops ([SRS_protocols.md](SRS_protocols.md) §2 —
-VLAN peeled, SOME/IP by plausibility on any port, ARP / IPv6 / TCP / ICMP /
-other / malformed as honest classes), endpoints are keyed by address, and a
-1 Hz `capture:stats` event keeps drops visible. Everything downstream of the
-accumulator is the spec-shaped pipeline (PF-001..004 implemented and tested).
+One pipeline exists end to end behind a **static-dispatch channel enum**
+([SRS_capture.md](SRS_capture.md) §1): the dev frame generator (debug builds
+only), the `ecu-netsim` monitor link, pcap/pcapng files and record streams,
+and a live Npcap/libpcap interface bound at runtime (no SDK). Every frame a
+source delivers becomes a row: the classifier never drops
+([SRS_protocols.md](SRS_protocols.md) §2 — VLAN peeled, SOME/IP by
+plausibility on any port, ARP / IPv6 / TCP / ICMP / DoIP / other / malformed
+as honest classes), endpoints are keyed by address, and a 1 Hz
+`capture:stats` event keeps accumulator, gap and kernel drops visible. The
+frame ring exports to pcap; `radeau.log` (JSONL) and the Diagnostics report
+make a remote bench debuggable. Everything downstream of the accumulator is
+the spec-shaped pipeline (PF-001..004 implemented and tested).
 
 ```mermaid
 flowchart LR
   subgraph netsim["ecu-netsim (live)"]
-    ecus["Simulated ECUs\ncamera · radar · lidar (VLAN 10, port 30501)\ndynamics · fusion\nSOME/IP · SD · gPTP · ARP · ICMPv6 · runts"]
+    ecus["Simulated ECUs\ncamera · radar · lidar (VLAN 10, port 30501)\ndynamics · fusion · DoIP tester\nSOME/IP · SD · gPTP · ARP · ICMPv6 · DoIP · runts"]
     mon["Monitor link :5560\nJSON handshake +\nbinary records · gap records"]
+    udp["--udp-target\nreal UDP datagrams"]
     ecus --> mon
+    ecus --> udp
   end
 
   subgraph core["Rust core (radeau.exe)"]
-    devgen["DevGen source\nseeded synthetic frames"]
+    devgen["DevGen source\n(debug builds)"]
     sim["Sim-link source\nTCP client · deframer\nreconnect + capture:link"]
+    pcapsrc["pcap / pcapng source\nfile (paced · fast) or stream\nends the session at EOF"]
+    live["Live source\nradeau-livecap → wpcap.dll / libpcap.so\nBPF · ps_drop"]
     classify["classify_frame\nradeau-proto codecs\nnever drops · endpoint table"]
+    pcapsrc --> classify
+    live --> classify
     ring["FrameRing\n65,536 / 96 MiB\nraw bytes for dissection"]
     acc["Accumulator\n4,000 cap · drop oldest (counted)"]
     cadence["Deadline cadence 16 ms\n+ credits (3 in flight)\n+ capture:stats 1 Hz"]
@@ -50,10 +59,10 @@ flowchart LR
   end
 
   cadence -- "frames:batch\n(columnar, per-class columns)" --> store
-  core -- "capture:session (endpoint table)\ncapture:link · capture:stats" --> store
+  core -- "capture:session (endpoint table, epoch)\ncapture:link · capture:stats" --> store
   ack -- "ack_frames" --> cadence
-  trace -- "frame_detail(idx)" --> ring
-  ui -- "capture_start(SourceSpec) / capture_stop" --> core
+  trace -- "frame_detail(idx) · export_ring(path)" --> ring
+  ui -- "capture_start(SourceSpec) / capture_stop\ncapture_list_interfaces · catalog_import\ndependency_probe · diagnostics_report" --> core
 ```
 
 In a plain browser (no Tauri), a TypeScript mirror of the generator
@@ -73,7 +82,7 @@ Nothing downstream knows or cares which backend produced a frame.
 flowchart LR
   subgraph sources["Channel backends (one uniform API: open · read · write · status)"]
     sim["Simulator link\nTCP 5560 monitor+inject\n(default dev channel)"]
-    pcap["Npcap / libpcap\nreal Ethernet interface\n(backlog)"]
+    pcap["Npcap / libpcap\nreal Ethernet interface\n(v0.1.6, runtime-bound)"]
     loop["Loopback\npseudo-channel\n8192-frame echo"]
     dev["Dev generator\n(runtime-gated fixture)"]
   end

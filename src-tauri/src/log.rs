@@ -389,7 +389,8 @@ mod tests {
         }
         log(Level::Error, "cmd", "sentinel", Value::Null);
         wait_for_lines(&dir.join("radeau.log"), 1);
-        for _ in 0..100 {
+        // The writer flushes on a 2 s cadence; allow three cycles under load.
+        for _ in 0..300 {
             if fs::read_to_string(dir.join("radeau.log"))
                 .unwrap_or_default()
                 .contains("sentinel")

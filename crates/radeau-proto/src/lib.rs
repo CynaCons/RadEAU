@@ -11,6 +11,7 @@
 //! yields *missing* (`ParseError::Truncated`), never a partial value.
 
 pub mod arp;
+pub mod doip;
 pub mod ethernet;
 pub mod gptp;
 pub mod icmp;

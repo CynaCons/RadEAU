@@ -4,6 +4,8 @@
 //! routing belongs to the later v0.4 runtime. Pseudo-data derives from the
 //! supplied seed; monitor clients use bounded, independent writer queues.
 
+mod diagnostic;
+
 use radeau_catalog::{BaseType, Catalog, Signal};
 use radeau_proto::{
     arp::{self, ArpPacket},
@@ -30,8 +32,8 @@ use std::{
 
 const QUEUE: usize = 4096;
 const PCAP_EPOCH_NS: u64 = 1_767_225_600_000_000_000;
-const USAGE: &str = "usage: ecu-netsim [--monitor-port 5560] [--udp-target IP] [--seed N] [--write-pcap PATH --duration SECONDS]\n\n--udp-target sends SOME/IP and SD UDP payloads to IP in addition to the monitor link. The frame's UDP destination port is preserved. Raw-Ethernet traffic (gPTP, ARP, VLAN tags, runts, and ICMPv6) remains monitor-only.";
-const HANDSHAKE: &str = "{\"link\":\"ecu-netsim-monitor\",\"version\":1,\"scenario\":\"sensor-fusion\",\"ports\":[{\"id\":1,\"name\":\"camera\",\"ip\":\"10.42.0.11\"},{\"id\":2,\"name\":\"radar\",\"ip\":\"10.42.0.12\"},{\"id\":3,\"name\":\"lidar\",\"ip\":\"10.42.0.13\"},{\"id\":4,\"name\":\"dynamics\",\"ip\":\"10.42.0.14\"},{\"id\":5,\"name\":\"fusion\",\"ip\":\"10.42.0.20\"}]}\n";
+const USAGE: &str = "usage: ecu-netsim [--monitor-port 5560] [--udp-target IP] [--seed N] [--write-pcap PATH --duration SECONDS]\n\n--udp-target sends SOME/IP, SD, and DoIP discovery UDP payloads to IP in addition to the monitor link. The frame's UDP destination port is preserved. Raw-Ethernet traffic and DoIP TCP traffic remain monitor-only.";
+const HANDSHAKE: &str = "{\"link\":\"ecu-netsim-monitor\",\"version\":1,\"scenario\":\"sensor-fusion\",\"ports\":[{\"id\":1,\"name\":\"camera\",\"ip\":\"10.42.0.11\"},{\"id\":2,\"name\":\"radar\",\"ip\":\"10.42.0.12\"},{\"id\":3,\"name\":\"lidar\",\"ip\":\"10.42.0.13\"},{\"id\":4,\"name\":\"dynamics\",\"ip\":\"10.42.0.14\"},{\"id\":5,\"name\":\"fusion\",\"ip\":\"10.42.0.20\"},{\"id\":6,\"name\":\"tester\",\"ip\":\"10.42.0.99\"}]}\n";
 
 #[derive(Clone)]
 struct Record {
@@ -249,6 +251,7 @@ where
     let mut ident = 1u16;
     let mut arp_node = 0usize;
     let mut frames = 0u64;
+    let mut diagnostic = diagnostic::DiagnosticSession::default();
     let mut send = |record: Record| -> io::Result<()> {
         emit(record)?;
         frames += 1;
@@ -259,6 +262,13 @@ where
     // duration are included, matching a clock advanced to that instant.
     for time_ms in 0..=duration_ms {
         let time = time_ms.saturating_mul(1_000_000);
+        for scheduled in diagnostic.frames_at(time_ms, &mut ident) {
+            send(Record {
+                time,
+                port: scheduled.port,
+                frame: scheduled.frame,
+            })?;
+        }
         for (i, node) in NODES.iter().enumerate() {
             if time_ms % node.cycle == 0 {
                 let session = sessions[i];
@@ -333,6 +343,7 @@ where
 struct UdpEmitter {
     target: Ipv4Addr,
     sockets: Vec<UdpSocket>,
+    doip_socket: UdpSocket,
     would_block: u64,
     other_error_reported: bool,
 }
@@ -355,18 +366,25 @@ impl UdpEmitter {
             socket.set_nonblocking(true)?;
             sockets.push(socket);
         }
+        let doip_socket = bind_udp_source(diagnostic::DOIP_PORT, "DoIP entity")?;
         Ok(Self {
             target,
             sockets,
+            doip_socket,
             would_block: 0,
             other_error_reported: false,
         })
     }
 
     fn send_record(&mut self, record: &Record) {
-        let Some((destination_port, payload)) = udp_destination_and_payload(&record.frame) else {
+        let Some((source_port, destination_port, payload)) = udp_ports_and_payload(&record.frame)
+        else {
             return;
         };
+        if source_port == diagnostic::DOIP_PORT {
+            self.send_doip_datagram(destination_port, payload);
+            return;
+        }
         let Some(index) = record.port.checked_sub(1).map(usize::from) else {
             return;
         };
@@ -389,6 +407,37 @@ impl UdpEmitter {
             Err(_) => {}
         }
     }
+
+    fn send_doip_datagram(&mut self, destination_port: u16, payload: &[u8]) {
+        match self
+            .doip_socket
+            .send_to(payload, (self.target, destination_port))
+        {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                self.would_block = self.would_block.saturating_add(1);
+            }
+            Err(error) if !self.other_error_reported => {
+                eprintln!("UDP emission failed: {error}; further send errors are suppressed");
+                self.other_error_reported = true;
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+fn bind_udp_source(preferred: u16, label: &str) -> io::Result<UdpSocket> {
+    let socket = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, preferred)) {
+        Ok(socket) => socket,
+        Err(error) => {
+            eprintln!(
+                "{label} could not bind UDP source port {preferred} ({error}); using an ephemeral port"
+            );
+            UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?
+        }
+    };
+    socket.set_nonblocking(true)?;
+    Ok(socket)
 }
 
 fn source_port(node: Node) -> u16 {
@@ -399,7 +448,12 @@ fn source_port(node: Node) -> u16 {
     }
 }
 
+#[cfg(test)]
 fn udp_destination_and_payload(frame: &[u8]) -> Option<(u16, &[u8])> {
+    udp_ports_and_payload(frame).map(|(_, destination, payload)| (destination, payload))
+}
+
+fn udp_ports_and_payload(frame: &[u8]) -> Option<(u16, u16, &[u8])> {
     let ethernet = EthernetFrame::parse(frame).ok()?;
     if ethernet.ethertype != radeau_proto::ethernet::ETHERTYPE_IPV4 {
         return None;
@@ -409,7 +463,7 @@ fn udp_destination_and_payload(frame: &[u8]) -> Option<(u16, &[u8])> {
         return None;
     }
     let udp = UdpDatagram::parse(ip.payload).ok()?;
-    Some((udp.dst_port, udp.payload))
+    Some((udp.src_port, udp.dst_port, udp.payload))
 }
 
 fn emit(clients: &mut [Client], udp: &mut Option<UdpEmitter>, record: Record) {
@@ -443,9 +497,26 @@ fn run(
     let mut seq = 1;
     let mut rng = seed;
     let mut ident = 1;
+    let mut diagnostic = diagnostic::DiagnosticSession::default();
+    let mut diagnostic_ms = 0u64;
     while running.load(Ordering::Relaxed) {
         accept(&listener, &mut clients);
         let now = Instant::now();
+        let elapsed_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        while diagnostic_ms <= elapsed_ms {
+            for scheduled in diagnostic.frames_at(diagnostic_ms, &mut ident) {
+                emit(
+                    &mut clients,
+                    &mut udp,
+                    Record {
+                        time: diagnostic_ms.saturating_mul(1_000_000),
+                        port: scheduled.port,
+                        frame: scheduled.frame,
+                    },
+                );
+            }
+            diagnostic_ms = diagnostic_ms.saturating_add(1);
+        }
         for (i, node) in NODES.iter().enumerate() {
             if now >= next[i] {
                 let session = sessions[i];
@@ -989,13 +1060,13 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(count, 2_049);
+        assert_eq!(count, 2_071);
         assert_eq!(records.len() as u64, count);
         assert!(records.windows(2).all(|pair| pair[0].time <= pair[1].time));
         assert_eq!(records.first().unwrap().time, 0);
         assert_eq!(records.last().unwrap().time, 10_000_000_000);
 
-        let mut ports = [false; 5];
+        let mut ports = [false; 6];
         let mut saw_arp = false;
         let mut saw_vlan_lidar = false;
         let mut saw_icmpv6 = false;
@@ -1065,7 +1136,7 @@ mod tests {
             let mut body = vec![0; u32::from_be_bytes(len) as usize];
             reader.read_exact(&mut body).unwrap();
             assert!(body.len() >= 11);
-            assert!((1..=5).contains(&u16::from_be_bytes([body[8], body[9]])));
+            assert!((1..=6).contains(&u16::from_be_bytes([body[8], body[9]])));
             assert_eq!(body[10], 0);
 
             let ethernet = EthernetFrame::parse(&body[11..]).unwrap();
@@ -1093,6 +1164,13 @@ mod tests {
                     ];
                     assert_eq!(radeau_proto::internet_checksum(&[&pseudo, ip.payload]), 0);
                     let udp = UdpDatagram::parse(ip.payload).unwrap();
+                    if udp.src_port == diagnostic::DOIP_PORT
+                        || udp.dst_port == diagnostic::DOIP_PORT
+                    {
+                        assert_eq!((udp.src_port, udp.dst_port), (13_400, 13_400));
+                        assert_eq!(&udp.payload[..4], &[0x02, 0xfd, 0x00, 0x04]);
+                        continue;
+                    }
                     let (someip, payload) = someip::parse(udp.payload).unwrap();
                     if someip.service_id == someip::SD_SERVICE_ID {
                         assert_eq!((udp.src_port, udp.dst_port), (30490, 30490));

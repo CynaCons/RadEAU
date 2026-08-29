@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use radeau_proto::{arp, ethernet, gptp, icmp, ipv4, ipv6, sd, someip, tcp, udp, ParseError};
+use radeau_proto::{arp, doip, ethernet, gptp, icmp, ipv4, ipv6, sd, someip, tcp, udp, ParseError};
 use serde::Serialize;
 use tauri::State;
 
@@ -351,6 +351,9 @@ pub fn dissect_with_catalog(
                     ],
                 });
                 payload_offset = l4_offset + s.data_offset as usize * 4;
+                if s.src_port == doip::DOIP_PORT || s.dst_port == doip::DOIP_PORT {
+                    payload_offset = dissect_doip_tcp(&mut layers, s.payload, payload_offset);
+                }
             }
             Err(e) => layers.push(malformed("TCP", e)),
         }
@@ -402,6 +405,58 @@ pub fn dissect_with_catalog(
         ],
     });
     let someip_offset = udp_offset + udp::HEADER_LEN;
+    if datagram.src_port == doip::DOIP_PORT || datagram.dst_port == doip::DOIP_PORT {
+        match doip::parse_header(datagram.payload) {
+            Ok((header, body)) => {
+                payload_offset = someip_offset + doip::HEADER_LEN;
+                add_doip_message(&mut layers, header, body, someip_offset, 1);
+            }
+            Err(ParseError::Malformed)
+                if datagram.payload.len() >= 2 && datagram.payload[1] != !datagram.payload[0] =>
+            {
+                layers.push(FrameLayer {
+                    protocol: "DoIP".into(),
+                    summary: "malformed: inverse version mismatch".into(),
+                    fields: vec![
+                        doip_field(
+                            "Version",
+                            format!("0x{:02X}", datagram.payload[0]),
+                            someip_offset,
+                            1,
+                        ),
+                        doip_field(
+                            "Inverse version",
+                            format!("0x{:02X}", datagram.payload[1]),
+                            someip_offset + 1,
+                            1,
+                        ),
+                    ],
+                });
+            }
+            Err(ParseError::Truncated) => {
+                if let Ok(header) = doip::parse_header_prefix(datagram.payload) {
+                    add_partial_doip(&mut layers, header, someip_offset, "body truncated");
+                    payload_offset = someip_offset + doip::HEADER_LEN;
+                } else {
+                    layers.push(malformed("DoIP", ParseError::Truncated));
+                }
+            }
+            Err(ParseError::Malformed) if datagram.payload.len() >= doip::HEADER_LEN => {
+                let header = doip::DoipHeader {
+                    version: datagram.payload[0],
+                    inverse_version: datagram.payload[1],
+                    payload_type: u16::from_be_bytes([datagram.payload[2], datagram.payload[3]]),
+                    payload_length: u32::from_be_bytes(
+                        datagram.payload[4..8].try_into().expect("fixed header"),
+                    ),
+                };
+                add_partial_doip(&mut layers, header, someip_offset, "body truncated");
+                payload_offset = someip_offset + doip::HEADER_LEN;
+            }
+            Err(error) => layers.push(malformed("DoIP", error)),
+        }
+        return detail(idx, t_s, wire, payload_offset, layers);
+    }
     if !crate::classify::someip_plausible(datagram.payload) {
         layers.push(FrameLayer {
             protocol: "Data".into(),
@@ -466,6 +521,388 @@ pub fn dissect_with_catalog(
         number += 1;
     }
     detail_with_decoded(idx, t_s, wire, payload_offset, layers, decoded)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn doip_field(name: &str, value: impl Into<String>, offset: usize, len: usize) -> FrameField {
+    field(name, value.into(), offset, len)
+}
+
+fn doip_header_fields(header: doip::DoipHeader, offset: usize) -> Vec<FrameField> {
+    vec![
+        doip_field("Version", format!("0x{:02X}", header.version), offset, 1),
+        doip_field(
+            "Inverse version",
+            format!("0x{:02X}", header.inverse_version),
+            offset + 1,
+            1,
+        ),
+        doip_field(
+            "Payload type",
+            format!(
+                "0x{:04X} · {}",
+                header.payload_type,
+                doip::type_name(header.payload_type)
+            ),
+            offset + 2,
+            2,
+        ),
+        doip_field(
+            "Payload length",
+            header.payload_length.to_string(),
+            offset + 4,
+            4,
+        ),
+    ]
+}
+
+fn add_partial_doip(
+    layers: &mut Vec<FrameLayer>,
+    header: doip::DoipHeader,
+    offset: usize,
+    summary: &str,
+) {
+    layers.push(FrameLayer {
+        protocol: "DoIP".into(),
+        summary: summary.into(),
+        fields: doip_header_fields(header, offset),
+    });
+}
+
+fn add_doip_message(
+    layers: &mut Vec<FrameLayer>,
+    header: doip::DoipHeader,
+    body: &[u8],
+    offset: usize,
+    number: usize,
+) {
+    let body_offset = offset + doip::HEADER_LEN;
+    let mut fields = doip_header_fields(header, offset);
+    match doip::parse_payload(header, body) {
+        Ok(payload) => {
+            add_doip_payload_fields(&mut fields, &payload, body, body_offset, body.len())
+        }
+        Err(error) => fields.push(doip_field(
+            "Payload",
+            format!(
+                "malformed: {}",
+                if error == ParseError::Truncated {
+                    "truncated"
+                } else {
+                    "invalid"
+                }
+            ),
+            body_offset,
+            body.len(),
+        )),
+    }
+    layers.push(FrameLayer {
+        protocol: if number == 1 {
+            "DoIP".into()
+        } else {
+            format!("DoIP ({number})")
+        },
+        summary: format!(
+            "{} · {} bytes",
+            doip::type_name(header.payload_type),
+            header.payload_length
+        ),
+        fields,
+    });
+    if let Ok(doip::DoipPayload::Diagnostic { uds, .. }) = doip::parse_payload(header, body) {
+        add_uds_layer(layers, uds, body_offset + 4);
+    }
+}
+
+fn add_doip_payload_fields(
+    fields: &mut Vec<FrameField>,
+    payload: &doip::DoipPayload<'_>,
+    body: &[u8],
+    o: usize,
+    body_len: usize,
+) {
+    use doip::DoipPayload::*;
+    let addr = |v| format!("0x{v:04X}");
+    match payload {
+        HeaderNack { code } => fields.push(doip_field("NACK code", format!("0x{code:02X}"), o, 1)),
+        VehicleIdRequest | AliveCheckRequest | EntityStatusRequest | PowerModeRequest => {}
+        VehicleIdRequestEid { eid } => fields.push(doip_field("EID", hex(eid), o, 6)),
+        VehicleIdRequestVin { vin } => {
+            fields.push(doip_field("VIN", String::from_utf8_lossy(vin), o, 17))
+        }
+        VehicleAnnouncement {
+            vin,
+            logical_address,
+            eid,
+            gid,
+            further_action,
+            sync_status,
+        } => {
+            fields.extend([
+                doip_field("VIN", String::from_utf8_lossy(vin), o, 17),
+                doip_field("Logical address", addr(*logical_address), o + 17, 2),
+                doip_field("EID", hex(eid), o + 19, 6),
+                doip_field("GID", hex(gid), o + 25, 6),
+                doip_field(
+                    "Further action",
+                    format!("0x{further_action:02X}"),
+                    o + 31,
+                    1,
+                ),
+            ]);
+            if let Some(status) = sync_status {
+                fields.push(doip_field(
+                    "VIN/GID sync status",
+                    format!("0x{status:02X}"),
+                    o + 32,
+                    1,
+                ));
+            }
+        }
+        RoutingActivationRequest {
+            source_address,
+            activation_type,
+            oem,
+        } => {
+            fields.extend([
+                doip_field("Source address", addr(*source_address), o, 2),
+                doip_field(
+                    "Activation type",
+                    format!("0x{activation_type:02X}"),
+                    o + 2,
+                    1,
+                ),
+                doip_field(
+                    "Reserved",
+                    format!(
+                        "0x{:08X}",
+                        u32::from_be_bytes(body[3..7].try_into().expect("validated payload"))
+                    ),
+                    o + 3,
+                    4,
+                ),
+            ]);
+            if let Some(value) = oem {
+                fields.push(doip_field("OEM", format!("0x{value:08X}"), o + 7, 4));
+            }
+        }
+        RoutingActivationResponse {
+            tester_address,
+            entity_address,
+            response_code,
+            oem,
+        } => {
+            fields.extend([
+                doip_field("Tester address", addr(*tester_address), o, 2),
+                doip_field("Entity address", addr(*entity_address), o + 2, 2),
+                doip_field("Response code", format!("0x{response_code:02X}"), o + 4, 1),
+                doip_field(
+                    "Reserved",
+                    format!(
+                        "0x{:08X}",
+                        u32::from_be_bytes(body[5..9].try_into().expect("validated payload"))
+                    ),
+                    o + 5,
+                    4,
+                ),
+            ]);
+            if let Some(value) = oem {
+                fields.push(doip_field("OEM", format!("0x{value:08X}"), o + 9, 4));
+            }
+        }
+        AliveCheckResponse { source_address } => {
+            fields.push(doip_field("Source address", addr(*source_address), o, 2))
+        }
+        EntityStatusResponse {
+            node_type,
+            max_open_sockets,
+            open_sockets,
+            max_data_size,
+        } => {
+            fields.extend([
+                doip_field("Node type", format!("0x{node_type:02X}"), o, 1),
+                doip_field(
+                    "Maximum open sockets",
+                    max_open_sockets.to_string(),
+                    o + 1,
+                    1,
+                ),
+                doip_field("Open sockets", open_sockets.to_string(), o + 2, 1),
+            ]);
+            if let Some(value) = max_data_size {
+                fields.push(doip_field("Maximum data size", value.to_string(), o + 3, 4));
+            }
+        }
+        PowerModeResponse { mode } => {
+            fields.push(doip_field("Power mode", format!("0x{mode:02X}"), o, 1))
+        }
+        Diagnostic {
+            source_address,
+            target_address,
+            uds,
+        } => fields.extend([
+            doip_field("Source address", addr(*source_address), o, 2),
+            doip_field("Target address", addr(*target_address), o + 2, 2),
+            doip_field("UDS", hex(uds), o + 4, uds.len()),
+        ]),
+        DiagnosticAck {
+            source_address,
+            target_address,
+            code,
+            previous,
+        }
+        | DiagnosticNack {
+            source_address,
+            target_address,
+            code,
+            previous,
+        } => fields.extend([
+            doip_field("Source address", addr(*source_address), o, 2),
+            doip_field("Target address", addr(*target_address), o + 2, 2),
+            doip_field("Code", format!("0x{code:02X}"), o + 4, 1),
+            doip_field("Previous message", hex(previous), o + 5, previous.len()),
+        ]),
+        Unknown { body, .. } => fields.push(doip_field("Payload", hex(body), o, body_len)),
+    }
+}
+
+fn add_uds_layer(layers: &mut Vec<FrameLayer>, uds: &[u8], offset: usize) {
+    let Some(&sid) = uds.first() else {
+        layers.push(FrameLayer {
+            protocol: "UDS".into(),
+            summary: "empty".into(),
+            fields: vec![],
+        });
+        return;
+    };
+    let mut fields = Vec::new();
+    let mut consumed = 1;
+    let summary;
+    if sid == 0x7f {
+        let rejected = uds.get(1).copied();
+        let nrc = uds.get(2).copied();
+        let rejected_name = rejected.and_then(doip::uds_sid_name).unwrap_or("Unknown");
+        let nrc_name = nrc.and_then(doip::uds_nrc_name).unwrap_or("Unknown");
+        summary = format!("Negative response · {rejected_name} · {nrc_name}");
+        fields.push(doip_field("SID", "0x7F · NegativeResponse", offset, 1));
+        if let Some(value) = rejected {
+            fields.push(doip_field(
+                "Rejected SID",
+                format!("0x{value:02X} · {rejected_name}"),
+                offset + 1,
+                1,
+            ));
+        }
+        if let Some(value) = nrc {
+            fields.push(doip_field(
+                "NRC",
+                format!("0x{value:02X} · {nrc_name}"),
+                offset + 2,
+                1,
+            ));
+        }
+        consumed = uds.len().min(3);
+    } else {
+        let (name, positive) = doip::uds_sid_display(sid).unwrap_or(("Unknown", false));
+        let base_sid = if positive { sid - 0x40 } else { sid };
+        summary = if positive {
+            format!("{name} positive response")
+        } else {
+            name.into()
+        };
+        fields.push(doip_field(
+            "SID",
+            format!("0x{sid:02X} · {summary}"),
+            offset,
+            1,
+        ));
+        if matches!(
+            base_sid,
+            0x10 | 0x11 | 0x19 | 0x27 | 0x28 | 0x31 | 0x3e | 0x85
+        ) {
+            if let Some(value) = uds.get(1) {
+                fields.push(doip_field(
+                    "Sub-function",
+                    format!("0x{value:02X}"),
+                    offset + 1,
+                    1,
+                ));
+                consumed = 2;
+            }
+        } else if matches!(base_sid, 0x22 | 0x2e) && uds.len() >= 3 {
+            let did = u16::from_be_bytes([uds[1], uds[2]]);
+            fields.push(doip_field("DID", format!("0x{did:04X}"), offset + 1, 2));
+            consumed = 3;
+        }
+    }
+    if let Some(remaining) = uds.get(consumed..) {
+        if !remaining.is_empty() {
+            fields.push(doip_field(
+                "Remaining bytes",
+                hex(remaining),
+                offset + consumed,
+                remaining.len(),
+            ));
+        }
+    }
+    layers.push(FrameLayer {
+        protocol: "UDS".into(),
+        summary,
+        fields,
+    });
+}
+
+fn dissect_doip_tcp(layers: &mut Vec<FrameLayer>, payload: &[u8], offset: usize) -> usize {
+    let mut remaining = payload;
+    let mut current = offset;
+    let mut number = 1;
+    let mut parsed_any = false;
+    while !remaining.is_empty() {
+        match doip::parse_header_prefix(remaining) {
+            Ok(header) if doip::ty_code(header.payload_type) != 255 => {
+                let message_len = doip::HEADER_LEN + header.payload_length as usize;
+                if remaining.len() < message_len {
+                    add_partial_doip(layers, header, current, "continues in next segment");
+                    parsed_any = true;
+                    break;
+                }
+                let body = &remaining[doip::HEADER_LEN..message_len];
+                add_doip_message(layers, header, body, current, number);
+                parsed_any = true;
+                remaining = &remaining[message_len..];
+                current += message_len;
+                number += 1;
+            }
+            Err(ParseError::Truncated) if parsed_any => {
+                layers.push(FrameLayer {
+                    protocol: "DoIP".into(),
+                    summary: "continues in next segment".into(),
+                    fields: vec![],
+                });
+                break;
+            }
+            _ => {
+                layers.push(FrameLayer {
+                    protocol: "TCP payload (mid-stream)".into(),
+                    summary: format!("TCP payload (mid-stream) · {} bytes", remaining.len()),
+                    fields: vec![],
+                });
+                break;
+            }
+        }
+    }
+    if parsed_any {
+        offset + doip::HEADER_LEN
+    } else {
+        offset
+    }
 }
 
 fn add_someip_layer(
@@ -627,13 +1064,66 @@ pub fn frame_detail(
 mod tests {
     use super::*;
     use radeau_proto::{
+        doip,
         ethernet::EthernetFrame,
         gptp::GptpMessage,
         ipv4::Ipv4Packet,
         sd::{SdEntry, SdMessage},
         someip::SomeIpHeader,
+        tcp::TcpSegment,
         udp::UdpDatagram,
     };
+
+    fn ipv4_wire(protocol: u8, transport: &[u8]) -> Vec<u8> {
+        let src = [10, 42, 0, 99];
+        let dst = [10, 42, 0, 20];
+        let mut ip_bytes = Vec::new();
+        Ipv4Packet::build(src, dst, protocol, 1, 64, 0, transport, &mut ip_bytes);
+        let mut wire = Vec::new();
+        EthernetFrame::build(
+            [2, 0x52, 0x41, 0x44, 0, 2],
+            [2, 0x52, 0x41, 0x44, 0, 1],
+            ethernet::ETHERTYPE_IPV4,
+            &ip_bytes,
+            &mut wire,
+        );
+        wire
+    }
+
+    fn doip_message(payload_type: u16, body: &[u8]) -> Vec<u8> {
+        let mut message = Vec::new();
+        doip::build_message(2, payload_type, body, &mut message);
+        message
+    }
+
+    fn doip_udp(payload_type: u16, body: &[u8]) -> Vec<u8> {
+        let message = doip_message(payload_type, body);
+        let mut datagram = Vec::new();
+        UdpDatagram::build(
+            [10, 42, 0, 99],
+            [10, 42, 0, 20],
+            doip::DOIP_PORT,
+            doip::DOIP_PORT,
+            &message,
+            &mut datagram,
+        );
+        ipv4_wire(ipv4::PROTOCOL_UDP, &datagram)
+    }
+
+    fn doip_tcp_payload(payload: &[u8]) -> Vec<u8> {
+        let mut segment = Vec::new();
+        TcpSegment::build(
+            50_000,
+            doip::DOIP_PORT,
+            1,
+            0,
+            0x18,
+            4096,
+            payload,
+            &mut segment,
+        );
+        ipv4_wire(ipv4::PROTOCOL_TCP, &segment)
+    }
 
     fn someip_wire(payload: &[u8], service_id: u16, method_id: u16) -> Vec<u8> {
         let mut message = Vec::new();
@@ -696,6 +1186,154 @@ mod tests {
         );
         assert_eq!(detail.layers[3].fields[0].offset, 42);
         assert_eq!(detail.layers[3].fields[0].value, "0x1101");
+    }
+
+    #[test]
+    fn dissects_udp_vehicle_announcement_fields_and_offsets() {
+        let body = [
+            b"WVWZZZ1JZXW000001".as_slice(),
+            &[0x12, 0x34],
+            &[1, 2, 3, 4, 5, 6],
+            &[7, 8, 9, 10, 11, 12],
+            &[0x01, 0x10],
+        ]
+        .concat();
+        let detail = dissect(0, 0.0, &doip_udp(0x0004, &body));
+        assert_eq!(
+            detail
+                .layers
+                .iter()
+                .map(|layer| layer.protocol.as_str())
+                .collect::<Vec<_>>(),
+            ["Ethernet II", "IPv4", "UDP", "DoIP"]
+        );
+        let layer = &detail.layers[3];
+        assert_eq!(layer.fields[0].offset, 42);
+        assert_eq!(layer.fields[2].value, "0x0004 · Vehicle announcement");
+        assert_eq!(layer.fields[4].value, "WVWZZZ1JZXW000001");
+        assert_eq!(
+            (layer.fields[5].offset, layer.fields[5].value.as_str()),
+            (67, "0x1234")
+        );
+        assert_eq!(detail.payload_offset, 50);
+    }
+
+    #[test]
+    fn dissects_tcp_routing_activation_reserved_field() {
+        let body = [0x0e, 0x80, 1, 0x12, 0x34, 0x56, 0x78];
+        let detail = dissect(0, 0.0, &doip_tcp_payload(&doip_message(0x0005, &body)));
+        let layer = detail
+            .layers
+            .iter()
+            .find(|layer| layer.protocol == "DoIP")
+            .unwrap();
+        assert_eq!(layer.summary, "Routing activation request · 7 bytes");
+        assert_eq!(
+            (layer.fields[4].offset, layer.fields[4].value.as_str()),
+            (62, "0x0E80")
+        );
+        assert_eq!(
+            (layer.fields[6].offset, layer.fields[6].value.as_str()),
+            (65, "0x12345678")
+        );
+        assert_eq!(detail.payload_offset, 62);
+    }
+
+    #[test]
+    fn dissects_tester_present_request_and_positive_response() {
+        let request = doip_message(0x8001, &[0x0e, 0x80, 0x12, 0x34, 0x3e, 0x00]);
+        let response = doip_message(0x8001, &[0x12, 0x34, 0x0e, 0x80, 0x7e, 0x00]);
+        for (message, sid, summary) in [
+            (request, "0x3E · TesterPresent", "TesterPresent"),
+            (
+                response,
+                "0x7E · TesterPresent positive response",
+                "TesterPresent positive response",
+            ),
+        ] {
+            let detail = dissect(0, 0.0, &doip_tcp_payload(&message));
+            let uds = detail
+                .layers
+                .iter()
+                .find(|layer| layer.protocol == "UDS")
+                .unwrap();
+            assert_eq!(uds.summary, summary);
+            assert_eq!(
+                (uds.fields[0].offset, uds.fields[0].value.as_str()),
+                (66, sid)
+            );
+            assert_eq!(
+                (uds.fields[1].offset, uds.fields[1].value.as_str()),
+                (67, "0x00")
+            );
+        }
+    }
+
+    #[test]
+    fn dissects_uds_negative_response_with_named_nrc() {
+        let message = doip_message(0x8001, &[0x12, 0x34, 0x0e, 0x80, 0x7f, 0x22, 0x31, 0xaa]);
+        let detail = dissect(0, 0.0, &doip_tcp_payload(&message));
+        let uds = detail
+            .layers
+            .iter()
+            .find(|layer| layer.protocol == "UDS")
+            .unwrap();
+        assert_eq!(
+            uds.summary,
+            "Negative response · ReadDataByIdentifier · requestOutOfRange"
+        );
+        assert_eq!(uds.fields[2].value, "0x31 · requestOutOfRange");
+        assert_eq!(
+            (uds.fields[3].offset, uds.fields[3].value.as_str()),
+            (69, "AA")
+        );
+    }
+
+    #[test]
+    fn walks_two_doip_messages_and_labels_a_trailing_partial() {
+        let first = doip_message(0x0007, &[]);
+        let second = doip_message(0x4003, &[]);
+        let partial = doip_message(0x8001, &[0x0e, 0x80, 0x12, 0x34, 0x3e, 0x00]);
+        let payload = [first.as_slice(), second.as_slice(), &partial[..10]].concat();
+        let detail = dissect(0, 0.0, &doip_tcp_payload(&payload));
+        let layers = detail
+            .layers
+            .iter()
+            .filter(|layer| layer.protocol.starts_with("DoIP"))
+            .collect::<Vec<_>>();
+        assert_eq!(layers.len(), 3);
+        assert_eq!(layers[0].protocol, "DoIP");
+        assert_eq!(layers[1].protocol, "DoIP (2)");
+        assert_eq!(layers[2].protocol, "DoIP");
+        assert_eq!(layers[2].summary, "continues in next segment");
+        assert_eq!(layers[2].fields[0].offset, 70);
+    }
+
+    #[test]
+    fn explains_bad_inverse_and_oversized_udp_bodies() {
+        let mut bad_inverse = doip_udp(0x0001, &[]);
+        bad_inverse[43] = 0;
+        let detail = dissect(0, 0.0, &bad_inverse);
+        assert_eq!(
+            detail.layers[3].summary,
+            "malformed: inverse version mismatch"
+        );
+
+        let mut oversized = doip_udp(0x0001, &[]);
+        oversized[46..50].copy_from_slice(&((doip::MAX_PAYLOAD_LEN + 1) as u32).to_be_bytes());
+        let detail = dissect(0, 0.0, &oversized);
+        assert_eq!(detail.layers[3].protocol, "DoIP");
+        assert_eq!(detail.layers[3].summary, "body truncated");
+        assert_eq!(detail.layers[3].fields[3].value, "65537");
+    }
+
+    #[test]
+    fn labels_tcp_payload_without_a_doip_header_as_midstream() {
+        let detail = dissect(0, 0.0, &doip_tcp_payload(&[0xaa; 12]));
+        let layer = detail.layers.last().unwrap();
+        assert_eq!(layer.protocol, "TCP payload (mid-stream)");
+        assert_eq!(layer.summary, "TCP payload (mid-stream) · 12 bytes");
+        assert_eq!(detail.payload_offset, 54);
     }
 
     #[test]
