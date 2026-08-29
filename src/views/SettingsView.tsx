@@ -61,6 +61,7 @@ import {
   liveCapturePlatform,
   type DependencyRow,
 } from "../runtime/dependencyDisplay";
+import { appInfoStore } from "../runtime/appInfoStore";
 import {
   dependencyProbe,
   diagnosticsReport,
@@ -205,10 +206,12 @@ export function SettingsView() {
   useViewLifecycle("settings", {});
   const desktop = isDesktop();
   const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const { info: appInfo } = useSyncExternalStore(appInfoStore.subscribe, appInfoStore.getSnapshot);
   const controlsLocked = sourceControlsDisabled(session.running);
   const lockReason = interfaceLockedReason(session.running) ?? "";
   const simOk = simSourceAvailable(desktop);
   const pcapOk = pcapSourceAvailable(desktop);
+  const showDevgen = appInfo.devgenAvailable;
 
   const [transmitOnly, setTransmitOnly] = useState(false);
   const [refreshMs] = useState(33);
@@ -324,9 +327,11 @@ export function SettingsView() {
               }}
               data-testid="settings-source-select"
             >
-              <MenuItem value="devgen" data-testid="settings-source-option-devgen">
-                Dev generator
-              </MenuItem>
+              {showDevgen ? (
+                <MenuItem value="devgen" data-testid="settings-source-option-devgen">
+                  Dev generator
+                </MenuItem>
+              ) : null}
               <MenuItem
                 value="sim"
                 disabled={!simOk}

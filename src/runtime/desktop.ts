@@ -34,6 +34,40 @@ export type {
 } from "./captureSource";
 export type { DependencyRow } from "./dependencyDisplay";
 
+export type BuildProfile = "debug" | "release" | "browser";
+
+/** Shape of the core `app_info` command (camelCase). */
+export interface AppInfo {
+  version: string;
+  buildProfile: BuildProfile;
+  os: string;
+  devgenAvailable: boolean;
+}
+
+function browserAppInfo(): AppInfo {
+  const envVersion =
+    typeof import.meta !== "undefined"
+      ? (import.meta.env?.PACKAGE_VERSION as string | undefined)
+      : undefined;
+  return {
+    version: envVersion && envVersion.length > 0 ? envVersion : "browser",
+    buildProfile: "browser",
+    os: typeof navigator !== "undefined" ? navigator.platform : "browser",
+    devgenAvailable: true,
+  };
+}
+
+/**
+ * App identity from the core (`app_info`). Browser mode returns a local
+ * fallback so About and Settings can render without a native build.
+ */
+export function appInfo(): Promise<AppInfo> {
+  if (!isDesktop()) {
+    return Promise.resolve(browserAppInfo());
+  }
+  return invoke<AppInfo>("app_info");
+}
+
 export function isDesktop(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }

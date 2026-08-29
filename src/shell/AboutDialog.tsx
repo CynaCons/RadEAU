@@ -1,13 +1,15 @@
 import { Box, Dialog, DialogContent, Typography } from "@mui/material";
+import { useSyncExternalStore } from "react";
 import radeauMark from "../assets/radeau-mark.png";
+import { appInfoStore } from "../runtime/appInfoStore";
 
 /**
  * About modal (SRS_visual_ui.md §4.4): product mark, name, one-line
- * description, and a two-column grid with build tag and commit hash in
- * font-mono. Build info is injected at build time later; dev placeholders
- * until then.
+ * description, and version / build profile / OS from `app_info`.
  */
 export function AboutDialog(props: { open: boolean; onClose: () => void }) {
+  const { info } = useSyncExternalStore(appInfoStore.subscribe, appInfoStore.getSnapshot);
+
   return (
     <Dialog open={props.open} onClose={props.onClose} maxWidth="xs" data-testid="about-dialog">
       <DialogContent sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, p: 4 }}>
@@ -27,10 +29,12 @@ export function AboutDialog(props: { open: boolean; onClose: () => void }) {
             color: "text.secondary",
           }}
         >
+          <span>version</span>
+          <span data-testid="about-version">{info.version}</span>
           <span>build</span>
-          <span data-testid="about-build-tag">dev</span>
-          <span>commit</span>
-          <span data-testid="about-commit-hash">workspace</span>
+          <span data-testid="about-build">{info.buildProfile}</span>
+          <span>os</span>
+          <span data-testid="about-os">{info.os}</span>
         </Box>
       </DialogContent>
     </Dialog>

@@ -48,6 +48,54 @@ vi.mock("./desktop", () => ({
       desktopState.statsCb = null;
     };
   }),
+  appInfo: vi.fn(async () => ({
+    version: "0.1.0",
+    buildProfile: "browser",
+    os: "test",
+    devgenAvailable: true,
+  })),
+  dependencyProbe: vi.fn(async () => [
+    {
+      id: "npcap",
+      name: "Npcap",
+      enables: "Windows live capture",
+      status: "not-applicable",
+      version: null,
+      path: null,
+      detail: "desktop app only",
+      downloadUrl: "https://npcap.com/#download",
+    },
+    {
+      id: "libpcap",
+      name: "libpcap",
+      enables: "Linux live capture",
+      status: "not-applicable",
+      version: null,
+      path: null,
+      detail: "desktop app only",
+      downloadUrl: "https://www.tcpdump.org/",
+    },
+    {
+      id: "vxlapi",
+      name: "Vector XL Driver Library",
+      enables: "Vector VN interfaces",
+      status: "not-applicable",
+      version: null,
+      path: null,
+      detail: "desktop app only",
+      downloadUrl: "https://www.vector.com/int/en/download/xl-driver-library/",
+    },
+    {
+      id: "vector-driver",
+      name: "Vector driver package",
+      enables: "Vector VN interfaces",
+      status: "not-applicable",
+      version: null,
+      path: null,
+      detail: "desktop app only",
+      downloadUrl: "https://vector.com/latest_driver",
+    },
+  ]),
 }));
 
 import { SessionStore } from "./sessionStore";

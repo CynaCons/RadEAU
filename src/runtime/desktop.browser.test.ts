@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appInfo,
   catalogDiagnostics,
   catalogImport,
   catalogReload,
@@ -24,6 +25,15 @@ import {
 describe("desktop browser fallbacks (v0.1.6)", () => {
   it("is not desktop under vitest", () => {
     expect(isDesktop()).toBe(false);
+  });
+
+  it("appInfo returns the browser fallback shape", async () => {
+    const info = await appInfo();
+    expect(info.buildProfile).toBe("browser");
+    expect(info.devgenAvailable).toBe(true);
+    expect(typeof info.version).toBe("string");
+    expect(info.version.length).toBeGreaterThan(0);
+    expect(typeof info.os).toBe("string");
   });
 
   it("dependencyProbe returns four not-applicable rows", async () => {

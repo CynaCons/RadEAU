@@ -54,14 +54,56 @@ default.
 ```
 npm run ci            # typecheck + unit tests + color lint + ID lint + dependency check
 npm run test:e2e      # launches the real binary, asserts the UI is visible and streaming
+npm run test:e2e:release  # after build:portable — release exe, no vite, pcap fixture
 ```
 
 Note: a **debug** binary compiled by `npm run tauri dev` loads the vite dev
 server (`localhost:1420`) and shows *Page not found* without it. For a
-double-clickable executable use `npm run tauri build` (release, canonical) or
+double-clickable executable use `npm run tauri build` (release, canonical),
+`npm run build:portable` (zip for a work laptop — see below), or
 `npm run build:debug` (debug profile with embedded assets, much faster —
 note it recompiles `target/debug/radeau.exe` into standalone mode until the
 next `tauri dev`).
+
+## Bench test on another machine
+
+Build a portable zip on a development PC (Node + Rust required here only):
+
+```
+npm run build:portable
+```
+
+That produces `dist-portable/RadEAU-<version>-win64.zip` containing:
+
+| File | Purpose |
+|---|---|
+| `radeau.exe` | Release app with embedded UI (no vite / `localhost:1420`) |
+| `ecu-netsim.exe` | Local ECU network simulator |
+| `sensor-fusion-5s.pcap` | Fixture for pcap-file replay |
+| `sensor-fusion.arxml` | Catalog extract |
+| `README-portable.md` | Target-machine instructions |
+
+**Prerequisites on the work laptop (Windows 10/11):** WebView2 (already on
+updated Windows), [Npcap](https://npcap.com/#download) for live capture —
+leave **"Restrict Npcap driver's access to Administrators only"** unchecked —
+and the Vector driver package only when attaching a VN box (v0.1.10 pending).
+
+**First-run checklist:** unzip → double-click `radeau.exe` → **Settings ›
+Dependencies** (confirm Npcap) → **Settings › Interface** (Physical /
+Simulator / pcap) → **Start** from the app bar → **Export** buffered frames
+as pcap when you need to keep a capture.
+
+Optional local demo without a bench NIC:
+
+```
+ecu-netsim.exe --monitor-port 5560 --udp-target 127.0.0.1
+```
+
+then choose **Simulator link** at `127.0.0.1:5560`.
+
+**How to report a problem:** copy the **Settings › Diagnostics** report, attach
+`%LOCALAPPDATA%\com.cynacons.radeau\logs\radeau.log`, and attach a pcap export
+of the buffered frames when useful.
 
 ## License
 

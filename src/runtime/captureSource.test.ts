@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCaptureSource,
   captureButtonLabel,
+  defaultSourceKind,
   DEFAULT_LIVE_BPF_FILTER,
   DEFAULT_PCAP_PACE,
   DEFAULT_SIM_ADDR,
@@ -55,6 +56,29 @@ const LOOPBACK: InterfaceInfo = {
   up: true,
   loopback: true,
 };
+
+describe("defaultSourceKind", () => {
+  it("prefers the Dev generator when the build exposes it", () => {
+    expect(
+      defaultSourceKind({ devgenAvailable: true, liveCaptureInstalled: true }),
+    ).toBe("devgen");
+    expect(
+      defaultSourceKind({ devgenAvailable: true, liveCaptureInstalled: false }),
+    ).toBe("devgen");
+  });
+
+  it("falls back to live when Npcap/libpcap is installed", () => {
+    expect(
+      defaultSourceKind({ devgenAvailable: false, liveCaptureInstalled: true }),
+    ).toBe("live");
+  });
+
+  it("falls back to pcap when neither devgen nor live is available", () => {
+    expect(
+      defaultSourceKind({ devgenAvailable: false, liveCaptureInstalled: false }),
+    ).toBe("pcap");
+  });
+});
 
 describe("captureSource picker state", () => {
   it("builds tagged CaptureSource values including pcap, pcapStream, and live", () => {

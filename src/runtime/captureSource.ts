@@ -237,6 +237,19 @@ export function sourceKindLabel(kind: SourceKind): string {
   }
 }
 
+/**
+ * Default Interface source: Dev generator when the build exposes it; else
+ * Physical interface when Npcap/libpcap is Installed; else pcap file.
+ */
+export function defaultSourceKind(opts: {
+  devgenAvailable: boolean;
+  liveCaptureInstalled: boolean;
+}): SourceKind {
+  if (opts.devgenAvailable) return "devgen";
+  if (opts.liveCaptureInstalled) return "live";
+  return "pcap";
+}
+
 export function linkChipLabel(state: LinkState): string {
   switch (state) {
     case "connecting":

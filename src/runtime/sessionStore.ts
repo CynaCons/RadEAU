@@ -6,8 +6,10 @@
  * subscribe/getSnapshot.
  */
 
+import { appInfoStore } from "./appInfoStore";
 import {
   buildCaptureSource,
+  defaultSourceKind,
   DEFAULT_DEVGEN_PROFILE,
   DEFAULT_PCAP_PACE,
   DEFAULT_SIM_ADDR,
@@ -18,7 +20,9 @@ import {
   type PcapPace,
   type SourceKind,
 } from "./captureSource";
+import { liveCaptureDependency } from "./dependencyDisplay";
 import {
+  dependencyProbe,
   onCaptureLink,
   onCaptureSession,
   onCaptureStats,
@@ -60,6 +64,8 @@ export class SessionStore {
   private listeners = new Set<() => void>();
   private snapshot: SessionSnapshot;
   private startInFlight: Promise<void> | null = null;
+  /** True until the startup default-source rule has applied (or the user picks). */
+  private initialSourcePending = true;
 
   constructor() {
     this.snapshot = this.buildSnapshot();
@@ -87,6 +93,33 @@ export class SessionStore {
       this.stats = stats;
       this.publish();
     });
+    void this.applyDefaultSource();
+  }
+
+  /**
+   * Picks the Interface default from app_info + the live-capture dependency
+   * row. Skipped if the user already changed the source.
+   */
+  private async applyDefaultSource(): Promise<void> {
+    try {
+      const [info, deps] = await Promise.all([
+        appInfoStore.ensureLoaded(),
+        dependencyProbe(),
+      ]);
+      if (!this.initialSourcePending || this.running) return;
+      const live = liveCaptureDependency(deps);
+      const kind = defaultSourceKind({
+        devgenAvailable: info.devgenAvailable,
+        liveCaptureInstalled: live?.status === "installed",
+      });
+      this.initialSourcePending = false;
+      if (kind !== this.sourceKind) {
+        this.sourceKind = kind;
+        this.publish();
+      }
+    } catch {
+      this.initialSourcePending = false;
+    }
   }
 
   subscribe = (cb: () => void): (() => void) => {
@@ -111,6 +144,7 @@ export class SessionStore {
 
   setSourceKind(kind: SourceKind): void {
     if (this.running || kind === this.sourceKind) return;
+    this.initialSourcePending = false;
     this.sourceKind = kind;
     if (kind === "devgen") this.linkStatus = null;
     this.publish();
@@ -158,6 +192,7 @@ export class SessionStore {
    */
   setPcapSource(path: string, pace: PcapPace = this.pcapPace): void {
     if (this.running) return;
+    this.initialSourcePending = false;
     this.sourceKind = "pcap";
     this.pcapPath = path;
     this.pcapPace = pace;

@@ -24,54 +24,35 @@
  * Run: npm run test:e2e
  */
 
-import { spawn, execSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { connect } from "node:net";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  APPBAR_RUN_LABEL_PROBE,
+  CdpSession,
+  DEPS_PROBE,
+  NETWORK_EOF_PROBE,
+  OPEN_SETTINGS_SOURCE_SELECT_PROBE,
+  SHELL_PROBE,
+  TRACE_STATE_PROBE,
+  VITE_URL,
+  cdpPageTarget as cdpPageTargetOnPort,
+  clickProbe,
+  killTree,
+  launchApp as launchAppExe,
+  reachable,
+  repoRoot,
+  setTextFieldProbe,
+  sleep,
+  spawnHidden,
+  tcpReachable,
+  waitFor,
+} from "./e2e-lib.mjs";
 
-const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-
-const VITE_URL = "http://localhost:1420";
 const EXE = join(repoRoot, "target", "debug", "radeau.exe");
 const NETSIM_EXE = join(repoRoot, "target", "debug", "ecu-netsim.exe");
 const CDP_PORT = 9300 + Math.floor(Math.random() * 4000);
 const SIM_PORT = 15560 + Math.floor(Math.random() * 2000);
-
-/** True when the process tree rooted at `pid` was terminated. */
-function killTree(pid) {
-  try {
-    execSync(`taskkill /pid ${pid} /T /F`, { windowsHide: true, stdio: "ignore" });
-  } catch {
-    /* already gone */
-  }
-}
-
-function spawnHidden(command, options = {}) {
-  return spawn(command, {
-    shell: true,
-    windowsHide: true,
-    stdio: "ignore",
-    ...options,
-  });
-}
-
-async function reachable(url, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return true;
-    } catch {
-      /* not up yet */
-    }
-    await sleep(300);
-  }
-  return false;
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function ensureVite() {
   if (await reachable(VITE_URL, 1000)) return null;
@@ -94,27 +75,6 @@ async function ensureBinary() {
   });
 }
 
-/** Resolve when a TCP connect to 127.0.0.1:port succeeds within timeoutMs. */
-async function tcpReachable(port, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const ok = await new Promise((resolve) => {
-      const sock = connect({ host: "127.0.0.1", port }, () => {
-        sock.destroy();
-        resolve(true);
-      });
-      sock.on("error", () => resolve(false));
-      sock.setTimeout(1000, () => {
-        sock.destroy();
-        resolve(false);
-      });
-    });
-    if (ok) return true;
-    await sleep(300);
-  }
-  return false;
-}
-
 async function launchNetsim() {
   // --udp-target is harmless for the sim-link phase and required for live loopback.
   const child = spawnHidden(
@@ -131,144 +91,14 @@ async function launchNetsim() {
 }
 
 function launchApp(userDataDir) {
-  const child = spawnHidden(`"${EXE}"`, {
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
-      WEBVIEW2_USER_DATA_FOLDER: userDataDir,
-    },
-  });
-  return child;
+  return launchAppExe(EXE, CDP_PORT, userDataDir);
 }
 
 async function cdpPageTarget(timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
-      const targets = await res.json();
-      const page = targets.find(
-        (t) => t.type === "page" && t.webSocketDebuggerUrl,
-      );
-      if (page) return page;
-    } catch {
-      /* CDP not up yet */
-    }
-    await sleep(300);
-  }
-  throw new Error(`no CDP page target on port ${CDP_PORT}`);
-}
-
-class CdpSession {
-  constructor(wsUrl) {
-    this.ws = new WebSocket(wsUrl);
-    this.nextId = 1;
-    this.pending = new Map();
-  }
-
-  async open() {
-    await new Promise((resolve, reject) => {
-      this.ws.addEventListener("open", resolve, { once: true });
-      this.ws.addEventListener("error", () => reject(new Error("CDP websocket failed")), {
-        once: true,
-      });
-    });
-    this.ws.addEventListener("message", (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (msg.id && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id);
-        this.pending.delete(msg.id);
-        if (msg.error) reject(new Error(msg.error.message));
-        else resolve(msg.result);
-      }
-    });
-  }
-
-  send(method, params = {}) {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  async eval(expression) {
-    const res = await this.send("Runtime.evaluate", {
-      expression,
-      returnByValue: true,
-      awaitPromise: true,
-    });
-    if (res.exceptionDetails) {
-      throw new Error(
-        `page threw: ${res.exceptionDetails.exception?.description ?? expression}`,
-      );
-    }
-    return res.result.value;
-  }
-
-  close() {
-    this.ws.close();
-  }
-}
-
-async function waitFor(fn, timeoutMs, label) {
-  const deadline = Date.now() + timeoutMs;
-  let last;
-  while (Date.now() < deadline) {
-    last = await fn();
-    if (last) return last;
-    await sleep(250);
-  }
-  throw new Error(`timeout waiting for ${label} (last: ${JSON.stringify(last)})`);
+  return cdpPageTargetOnPort(CDP_PORT, timeoutMs);
 }
 
 // --- page-side probes -------------------------------------------------------
-
-const SHELL_PROBE = `(() => {
-  const q = (t) => document.querySelector('[data-testid="' + t + '"]');
-  const visible = (el) => {
-    if (!el) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 &&
-           r.bottom > 0 && r.right > 0 &&
-           r.top < window.innerHeight && r.left < window.innerWidth;
-  };
-  return {
-    title: document.title,
-    readyState: document.readyState,
-    viewport: [window.innerWidth, window.innerHeight],
-    appBarVisible: visible(q("app-bar")),
-    navRailVisible: visible(q("nav-rail")),
-  };
-})()`;
-
-function clickProbe(testId) {
-  return `(() => {
-    const el = document.querySelector('[data-testid="${testId}"]');
-    if (!el) return false;
-    el.click();
-    return true;
-  })()`;
-}
-
-const TRACE_STATE_PROBE = `(() => {
-  const q = (t) => document.querySelector('[data-testid="' + t + '"]');
-  const table = q("trace-table");
-  const cells = table ? [...table.querySelectorAll("tbody tr td")] : [];
-  const totalAttr = table ? table.getAttribute("data-row-total") : null;
-  return {
-    viewPresent: !!q("view-trace"),
-    tablePresent: !!table,
-    // Model size (not Virtuoso's viewport-mounted tr count).
-    rowCount: totalAttr != null ? Number(totalAttr) : 0,
-    visibleRowCount: table ? table.querySelectorAll("tbody tr").length : 0,
-    emptyShown: !!q("trace-empty"),
-    mode: table ? table.getAttribute("data-trace-mode") : null,
-    // Fingerprint of visible cell text — changes when Fixed rewrites in place.
-    cellFingerprint: cells.map((c) => c.textContent || "").join("|").slice(0, 800),
-  };
-})()`;
 
 const OPEN_DISPLAY_SETTINGS_PROBE = `(() => {
   const btn = document.querySelector('[data-testid="trace-display-settings-btn"]');
@@ -299,14 +129,6 @@ const TRACE_MODE_PROBE = `(() => {
 })()`;
 
 // MUI Select opens on mousedown of its combobox; options render in a portal.
-const OPEN_SETTINGS_SOURCE_SELECT_PROBE = `(() => {
-  const root = document.querySelector('[data-testid="settings-source-select"]');
-  const combo = root ? root.querySelector('[role="combobox"]') : null;
-  if (!combo) return false;
-  combo.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  return true;
-})()`;
-
 const OPEN_SETTINGS_LIVE_INTERFACE_PROBE = `(() => {
   const root = document.querySelector('[data-testid="settings-live-interface"]');
   const combo = root ? root.querySelector('[role="combobox"]') : null;
@@ -381,38 +203,6 @@ function setSimAddrProbe(addr) {
   })()`;
 }
 
-function setTextFieldProbe(testId, value) {
-  return `(() => {
-    const root = document.querySelector('[data-testid="${testId}"]');
-    const input = root ? root.querySelector("input") : null;
-    if (!input) return false;
-    const setter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype, "value").set;
-    setter.call(input, ${JSON.stringify(value)});
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    return true;
-  })()`;
-}
-
-const DEPS_PROBE = `(() => {
-  const panel = document.querySelector('[data-testid="settings-dependencies-panel"]');
-  const ids = ["npcap", "libpcap", "vxlapi", "vector-driver"];
-  const allowed = new Set([
-    "Installed", "Missing", "Incompatible", "Blocked", "N/A",
-  ]);
-  const rows = ids.map((id) => {
-    const chip = document.querySelector('[data-testid="settings-dep-status-' + id + '"]');
-    const label = chip ? (chip.textContent || "").trim() : null;
-    const head = label ? label.split("·")[0].trim() : null;
-    return { id, label, head, ok: head ? allowed.has(head) : false };
-  });
-  return {
-    panelPresent: !!panel,
-    rows,
-    allOk: rows.every((r) => r.ok),
-  };
-})()`;
-
 const DIAG_PROBE = `(() => {
   const field = document.querySelector('[data-testid="settings-diag-report-field"]');
   const input = field
@@ -426,24 +216,6 @@ const DIAG_PROBE = `(() => {
     hasRadeau: /RadEAU/i.test(report),
     hasLogPath: /log/i.test(report) || /log path/i.test(logText),
     logText,
-  };
-})()`;
-
-const APPBAR_RUN_LABEL_PROBE = `(() => {
-  const btn = document.querySelector('[data-testid="appbar-run-btn"]');
-  if (!btn) return null;
-  return {
-    label: (btn.getAttribute("aria-label") || btn.textContent || "").trim(),
-    pressed: btn.getAttribute("aria-pressed"),
-  };
-})()`;
-
-const NETWORK_EOF_PROBE = `(() => {
-  const q = (t) => document.querySelector('[data-testid="' + t + '"]');
-  return {
-    linkLabel: q("network-link-chip")?.textContent?.trim() || null,
-    linkDetail: q("network-link-detail")?.textContent?.trim() || null,
-    sourceKind: q("network-source-kind")?.textContent?.trim() || null,
   };
 })()`;
 

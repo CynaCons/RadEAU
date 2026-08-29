@@ -1,6 +1,7 @@
 # Node
 node_modules/
 dist/
+dist-portable/
 *.local
 
 # Rust
