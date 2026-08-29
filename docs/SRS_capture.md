@@ -176,4 +176,23 @@ strip 802.1Q tags before Npcap sees them — documented in the Dependencies
 row detail. `SourceSpec` gains `{kind:"live", interfaceId, filter?}`. The
 dependency probe may call `pcap_lib_version` through the same loader (it
 opens no device). Verification on this laptop uses the Npcap loopback device
-with `ecu-netsim --udp-target 127.0.0.1` emitting real datagrams.
+with `ecu-netsim --udp-target 127.0.0.1` emitting real datagrams. The Npcap
+loopback device presents BSD loopback framing (`DLT_NULL`: a 4-byte
+address-family header before the IP packet); the live source synthesizes an
+Ethernet II header for those frames so classification is unchanged; any
+other unsupported data link is refused with a diagnostic naming it.
+
+## 7. Continuous pcap recording (CP-014..016)
+
+| ID | Requirement | Priority | Status | Acceptance criteria |
+|---|---|---|---|---|
+| CP-014 | While the record switch is armed, every frame the reader classifies is appended to a classic pcap file (ns magic, link type 1, absolute timestamps from the session epoch) by a dedicated writer thread fed by a bounded queue (8,192 frames, drop-oldest, counted) with a 256 KB / 2 s flush discipline; the reader never blocks on disk | Must | Planned | A 60 s simulator session records a file that replays through the pcap source with the same frame count as `capture:stats.received` minus `recordingDropped` |
+| CP-015 | Recording is a sub-state of a running session: arming while stopped stores the intent and starts the file with the next session; stopping the session closes the file; the file name is `radeau-<session start yyyyMMdd-HHmmss>.pcap` in the recordings directory (Settings › Recording, default the platform documents dir / RadEAU); the app-bar indicator shows `error` only while bytes are actually being written | Must | Planned | Indicator color follows real writes; a write failure surfaces as an inline alert and disarms recording |
+| CP-016 | `capture:stats` gains `recordingFrames`, `recordingBytes`, `recordingDropped`; the Recorder view's Record panel shows the active path, frames and bytes live and lists this session's recordings when stopped (true files only) | Must | Planned | E2E: arm, run the sim 5 s, stop → a file exists whose size matches `recordingBytes`; the Recorder list shows it |
+
+Recording writes pcap (not the v0.6 JSONL format) because it is the format the
+bench engineer can open anywhere; the JSONL recording with decoded names and
+the replay worker stay in v0.6. Commands: `recording_arm(bool)`,
+`recording_dir_set(path)`, `recording_list() → [{path, bytes, frames,
+startedMs}]`; events: `recording:state {armed, active, path, frames, bytes,
+dropped, error}`.

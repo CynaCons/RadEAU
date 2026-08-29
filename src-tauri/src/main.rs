@@ -58,6 +58,7 @@ fn main() {
             dissect::frame_detail,
             diag::dependency_probe,
             diag::diagnostics_report,
+            diag::app_info,
             diag::log_path,
             diag::open_url,
         ])

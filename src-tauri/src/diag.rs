@@ -53,6 +53,26 @@ pub fn diagnostics_report(catalog: State<CatalogState>) -> String {
     })
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    version: &'static str,
+    build_profile: &'static str,
+    os: String,
+    /// The dev frame generator exists only in debug builds.
+    devgen_available: bool,
+}
+
+#[tauri::command]
+pub fn app_info() -> AppInfo {
+    AppInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        build_profile: BUILD_PROFILE,
+        os: os_string(),
+        devgen_available: cfg!(debug_assertions),
+    }
+}
+
 #[tauri::command]
 pub fn log_path() -> Option<String> {
     log::path().map(|p| p.display().to_string())
