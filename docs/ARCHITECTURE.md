@@ -5,45 +5,54 @@ Diagram companion to the normative documents — [PRD.md](../PRD.md) §3–§4,
 [SRS_ecu_netsim.md](SRS_ecu_netsim.md). Where this page and those documents
 disagree, the documents win.
 
-## 1. Current data path (v0.1.3 — as built)
+## 1. Current data path (v0.1.5 — as built)
 
-One pipeline slice exists end to end today, with **two selectable sources
-behind one capture session**: the dev frame generator (PRD §3.8) and the
-`ecu-netsim` monitor link — the first live cut of the unified pipeline. The
-full channel abstraction still arrives in v0.3.1; everything downstream of
-the accumulator is already the real, spec-shaped pipeline (PF-001..004
-implemented and tested).
+One pipeline exists end to end, with **two selectable sources behind one
+capture session** (the dev frame generator and the `ecu-netsim` monitor link;
+the pcap file/stream sources and the channel enum land with v0.1.6,
+[SRS_capture.md](SRS_capture.md)). Every frame a source delivers becomes a
+row: the classifier never drops ([SRS_protocols.md](SRS_protocols.md) §2 —
+VLAN peeled, SOME/IP by plausibility on any port, ARP / IPv6 / TCP / ICMP /
+other / malformed as honest classes), endpoints are keyed by address, and a
+1 Hz `capture:stats` event keeps drops visible. Everything downstream of the
+accumulator is the spec-shaped pipeline (PF-001..004 implemented and tested).
 
 ```mermaid
 flowchart LR
-  subgraph netsim["ecu-netsim (live, minimal)"]
-    ecus["Simulated ECUs\ncamera · radar · lidar\ndynamics · fusion\nSOME/IP events · SD offers · gPTP"]
+  subgraph netsim["ecu-netsim (live)"]
+    ecus["Simulated ECUs\ncamera · radar · lidar (VLAN 10, port 30501)\ndynamics · fusion\nSOME/IP · SD · gPTP · ARP · ICMPv6 · runts"]
     mon["Monitor link :5560\nJSON handshake +\nbinary records · gap records"]
     ecus --> mon
   end
 
   subgraph core["Rust core (radeau.exe)"]
     devgen["DevGen source\nseeded synthetic frames"]
-    sim["Sim-link source\nTCP client · deframer\nclassify via radeau-proto\nreconnect + capture:link"]
-    acc["Accumulator\n4,000 cap · drop oldest"]
-    cadence["Deadline cadence 16 ms\n+ credits (3 in flight)"]
-    devgen --> acc
-    sim --> acc
+    sim["Sim-link source\nTCP client · deframer\nreconnect + capture:link"]
+    classify["classify_frame\nradeau-proto codecs\nnever drops · endpoint table"]
+    ring["FrameRing\n65,536 / 96 MiB\nraw bytes for dissection"]
+    acc["Accumulator\n4,000 cap · drop oldest (counted)"]
+    cadence["Deadline cadence 16 ms\n+ credits (3 in flight)\n+ capture:stats 1 Hz"]
+    devgen --> classify
+    sim --> classify
+    classify --> ring
+    classify --> acc
     acc --> cadence
   end
   mon -- "length-prefixed\nframe records" --> sim
 
   subgraph ui["WebView UI"]
-    store["traceStore\n(bounded row store)\n+ session endpoint table"]
-    trace["Trace view\nsource picker · link chip\n(virtualized table)"]
+    store["traceStore\n(bounded row store)\nper-class keys"]
+    filter["projection\nfilter → Fixed collapse /\nSequential window"]
+    trace["Trace view\nFixed / Sequential · popover filters\ndissection on expand"]
     ack["1 ack / animation frame"]
-    store --> trace
+    store --> filter --> trace
     trace -.-> ack
   end
 
-  cadence -- "frames:batch\n(columnar event)" --> store
-  core -- "capture:session / capture:link" --> store
+  cadence -- "frames:batch\n(columnar, per-class columns)" --> store
+  core -- "capture:session (endpoint table)\ncapture:link · capture:stats" --> store
   ack -- "ack_frames" --> cadence
+  trace -- "frame_detail(idx)" --> ring
   ui -- "capture_start(SourceSpec) / capture_stop" --> core
 ```
 
