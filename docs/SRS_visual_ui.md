@@ -483,7 +483,10 @@ The same top-right chip family carries a `warning`-outlined `Dropped · n`
 chip whenever any loss counter of the running session is non-zero
 (accumulator drops, gap-dropped frames, kernel drops — the tooltip breaks
 them down, from `capture:stats`); a session with no loss shows no chip. A
-trace that understates the wire is never silent about it.
+trace that understates the wire is never silent about it. While a pcap
+recording is active (SRS_capture §7) the same family shows an
+`error`-outlined `Recording · n frames` chip whose tooltip names the file —
+the region being recorded says so itself (VU-015).
 
 ### 5.3 Recorder
 
