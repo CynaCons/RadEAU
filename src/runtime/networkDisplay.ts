@@ -69,6 +69,9 @@ function sourceAddress(input: {
   simAddr: string;
   pcapPath?: string;
   pcapStreamAddr?: string;
+  liveInterfaceId?: string;
+  /** Optional friendly label (description ?? name) for live NIC display. */
+  liveInterfaceLabel?: string | null;
 }): string | null {
   switch (input.sourceKind) {
     case "sim":
@@ -80,6 +83,12 @@ function sourceAddress(input: {
     case "pcapStream": {
       const a = (input.pcapStreamAddr ?? "").trim();
       return a || null;
+    }
+    case "live": {
+      const label = (input.liveInterfaceLabel ?? "").trim();
+      if (label) return label;
+      const id = (input.liveInterfaceId ?? "").trim();
+      return id || null;
     }
     default:
       return null;
@@ -93,6 +102,8 @@ export function connectionPanelModel(input: {
   simAddr: string;
   pcapPath?: string;
   pcapStreamAddr?: string;
+  liveInterfaceId?: string;
+  liveInterfaceLabel?: string | null;
   linkStatus: CaptureLinkStatus | null;
   sessionInfo: CaptureSessionInfo | null;
   stats?: CaptureStats | null;

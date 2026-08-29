@@ -116,6 +116,38 @@ describe("networkDisplay Connection panel", () => {
     expect(model.timestampSource).toBe("file");
   });
 
+  it("shows live interface label or id on network-source-addr", () => {
+    const byId = connectionPanelModel({
+      running: true,
+      sourceKind: "live",
+      simAddr: "127.0.0.1:5560",
+      liveInterfaceId: "\\Device\\NPF_Loopback",
+      linkStatus: { state: "connected", detail: null },
+      sessionInfo: {
+        sourceKind: "live",
+        scenario: null,
+        endpoints: [],
+        sessionEpochMs: 1_700_000_000_000,
+        timestampSource: "host",
+      },
+    });
+    expect(byId.sourceLabel).toBe("Physical interface");
+    expect(byId.address).toBe("\\Device\\NPF_Loopback");
+    expect(byId.timestampSource).toBe("host");
+
+    const byLabel = connectionPanelModel({
+      running: true,
+      sourceKind: "live",
+      simAddr: "127.0.0.1:5560",
+      liveInterfaceId: "\\Device\\NPF_Loopback",
+      liveInterfaceLabel: "Npcap Loopback Adapter",
+      linkStatus: { state: "error", detail: "device busy" },
+      sessionInfo: null,
+    });
+    expect(byLabel.address).toBe("Npcap Loopback Adapter");
+    expect(byLabel.linkState).toBe("error");
+  });
+
   it("exposes capture:stats counters and a non-zero class line", () => {
     const model = connectionPanelModel({
       running: true,
@@ -133,6 +165,23 @@ describe("networkDisplay Connection panel", () => {
     expect(model.stats!.malformed).toBe(3);
     expect(model.stats!.classLine).toBe("SOME/IP 12,340 · SD 51 · gPTP 800 · ARP 12");
     expect(model.stats!.caption).toBeNull();
+  });
+
+  it("includes kernelDropped in the Dropped total", () => {
+    const model = connectionPanelModel({
+      running: true,
+      sourceKind: "live",
+      simAddr: "127.0.0.1:5560",
+      liveInterfaceId: "lo",
+      linkStatus: { state: "connected", detail: null },
+      sessionInfo: null,
+      stats: makeStats({
+        accumulatorDropped: 1,
+        gapDropped: 2,
+        kernelDropped: 10,
+      }),
+    });
+    expect(model.stats!.dropped).toBe(13);
   });
 
   it("captions last session when stopped with stats present", () => {

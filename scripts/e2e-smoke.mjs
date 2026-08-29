@@ -116,9 +116,13 @@ async function tcpReachable(port, timeoutMs) {
 }
 
 async function launchNetsim() {
-  const child = spawnHidden(`"${NETSIM_EXE}" --monitor-port ${SIM_PORT} --seed 7`, {
-    cwd: repoRoot,
-  });
+  // --udp-target is harmless for the sim-link phase and required for live loopback.
+  const child = spawnHidden(
+    `"${NETSIM_EXE}" --monitor-port ${SIM_PORT} --seed 7 --udp-target 127.0.0.1`,
+    {
+      cwd: repoRoot,
+    },
+  );
   if (!(await tcpReachable(SIM_PORT, 15_000))) {
     killTree(child.pid);
     throw new Error(`ecu-netsim monitor link did not come up on ${SIM_PORT}`);
@@ -301,6 +305,66 @@ const OPEN_SETTINGS_SOURCE_SELECT_PROBE = `(() => {
   if (!combo) return false;
   combo.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
   return true;
+})()`;
+
+const OPEN_SETTINGS_LIVE_INTERFACE_PROBE = `(() => {
+  const root = document.querySelector('[data-testid="settings-live-interface"]');
+  const combo = root ? root.querySelector('[role="combobox"]') : null;
+  if (!combo) return false;
+  combo.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  return true;
+})()`;
+
+/** True when the Physical interface option is present and disabled (Npcap missing). */
+const LIVE_OPTION_STATE_PROBE = `(() => {
+  const opt = document.querySelector('[data-testid="settings-source-option-live"]');
+  if (!opt) return { present: false, disabled: true };
+  const disabled =
+    opt.getAttribute("aria-disabled") === "true" ||
+    opt.classList.contains("Mui-disabled") ||
+    opt.hasAttribute("disabled");
+  return { present: true, disabled };
+})()`;
+
+/** Pick the first live interface option whose label or value matches /loopback/i. */
+const CLICK_LIVE_LOOPBACK_OPTION_PROBE = `(() => {
+  const options = [...document.querySelectorAll('[data-testid^="settings-live-option-"]')];
+  for (const opt of options) {
+    const text = (opt.textContent || "").trim();
+    const value = opt.getAttribute("data-value") || "";
+    if (/loopback/i.test(text) || /loopback/i.test(value)) {
+      opt.click();
+      return { ok: true, text, value, testId: opt.getAttribute("data-testid") };
+    }
+  }
+  return {
+    ok: false,
+    count: options.length,
+    labels: options.map((o) => (o.textContent || "").trim().slice(0, 80)),
+  };
+})()`;
+
+const LIVE_TRACE_PROBE = `(() => {
+  const q = (t) => document.querySelector('[data-testid="' + t + '"]');
+  const table = q("trace-table");
+  if (!table) return { rowCount: 0, someipOrSd: false, source127: false };
+  const rows = [...table.querySelectorAll("tbody tr")].filter(
+    (r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"),
+  );
+  let someipOrSd = false;
+  let source127 = false;
+  for (const row of rows) {
+    const cells = [...row.querySelectorAll("td")].map((c) => (c.textContent || "").trim());
+    // Protocol is typically after expand/time/dir; scan all cells.
+    if (cells.some((t) => t === "SOME/IP" || t === "SD")) someipOrSd = true;
+    if (cells.some((t) => t.includes("127.0.0.1"))) source127 = true;
+  }
+  const totalAttr = table.getAttribute("data-row-total");
+  return {
+    rowCount: totalAttr != null ? Number(totalAttr) : rows.length,
+    someipOrSd,
+    source127,
+  };
 })()`;
 
 // React-controlled input: use the native value setter so the change is seen.
@@ -1173,6 +1237,7 @@ async function main() {
       diagnostics: false,
       pcapEof: false,
       timeToggle: false,
+      live: false,
     };
 
     // Phase (a) — Settings › Dependencies (CP-008).
@@ -1336,6 +1401,123 @@ async function main() {
       }
     } catch (err) {
       fail(`pcap/time phase: ${err?.message ?? err}`);
+    }
+
+    // Phase (e) — live loopback via Npcap (CP-010..013). Isolated; skip honestly
+    // when Npcap is missing or no loopback device is listed.
+    try {
+      const runState = await session.eval(APPBAR_RUN_LABEL_PROBE);
+      if (runState && /stop/i.test(runState.label || "")) {
+        if (!(await session.eval(clickProbe("appbar-run-btn"))))
+          fail("could not Stop before live phase");
+        await sleep(500);
+      }
+
+      await waitFor(
+        () => session.eval(clickProbe("nav-settings")),
+        10_000,
+        "nav-settings for live",
+      );
+      await waitFor(async () => {
+        const ok = await session.eval(
+          `!!document.querySelector('[data-testid="settings-source-select"]')`,
+        );
+        return ok ? true : null;
+      }, 10_000, "settings source select for live");
+
+      if (!(await session.eval(OPEN_SETTINGS_SOURCE_SELECT_PROBE)))
+        fail("could not open source select for live");
+      await sleep(200);
+
+      const liveOpt = await session.eval(LIVE_OPTION_STATE_PROBE);
+      if (!liveOpt.present) {
+        fail("settings-source-option-live missing");
+      } else if (liveOpt.disabled) {
+        console.log("live: SKIP (Npcap missing)");
+        v016.live = "skipped";
+        // Dismiss the open menu so later clicks are not blocked.
+        await session.eval(`document.body.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Escape", bubbles: true,
+        }))`);
+      } else {
+        if (!(await session.eval(clickProbe("settings-source-option-live"))))
+          fail("could not select Physical interface source");
+        await sleep(300);
+
+        // Refresh the interface list (also auto-loads on select).
+        await waitFor(
+          () => session.eval(clickProbe("settings-live-refresh")),
+          10_000,
+          "settings-live-refresh",
+        );
+        await sleep(500);
+
+        const listErr = await session.eval(`(() => {
+          const el = document.querySelector('[data-testid="settings-live-error"]');
+          return el ? (el.textContent || "").trim() : null;
+        })()`);
+        if (listErr) {
+          throw new Error(`listInterfaces rejected: ${listErr}`);
+        }
+
+        if (!(await session.eval(OPEN_SETTINGS_LIVE_INTERFACE_PROBE)))
+          fail("could not open settings-live-interface");
+        await sleep(200);
+
+        const picked = await session.eval(CLICK_LIVE_LOOPBACK_OPTION_PROBE);
+        if (!picked || !picked.ok) {
+          console.log(
+            "live: SKIP (no loopback interface)",
+            JSON.stringify(picked),
+          );
+          v016.live = "skipped";
+          await session.eval(`document.body.dispatchEvent(new KeyboardEvent("keydown", {
+            key: "Escape", bubbles: true,
+          }))`);
+        } else {
+          console.log("live interface:", JSON.stringify(picked));
+
+          await waitFor(
+            () => session.eval(clickProbe("nav-trace")),
+            10_000,
+            "nav-trace before live start",
+          );
+          await session.eval(clickProbe("trace-clear-btn"));
+          if (!(await session.eval(clickProbe("appbar-run-btn"))))
+            fail("could not Start live session");
+
+          const liveTrace = await waitFor(async () => {
+            const s = await session.eval(LIVE_TRACE_PROBE);
+            return s.rowCount > 0 && s.someipOrSd && s.source127 ? s : null;
+          }, 20_000, "live Trace SOME/IP|SD rows with Source 127.0.0.1");
+          console.log("live trace:", JSON.stringify(liveTrace));
+
+          await waitFor(
+            () => session.eval(clickProbe("nav-network")),
+            10_000,
+            "nav-network during live",
+          );
+          const liveNet = await waitFor(async () => {
+            const n = await session.eval(NETWORK_CONNECTION_PROBE);
+            return n.panelPresent &&
+              n.sourceKind === "Physical interface" &&
+              n.sessionLabel &&
+              /running/i.test(n.sessionLabel)
+              ? n
+              : null;
+          }, 10_000, "Network Connection Physical interface running");
+          console.log("live network:", JSON.stringify(liveNet));
+
+          if (!(await session.eval(clickProbe("appbar-run-btn"))))
+            fail("could not Stop live session");
+          await sleep(300);
+          v016.live = true;
+          console.log("live: PASS");
+        }
+      }
+    } catch (err) {
+      fail(`live phase: ${err?.message ?? err}`);
+      v016.live = false;
     }
 
     console.log(

@@ -18,7 +18,7 @@ use radeau_proto::{
 use std::{
     fs::File,
     io::{self, BufWriter, Write},
-    net::{Ipv4Addr, TcpListener},
+    net::{Ipv4Addr, TcpListener, UdpSocket},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -30,6 +30,7 @@ use std::{
 
 const QUEUE: usize = 4096;
 const PCAP_EPOCH_NS: u64 = 1_767_225_600_000_000_000;
+const USAGE: &str = "usage: ecu-netsim [--monitor-port 5560] [--udp-target IP] [--seed N] [--write-pcap PATH --duration SECONDS]\n\n--udp-target sends SOME/IP and SD UDP payloads to IP in addition to the monitor link. The frame's UDP destination port is preserved. Raw-Ethernet traffic (gPTP, ARP, VLAN tags, runts, and ICMPv6) remains monitor-only.";
 const HANDSHAKE: &str = "{\"link\":\"ecu-netsim-monitor\",\"version\":1,\"scenario\":\"sensor-fusion\",\"ports\":[{\"id\":1,\"name\":\"camera\",\"ip\":\"10.42.0.11\"},{\"id\":2,\"name\":\"radar\",\"ip\":\"10.42.0.12\"},{\"id\":3,\"name\":\"lidar\",\"ip\":\"10.42.0.13\"},{\"id\":4,\"name\":\"dynamics\",\"ip\":\"10.42.0.14\"},{\"id\":5,\"name\":\"fusion\",\"ip\":\"10.42.0.20\"}]}\n";
 
 #[derive(Clone)]
@@ -91,6 +92,7 @@ const NODES: [Node; 5] = [
 
 struct Args {
     port: u16,
+    udp_target: Option<Ipv4Addr>,
     seed: u64,
     write_pcap: Option<PathBuf>,
     duration_seconds: Option<u64>,
@@ -134,21 +136,34 @@ fn main() {
     };
     let actual = listener.local_addr().map(|a| a.port()).unwrap_or(args.port);
     println!("monitor link listening on 127.0.0.1:{actual}");
+    let udp = match args.udp_target.map(UdpEmitter::new).transpose() {
+        Ok(udp) => udp,
+        Err(error) => {
+            eprintln!("failed to initialize UDP emission: {error}");
+            std::process::exit(1)
+        }
+    };
     run(
         listener,
         args.seed,
         Arc::new(AtomicBool::new(true)),
         &catalog,
+        udp,
     );
 }
 
 fn args() -> Result<Args, String> {
     let mut port = 5560;
+    let mut udp_target = None;
     let mut seed = 1;
     let mut write_pcap = None;
     let mut duration_seconds = None;
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
+        if flag == "--help" || flag == "-h" {
+            println!("{USAGE}");
+            std::process::exit(0)
+        }
         if flag == "--version" || flag == "-V" {
             println!(
                 "ecu-netsim {} (codec: {})",
@@ -166,6 +181,13 @@ fn args() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| format!("invalid monitor port: {value}"))?
             }
+            "--udp-target" => {
+                udp_target = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid UDP target IPv4 address: {value}"))?,
+                )
+            }
             "--seed" => {
                 seed = value
                     .parse()
@@ -179,11 +201,7 @@ fn args() -> Result<Args, String> {
                         .map_err(|_| format!("invalid duration in seconds: {value}"))?,
                 )
             }
-            _ => {
-                return Err(format!(
-                    "unknown argument: {flag}; usage: ecu-netsim [--monitor-port 5560] [--seed N] [--write-pcap PATH --duration SECONDS]"
-                ))
-            }
+            _ => return Err(format!("unknown argument: {flag}; {USAGE}")),
         }
     }
     if write_pcap.is_some() != duration_seconds.is_some() {
@@ -191,6 +209,7 @@ fn args() -> Result<Args, String> {
     }
     Ok(Args {
         port,
+        udp_target,
         seed,
         write_pcap,
         duration_seconds,
@@ -311,7 +330,102 @@ where
     Ok(frames)
 }
 
-fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Catalog) {
+struct UdpEmitter {
+    target: Ipv4Addr,
+    sockets: Vec<UdpSocket>,
+    would_block: u64,
+    other_error_reported: bool,
+}
+
+impl UdpEmitter {
+    fn new(target: Ipv4Addr) -> io::Result<Self> {
+        let mut sockets = Vec::with_capacity(NODES.len());
+        for node in NODES {
+            let preferred = source_port(node);
+            let socket = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, preferred)) {
+                Ok(socket) => socket,
+                Err(error) => {
+                    eprintln!(
+                        "ECU {} could not bind UDP source port {preferred} ({error}); using an ephemeral port",
+                        node.port
+                    );
+                    UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?
+                }
+            };
+            socket.set_nonblocking(true)?;
+            sockets.push(socket);
+        }
+        Ok(Self {
+            target,
+            sockets,
+            would_block: 0,
+            other_error_reported: false,
+        })
+    }
+
+    fn send_record(&mut self, record: &Record) {
+        let Some((destination_port, payload)) = udp_destination_and_payload(&record.frame) else {
+            return;
+        };
+        let Some(index) = record.port.checked_sub(1).map(usize::from) else {
+            return;
+        };
+        self.send_datagram(index, destination_port, payload);
+    }
+
+    fn send_datagram(&mut self, ecu_index: usize, destination_port: u16, payload: &[u8]) {
+        let Some(socket) = self.sockets.get(ecu_index) else {
+            return;
+        };
+        match socket.send_to(payload, (self.target, destination_port)) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                self.would_block = self.would_block.saturating_add(1);
+            }
+            Err(error) if !self.other_error_reported => {
+                eprintln!("UDP emission failed: {error}; further send errors are suppressed");
+                self.other_error_reported = true;
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+fn source_port(node: Node) -> u16 {
+    if node.port == 3 {
+        30501
+    } else {
+        30490
+    }
+}
+
+fn udp_destination_and_payload(frame: &[u8]) -> Option<(u16, &[u8])> {
+    let ethernet = EthernetFrame::parse(frame).ok()?;
+    if ethernet.ethertype != radeau_proto::ethernet::ETHERTYPE_IPV4 {
+        return None;
+    }
+    let ip = Ipv4Packet::parse(ethernet.payload).ok()?;
+    if ip.protocol != ipv4::PROTOCOL_UDP {
+        return None;
+    }
+    let udp = UdpDatagram::parse(ip.payload).ok()?;
+    Some((udp.dst_port, udp.payload))
+}
+
+fn emit(clients: &mut [Client], udp: &mut Option<UdpEmitter>, record: Record) {
+    fanout(clients, record.clone());
+    if let Some(udp) = udp {
+        udp.send_record(&record);
+    }
+}
+
+fn run(
+    listener: TcpListener,
+    seed: u64,
+    running: Arc<AtomicBool>,
+    catalog: &Catalog,
+    mut udp: Option<UdpEmitter>,
+) {
     if listener.set_nonblocking(true).is_err() {
         return;
     }
@@ -335,8 +449,9 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
         for (i, node) in NODES.iter().enumerate() {
             if now >= next[i] {
                 let session = sessions[i];
-                fanout(
+                emit(
                     &mut clients,
+                    &mut udp,
                     Record {
                         time: ns(start),
                         port: node.port,
@@ -349,8 +464,9 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
         }
         if now >= fusion_stats_at {
             let session = sessions[4];
-            fanout(
+            emit(
                 &mut clients,
+                &mut udp,
                 Record {
                     time: ns(start),
                     port: 5,
@@ -363,8 +479,9 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
         if now >= sd_at {
             for (i, node) in NODES.iter().enumerate() {
                 let session = sessions[i];
-                fanout(
+                emit(
                     &mut clients,
+                    &mut udp,
                     Record {
                         time: ns(start),
                         port: node.port,
@@ -377,8 +494,9 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
         }
         if now >= ptp_at {
             for kind in [gptp::MSG_SYNC, gptp::MSG_FOLLOW_UP] {
-                fanout(
+                emit(
                     &mut clients,
+                    &mut udp,
                     Record {
                         time: ns(start),
                         port: 5,
@@ -391,16 +509,18 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
         }
         if now >= arp_at {
             let asker = NODES[arp_node];
-            fanout(
+            emit(
                 &mut clients,
+                &mut udp,
                 Record {
                     time: ns(start),
                     port: asker.port,
                     frame: arp_frame(asker, NODES[4], false),
                 },
             );
-            fanout(
+            emit(
                 &mut clients,
+                &mut udp,
                 Record {
                     time: ns(start),
                     port: 5,
@@ -411,8 +531,9 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
             arp_at += Duration::from_secs(2);
         }
         if now >= router_at {
-            fanout(
+            emit(
                 &mut clients,
+                &mut udp,
                 Record {
                     time: ns(start),
                     port: 5,
@@ -422,8 +543,9 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
             router_at += Duration::from_secs(5);
         }
         if now >= runt_at {
-            fanout(
+            emit(
                 &mut clients,
+                &mut udp,
                 Record {
                     time: ns(start),
                     port: 4,
@@ -433,6 +555,12 @@ fn run(listener: TcpListener, seed: u64, running: Arc<AtomicBool>, catalog: &Cat
             runt_at += Duration::from_secs(10);
         }
         thread::sleep(Duration::from_millis(1));
+    }
+    if let Some(udp) = udp {
+        eprintln!(
+            "UDP emission dropped {} datagrams because the socket would block",
+            udp.would_block
+        );
     }
 }
 
@@ -917,7 +1045,7 @@ mod tests {
                 radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
                     .map(|(catalog, _)| catalog)
                     .expect("checked-in extract");
-            run(listener, 7, stop, &catalog)
+            run(listener, 7, stop, &catalog, None)
         });
         let stream = TcpStream::connect(address).unwrap();
         stream
@@ -1023,6 +1151,52 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(payload[used..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn udp_destination_mapping_preserves_someip_payload() {
+        let catalog =
+            radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
+                .map(|(catalog, _)| catalog)
+                .expect("checked-in extract");
+        let mut noise = 7;
+        let mut ident = 1;
+
+        let camera = event(NODES[0], 0x8001, 1, &mut noise, &mut ident, &catalog);
+        let (port, payload) = udp_destination_and_payload(&camera).expect("camera UDP");
+        assert_eq!(port, 30490);
+        assert_eq!(someip::parse(payload).unwrap().0.service_id, 0x1101);
+
+        let lidar = event(NODES[2], 0x8001, 1, &mut noise, &mut ident, &catalog);
+        let (port, payload) = udp_destination_and_payload(&lidar).expect("VLAN lidar UDP");
+        assert_eq!(port, 30501);
+        assert_eq!(someip::parse(payload).unwrap().0.service_id, 0x1103);
+
+        let lidar_offer = offer(NODES[2], 2, &mut ident);
+        let (port, payload) = udp_destination_and_payload(&lidar_offer).expect("lidar SD UDP");
+        assert_eq!(port, 30490);
+        assert_eq!(
+            someip::parse(payload).unwrap().0.service_id,
+            someip::SD_SERVICE_ID
+        );
+        assert!(udp_destination_and_payload(&ptp(gptp::MSG_SYNC, 1, 0)).is_none());
+    }
+
+    #[test]
+    fn udp_emitter_sends_payload_to_loopback_socket() {
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let destination_port = receiver.local_addr().unwrap().port();
+        let mut emitter = UdpEmitter::new(Ipv4Addr::LOCALHOST).unwrap();
+        let expected = b"SOME/IP payload bytes";
+        emitter.send_datagram(0, destination_port, expected);
+
+        let mut received = [0; 64];
+        let (length, _) = receiver.recv_from(&mut received).unwrap();
+        assert_eq!(&received[..length], expected);
+        assert_eq!(emitter.would_block, 0);
     }
 
     #[test]

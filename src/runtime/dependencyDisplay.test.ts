@@ -4,6 +4,8 @@ import {
   browserDependencyRows,
   dependencyChipModel,
   dependencyPathLine,
+  liveCaptureDependency,
+  liveCapturePlatform,
   type DependencyRow,
 } from "./dependencyDisplay";
 
@@ -102,5 +104,42 @@ describe("dependencyDisplay row model", () => {
         downloadUrl: "https://www.tcpdump.org/",
       }),
     ).toBeNull();
+  });
+
+  it("picks the applicable live-capture dependency for gating", () => {
+    const windowsRows: DependencyRow[] = [
+      {
+        id: "npcap",
+        name: "Npcap",
+        enables: "Windows live capture",
+        status: "installed",
+        version: "1.79",
+        path: "C:\\wpcap.dll",
+        detail: null,
+        downloadUrl: "https://npcap.com/#download",
+      },
+      {
+        id: "libpcap",
+        name: "libpcap",
+        enables: "Linux live capture",
+        status: "not-applicable",
+        version: null,
+        path: null,
+        detail: null,
+        downloadUrl: "https://www.tcpdump.org/",
+      },
+    ];
+    expect(liveCaptureDependency(windowsRows)?.id).toBe("npcap");
+    expect(liveCapturePlatform(windowsRows)).toBe("windows");
+
+    const linuxRows: DependencyRow[] = [
+      { ...windowsRows[0], status: "not-applicable", version: null, path: null },
+      { ...windowsRows[1], status: "missing" },
+    ];
+    expect(liveCaptureDependency(linuxRows)?.id).toBe("libpcap");
+    expect(liveCapturePlatform(linuxRows)).toBe("linux");
+
+    expect(liveCaptureDependency(null)).toBeNull();
+    expect(liveCaptureDependency(browserDependencyRows())?.id).toBe("npcap");
   });
 });

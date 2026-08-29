@@ -14,6 +14,7 @@ import type {
   CaptureSessionInfo,
   CaptureSource,
   CaptureStats,
+  InterfaceInfo,
 } from "./captureSource";
 import { emptyByClass } from "./captureSource";
 import {
@@ -29,6 +30,7 @@ export type {
   CaptureSessionInfo,
   CaptureSource,
   CaptureStats,
+  InterfaceInfo,
 } from "./captureSource";
 export type { DependencyRow } from "./dependencyDisplay";
 
@@ -249,10 +251,24 @@ export function startCapture(source: CaptureSource): Promise<boolean> {
     if (source.kind === "pcapStream") {
       return Promise.reject(new Error("pcap stream is desktop-app only"));
     }
+    if (source.kind === "live") {
+      return Promise.reject(new Error("physical interface is desktop-app only"));
+    }
     mirror.start(source.profile);
     return Promise.resolve(true);
   }
   return invoke<boolean>("capture_start", { source });
+}
+
+/**
+ * Enumerates capture devices (CP-011). Browser mode rejects honestly.
+ * Desktop rejects with a remedy message when Npcap/libpcap is missing.
+ */
+export function listInterfaces(): Promise<InterfaceInfo[]> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<InterfaceInfo[]>("capture_list_interfaces");
 }
 
 export function stopCapture(): Promise<void> {

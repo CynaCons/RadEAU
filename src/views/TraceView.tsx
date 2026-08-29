@@ -41,6 +41,7 @@ import {
   captureButtonLabel,
   linkChipColorVar,
   linkChipLabel,
+  droppedBreakdownTooltip,
   lossTotal,
   showDegradedLinkChip,
 } from "../runtime/captureSource";
@@ -603,13 +604,7 @@ export function TraceView() {
   const stats = session.stats;
   const dropped = stats && capturing ? lossTotal(stats) : 0;
   const showDroppedChip = dropped > 0;
-  const droppedTooltip = stats
-    ? [
-        `Accumulator ${stats.accumulatorDropped.toLocaleString("en-US")}`,
-        `Gap ${stats.gapDropped.toLocaleString("en-US")}`,
-        `Kernel ${stats.kernelDropped.toLocaleString("en-US")}`,
-      ].join(" · ")
-    : "";
+  const droppedTooltip = stats ? droppedBreakdownTooltip(stats) : "";
   const showChipStack =
     paused || showLinkChip || showDroppedChip || filterActive || exportResult !== null;
 

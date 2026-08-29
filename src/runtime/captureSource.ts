@@ -5,10 +5,11 @@
  */
 
 import type { RateProfile } from "./devGenMirror";
+import type { DependencyStatus } from "./dependencyDisplay";
 import type { SessionEndpoint } from "./frameModel";
 import { PROTO_CLASS_COUNT } from "./wireCodes";
 
-export type SourceKind = "devgen" | "sim" | "pcap" | "pcapStream";
+export type SourceKind = "devgen" | "sim" | "pcap" | "pcapStream" | "live";
 
 export type PcapPace = "realtime" | "fast";
 
@@ -16,7 +17,18 @@ export type CaptureSource =
   | { kind: "devgen"; profile: RateProfile }
   | { kind: "sim"; addr: string }
   | { kind: "pcap"; path: string; pace: PcapPace }
-  | { kind: "pcapStream"; addr: string };
+  | { kind: "pcapStream"; addr: string }
+  | { kind: "live"; interfaceId: string; filter: string | null };
+
+/** Device row from `capture_list_interfaces` (CP-011). */
+export interface InterfaceInfo {
+  id: string;
+  name: string;
+  description: string | null;
+  addresses: string[];
+  up: boolean;
+  loopback: boolean;
+}
 
 export type LinkState =
   | "connecting"
@@ -71,6 +83,9 @@ export function emptyByClass(): number[] {
 export const DEFAULT_SIM_ADDR = "127.0.0.1:5560";
 export const DEFAULT_DEVGEN_PROFILE: RateProfile = "normal";
 export const DEFAULT_PCAP_PACE: PcapPace = "realtime";
+/** Default BPF when the live filter field is left empty (CP-012). */
+export const DEFAULT_LIVE_BPF_FILTER =
+  "udp or ether proto 0x88f7 or arp or vlan";
 
 /** Link states that count as degraded for Trace's status chip (§4.3). */
 const DEGRADED_LINK_STATES: ReadonlySet<LinkState> = new Set([
@@ -79,8 +94,12 @@ const DEGRADED_LINK_STATES: ReadonlySet<LinkState> = new Set([
   "error",
 ]);
 
-/** Sources that surface a Trace degraded-link chip (sim + pcap stream). */
-const DEGRADED_LINK_KINDS: ReadonlySet<SourceKind> = new Set(["sim", "pcapStream"]);
+/** Sources that surface a Trace degraded-link chip (sim / pcap stream / live). */
+const DEGRADED_LINK_KINDS: ReadonlySet<SourceKind> = new Set([
+  "sim",
+  "pcapStream",
+  "live",
+]);
 
 /** Simulator link is a desktop-only source; browser mode keeps it disabled. */
 export function simSourceAvailable(desktop: boolean): boolean {
@@ -92,6 +111,36 @@ export function pcapSourceAvailable(desktop: boolean): boolean {
   return desktop;
 }
 
+/**
+ * Live NIC capture: desktop app and the platform's npcap/libpcap probe row
+ * must both be Installed (§5.7).
+ */
+export function liveSourceAvailable(
+  desktop: boolean,
+  liveDepStatus: DependencyStatus | null | undefined,
+): boolean {
+  return desktop && liveDepStatus === "installed";
+}
+
+/** Disabled-option reason for the live Interface entry (§5.7). */
+export function liveSourceDisabledReason(
+  platform: "windows" | "linux" | "other",
+): string {
+  if (platform === "linux") return "requires libpcap — see Dependencies";
+  return "requires Npcap — see Dependencies";
+}
+
+/** Primary label for a live interface option: description, else name. */
+export function liveInterfacePrimaryLabel(iface: InterfaceInfo): string {
+  const d = iface.description?.trim();
+  return d || iface.name;
+}
+
+/** Secondary line under a live interface option (addresses joined). */
+export function liveInterfaceSecondaryText(iface: InterfaceInfo): string {
+  return iface.addresses.join(", ");
+}
+
 export function buildCaptureSource(
   kind: SourceKind,
   opts: {
@@ -100,6 +149,8 @@ export function buildCaptureSource(
     path?: string;
     pace?: PcapPace;
     streamAddr?: string;
+    interfaceId?: string;
+    filter?: string | null;
   } = {},
 ): CaptureSource {
   if (kind === "sim") {
@@ -114,6 +165,17 @@ export function buildCaptureSource(
   }
   if (kind === "pcapStream") {
     return { kind: "pcapStream", addr: (opts.streamAddr ?? "").trim() };
+  }
+  if (kind === "live") {
+    const raw =
+      opts.filter === null || opts.filter === undefined
+        ? ""
+        : String(opts.filter).trim();
+    return {
+      kind: "live",
+      interfaceId: (opts.interfaceId ?? "").trim(),
+      filter: raw.length > 0 ? raw : null,
+    };
   }
   return { kind: "devgen", profile: opts.profile ?? DEFAULT_DEVGEN_PROFILE };
 }
@@ -131,10 +193,15 @@ export function showPcapStreamAddrField(kind: SourceKind): boolean {
   return kind === "pcapStream";
 }
 
+export function showLiveInterfaceFields(kind: SourceKind): boolean {
+  return kind === "live";
+}
+
 /**
- * Trace shows a link chip only while a session runs on a degraded sim or
- * pcap-stream link (connecting / reconnecting / error). Closed is never shown
- * on Trace (CP-005); healthy connected and other sources: hidden.
+ * Trace shows a link chip only while a session runs on a degraded sim,
+ * pcap-stream, or live link (connecting / reconnecting / error). Closed is
+ * never shown on Trace (CP-005); healthy connected and other sources: hidden.
+ * Live has no reconnect — error stays until Stop (CP-013).
  */
 export function showDegradedLinkChip(
   running: boolean,
@@ -163,6 +230,8 @@ export function sourceKindLabel(kind: SourceKind): string {
       return "pcap file";
     case "pcapStream":
       return "pcap stream";
+    case "live":
+      return "Physical interface";
     default:
       return "Dev generator";
   }
@@ -207,9 +276,20 @@ export function captureButtonLabel(capturing: boolean, kind: SourceKind): string
       return "Start capture · pcap file";
     case "pcapStream":
       return "Start capture · pcap stream";
+    case "live":
+      return "Start capture · physical interface";
     default:
       return "Start capture · dev generator";
   }
+}
+
+/** Dropped-chip tooltip: accumulator + gap + kernel (SP-010 / CP-012). */
+export function droppedBreakdownTooltip(stats: CaptureStats): string {
+  return [
+    `Accumulator ${stats.accumulatorDropped.toLocaleString("en-US")}`,
+    `Gap ${stats.gapDropped.toLocaleString("en-US")}`,
+    `Kernel ${stats.kernelDropped.toLocaleString("en-US")}`,
+  ].join(" · ");
 }
 
 export function pcapPaceCaption(pace: PcapPace): string {

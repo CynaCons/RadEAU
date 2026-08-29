@@ -12,7 +12,7 @@ vi.mock("./desktop", () => ({
     if (source.kind === "sim") {
       throw new Error("simulator link is desktop-app only");
     }
-    if (source.kind === "pcap" || source.kind === "pcapStream") {
+    if (source.kind === "pcap" || source.kind === "pcapStream" || source.kind === "live") {
       throw new Error(`${source.kind} is desktop-app only`);
     }
     desktopState.mirrorRunning = true;
@@ -200,6 +200,41 @@ describe("SessionStore", () => {
 
     store.setPcapStreamAddr("127.0.0.1:5561");
     expect(store.getSnapshot().pcapStreamAddr).toBe("127.0.0.1:5561");
+  });
+
+  it("stores live interface/filter and locks them while running", async () => {
+    store.setSourceKind("live");
+    store.setLiveInterfaceId("\\Device\\NPF_Loopback");
+    store.setLiveFilter("udp");
+    expect(store.getSnapshot().sourceKind).toBe("live");
+    expect(store.getSnapshot().liveInterfaceId).toBe("\\Device\\NPF_Loopback");
+    expect(store.getSnapshot().liveFilter).toBe("udp");
+    expect(store.currentSource()).toEqual({
+      kind: "live",
+      interfaceId: "\\Device\\NPF_Loopback",
+      filter: "udp",
+    });
+
+    store.setLiveFilter("");
+    expect(store.currentSource()).toEqual({
+      kind: "live",
+      interfaceId: "\\Device\\NPF_Loopback",
+      filter: null,
+    });
+
+    // Start fails (desktop-only) but first flip to a startable source to lock.
+    store.setSourceKind("devgen");
+    await store.start();
+    store.setLiveInterfaceId("eth0");
+    store.setLiveFilter("arp");
+    expect(store.getSnapshot().liveInterfaceId).toBe("\\Device\\NPF_Loopback");
+    expect(store.getSnapshot().liveFilter).toBe("");
+    await store.stop();
+
+    store.setLiveInterfaceId("eth0");
+    store.setLiveFilter("arp");
+    expect(store.getSnapshot().liveInterfaceId).toBe("eth0");
+    expect(store.getSnapshot().liveFilter).toBe("arp");
   });
 
   it("setPcapSource configures the Interface for Replay Browse", () => {

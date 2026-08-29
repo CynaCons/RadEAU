@@ -4,7 +4,7 @@
  * live decode arrives. No fabricated ECUs, counters, or topology.
  */
 
-import { Box, Chip, Stack, Typography } from "@mui/material";
+import { Box, Chip, Stack, Tooltip, Typography } from "@mui/material";
 import CellTowerIcon from "@mui/icons-material/CellTower";
 import FiberManualRecordIcon from "@mui/icons-material/FiberManualRecord";
 import HubIcon from "@mui/icons-material/Hub";
@@ -13,7 +13,10 @@ import SettingsEthernetIcon from "@mui/icons-material/SettingsEthernet";
 import { useMemo, useSyncExternalStore } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { RaisedPanel } from "../components/RaisedPanel";
-import { linkChipColorVar } from "../runtime/captureSource";
+import {
+  droppedBreakdownTooltip,
+  linkChipColorVar,
+} from "../runtime/captureSource";
 import {
   connectionPanelModel,
   NETWORK_EMPTY,
@@ -37,6 +40,7 @@ export function NetworkView() {
         simAddr: session.simAddr,
         pcapPath: session.pcapPath,
         pcapStreamAddr: session.pcapStreamAddr,
+        liveInterfaceId: session.liveInterfaceId,
         linkStatus: session.linkStatus,
         sessionInfo: session.sessionInfo,
         stats: session.stats,
@@ -49,6 +53,9 @@ export function NetworkView() {
     : "var(--text-secondary)";
   const stats = model.stats;
   const droppedWarning = stats !== null && stats.dropped > 0;
+  const droppedTooltip = session.stats
+    ? droppedBreakdownTooltip(session.stats)
+    : "";
 
   return (
     <Stack spacing={2}>
@@ -150,17 +157,19 @@ export function NetworkView() {
                   label={`Emitted ${stats.emitted.toLocaleString("en-US")}`}
                   data-testid="network-stat-emitted"
                 />
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`Dropped ${stats.dropped.toLocaleString("en-US")}`}
-                  data-testid="network-stat-dropped"
-                  sx={
-                    droppedWarning
-                      ? { color: "var(--warning)", borderColor: "var(--warning)" }
-                      : undefined
-                  }
-                />
+                <Tooltip title={droppedTooltip}>
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`Dropped ${stats.dropped.toLocaleString("en-US")}`}
+                    data-testid="network-stat-dropped"
+                    sx={
+                      droppedWarning
+                        ? { color: "var(--warning)", borderColor: "var(--warning)" }
+                        : undefined
+                    }
+                  />
+                </Tooltip>
                 <Chip
                   size="small"
                   variant="outlined"

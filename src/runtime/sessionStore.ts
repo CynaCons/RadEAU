@@ -33,6 +33,9 @@ export interface SessionSnapshot {
   readonly pcapPath: string;
   readonly pcapPace: PcapPace;
   readonly pcapStreamAddr: string;
+  readonly liveInterfaceId: string;
+  /** Empty string means "use the core default BPF". */
+  readonly liveFilter: string;
   readonly linkStatus: CaptureLinkStatus | null;
   readonly sessionInfo: CaptureSessionInfo | null;
   /** Live / last-session capture counters; null until the first stats event. */
@@ -48,6 +51,8 @@ export class SessionStore {
   private pcapPath = "";
   private pcapPace: PcapPace = DEFAULT_PCAP_PACE;
   private pcapStreamAddr = "";
+  private liveInterfaceId = "";
+  private liveFilter = "";
   private linkStatus: CaptureLinkStatus | null = null;
   private sessionInfo: CaptureSessionInfo | null = null;
   private stats: CaptureStats | null = null;
@@ -99,6 +104,8 @@ export class SessionStore {
       path: this.pcapPath,
       pace: this.pcapPace,
       streamAddr: this.pcapStreamAddr,
+      interfaceId: this.liveInterfaceId,
+      filter: this.liveFilter,
     });
   }
 
@@ -133,6 +140,18 @@ export class SessionStore {
     this.publish();
   }
 
+  setLiveInterfaceId(id: string): void {
+    if (this.running || id === this.liveInterfaceId) return;
+    this.liveInterfaceId = id;
+    this.publish();
+  }
+
+  setLiveFilter(filter: string): void {
+    if (this.running || filter === this.liveFilter) return;
+    this.liveFilter = filter;
+    this.publish();
+  }
+
   /**
    * Configures the session as a pcap-file source (Recorder Replay Browse).
    * No-op while running.
@@ -163,6 +182,12 @@ export class SessionStore {
       this.linkStatus = {
         state: "connecting",
         detail: source.path || null,
+      };
+      this.publish();
+    } else if (source.kind === "live") {
+      this.linkStatus = {
+        state: "connecting",
+        detail: source.interfaceId || null,
       };
       this.publish();
     } else {
@@ -224,6 +249,8 @@ export class SessionStore {
       pcapPath: this.pcapPath,
       pcapPace: this.pcapPace,
       pcapStreamAddr: this.pcapStreamAddr,
+      liveInterfaceId: this.liveInterfaceId,
+      liveFilter: this.liveFilter,
       linkStatus: this.linkStatus,
       sessionInfo: this.sessionInfo,
       stats: this.stats,

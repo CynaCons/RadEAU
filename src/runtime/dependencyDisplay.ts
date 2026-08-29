@@ -113,3 +113,33 @@ export function dependencyPathLine(row: DependencyRow): string | null {
   if (row.version) return row.version;
   return null;
 }
+
+/**
+ * Platform live-capture dependency row (Npcap on Windows, libpcap on Linux).
+ * Prefers the row that is not `not-applicable`; falls back to npcap then libpcap.
+ */
+export function liveCaptureDependency(
+  rows: readonly DependencyRow[] | null | undefined,
+): DependencyRow | null {
+  if (!rows || rows.length === 0) return null;
+  const npcap = rows.find((r) => r.id === "npcap") ?? null;
+  const libpcap = rows.find((r) => r.id === "libpcap") ?? null;
+  if (npcap && npcap.status !== "not-applicable") return npcap;
+  if (libpcap && libpcap.status !== "not-applicable") return libpcap;
+  return npcap ?? libpcap;
+}
+
+/** Host OS for the live-option disabled reason (§5.7). */
+export function liveCapturePlatform(
+  rows: readonly DependencyRow[] | null | undefined,
+): "windows" | "linux" | "other" {
+  const dep = liveCaptureDependency(rows);
+  if (dep?.id === "libpcap") return "linux";
+  if (dep?.id === "npcap") return "windows";
+  if (typeof navigator !== "undefined") {
+    const ua = navigator.userAgent.toLowerCase();
+    if (ua.includes("linux")) return "linux";
+    if (ua.includes("win")) return "windows";
+  }
+  return "other";
+}

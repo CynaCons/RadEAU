@@ -36,26 +36,36 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { RaisedPanel } from "../components/RaisedPanel";
 import {
+  DEFAULT_LIVE_BPF_FILTER,
   interfaceLockedReason,
+  liveInterfacePrimaryLabel,
+  liveInterfaceSecondaryText,
+  liveSourceAvailable,
+  liveSourceDisabledReason,
   pcapPaceCaption,
   pcapSourceAvailable,
+  showLiveInterfaceFields,
   showPcapPathField,
   showPcapStreamAddrField,
   showSimAddressField,
   simSourceAvailable,
   sourceControlsDisabled,
+  type InterfaceInfo,
   type PcapPace,
   type SourceKind,
 } from "../runtime/captureSource";
 import {
   dependencyChipModel,
   dependencyPathLine,
+  liveCaptureDependency,
+  liveCapturePlatform,
   type DependencyRow,
 } from "../runtime/dependencyDisplay";
 import {
   dependencyProbe,
   diagnosticsReport,
   isDesktop,
+  listInterfaces,
   logPath,
   openUrl,
   pickPcapFile,
@@ -212,6 +222,14 @@ export function SettingsView() {
   const [diagError, setDiagError] = useState<string | null>(null);
   const [appLogPath, setAppLogPath] = useState("");
 
+  const [interfaces, setInterfaces] = useState<InterfaceInfo[]>([]);
+  const [ifacesLoading, setIfacesLoading] = useState(false);
+  const [ifacesError, setIfacesError] = useState<string | null>(null);
+
+  const liveDep = liveCaptureDependency(deps);
+  const liveOk = liveSourceAvailable(desktop, liveDep?.status);
+  const liveDisabledReason = liveSourceDisabledReason(liveCapturePlatform(deps));
+
   const loadDeps = useCallback(async () => {
     setDepsLoading(true);
     setDepsError(null);
@@ -244,10 +262,32 @@ export function SettingsView() {
     }
   }, []);
 
+  const loadInterfaces = useCallback(async () => {
+    setIfacesLoading(true);
+    setIfacesError(null);
+    try {
+      const list = await listInterfaces();
+      setInterfaces(list);
+    } catch (err) {
+      setInterfaces([]);
+      setIfacesError(
+        err instanceof Error ? err.message : typeof err === "string" ? err : String(err),
+      );
+    } finally {
+      setIfacesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadDeps();
     void loadDiag();
   }, [loadDeps, loadDiag]);
+
+  useEffect(() => {
+    if (session.sourceKind === "live" && liveOk) {
+      void loadInterfaces();
+    }
+  }, [session.sourceKind, liveOk, loadInterfaces]);
 
   const copyReport = () => {
     void navigator.clipboard?.writeText(diagReport);
@@ -279,6 +319,7 @@ export function SettingsView() {
                 const next = e.target.value as SourceKind;
                 if (next === "sim" && !simOk) return;
                 if ((next === "pcap" || next === "pcapStream") && !pcapOk) return;
+                if (next === "live" && !liveOk) return;
                 sessionStore.setSourceKind(next);
               }}
               data-testid="settings-source-select"
@@ -309,6 +350,14 @@ export function SettingsView() {
                 data-testid="settings-source-option-pcapstream"
               >
                 pcap stream
+              </MenuItem>
+              <MenuItem
+                value="live"
+                disabled={!liveOk}
+                title={liveOk ? undefined : liveDisabledReason}
+                data-testid="settings-source-option-live"
+              >
+                Physical interface
               </MenuItem>
             </TextField>
           </DisabledReason>
@@ -412,6 +461,127 @@ export function SettingsView() {
                 data-testid="settings-pcapstream-addr"
               />
             </DisabledReason>
+          ) : null}
+          {showLiveInterfaceFields(session.sourceKind) ? (
+            <Stack spacing={1.5}>
+              <DisabledReason disabled={controlsLocked} reason={lockReason}>
+                <Stack direction="row" spacing={1} alignItems="flex-start">
+                  <TextField
+                    select
+                    size="small"
+                    fullWidth
+                    label="Interface"
+                    value={session.liveInterfaceId}
+                    disabled={controlsLocked || ifacesLoading}
+                    onChange={(e) => sessionStore.setLiveInterfaceId(e.target.value)}
+                    data-testid="settings-live-interface"
+                    SelectProps={{
+                      displayEmpty: true,
+                      renderValue: (selected) => {
+                        const id = String(selected ?? "");
+                        if (!id) return "Select an interface";
+                        const iface = interfaces.find((i) => i.id === id);
+                        return iface ? liveInterfacePrimaryLabel(iface) : id;
+                      },
+                    }}
+                  >
+                    <MenuItem value="" disabled>
+                      {ifacesLoading
+                        ? "Loading…"
+                        : interfaces.length === 0
+                          ? "No interfaces"
+                          : "Select an interface"}
+                    </MenuItem>
+                    {interfaces.map((iface, index) => {
+                        const secondary = liveInterfaceSecondaryText(iface);
+                        return (
+                          <MenuItem
+                            key={iface.id}
+                            value={iface.id}
+                            data-testid={`settings-live-option-${index}`}
+                          >
+                            <Box sx={{ py: 0.25, minWidth: 0 }}>
+                              <Typography sx={{ fontSize: 14 }}>
+                                {liveInterfacePrimaryLabel(iface)}
+                              </Typography>
+                              {secondary ? (
+                                <Typography
+                                  sx={{
+                                    ...MONO_SX,
+                                    fontSize: 12,
+                                    color: "text.secondary",
+                                  }}
+                                >
+                                  {secondary}
+                                </Typography>
+                              ) : null}
+                              <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
+                                {iface.loopback ? (
+                                  <Chip size="small" variant="outlined" label="loopback" sx={{ height: 20, fontSize: 11 }} />
+                                ) : null}
+                                <Chip
+                                  size="small"
+                                  variant="outlined"
+                                  label={iface.up ? "up" : "down"}
+                                  sx={{
+                                    height: 20,
+                                    fontSize: 11,
+                                    color: iface.up ? "var(--success)" : "var(--text-secondary)",
+                                    borderColor: iface.up
+                                      ? "var(--success)"
+                                      : "var(--text-secondary)",
+                                  }}
+                                />
+                              </Stack>
+                            </Box>
+                          </MenuItem>
+                        );
+                      })}
+                  </TextField>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={
+                      ifacesLoading ? (
+                        <CircularProgress size={14} color="inherit" />
+                      ) : (
+                        <RefreshIcon />
+                      )
+                    }
+                    disabled={controlsLocked || ifacesLoading}
+                    onClick={() => {
+                      void loadInterfaces();
+                    }}
+                    data-testid="settings-live-refresh"
+                    sx={{ flexShrink: 0, mt: "2px" }}
+                  >
+                    Refresh
+                  </Button>
+                </Stack>
+              </DisabledReason>
+              {ifacesError ? (
+                <Alert severity="error" data-testid="settings-live-error">
+                  {ifacesError}
+                </Alert>
+              ) : null}
+              <DisabledReason disabled={controlsLocked} reason={lockReason}>
+                <TextField
+                  size="small"
+                  fullWidth
+                  label="BPF filter"
+                  value={session.liveFilter}
+                  disabled={controlsLocked}
+                  onChange={(e) => sessionStore.setLiveFilter(e.target.value)}
+                  placeholder={DEFAULT_LIVE_BPF_FILTER}
+                  helperText="leave empty for the default"
+                  inputProps={{
+                    "aria-label": "BPF filter",
+                    sx: MONO_SX,
+                  }}
+                  data-testid="settings-live-filter"
+                />
+              </DisabledReason>
+            </Stack>
           ) : null}
           <SwitchRow
             label="Transmit-only mode"

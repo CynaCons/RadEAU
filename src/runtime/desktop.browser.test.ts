@@ -14,6 +14,7 @@ import {
   diagnosticsReport,
   exportRing,
   isDesktop,
+  listInterfaces,
   logPath,
   pickArxmlFile,
   pickPcapFile,
@@ -55,6 +56,10 @@ describe("desktop browser fallbacks (v0.1.6)", () => {
 
   it("pickSavePath rejects honestly", async () => {
     await expect(pickSavePath("radeau-test.pcap")).rejects.toThrow(/desktop app only/i);
+  });
+
+  it("listInterfaces rejects honestly", async () => {
+    await expect(listInterfaces()).rejects.toThrow(/desktop app only/i);
   });
 });
 
