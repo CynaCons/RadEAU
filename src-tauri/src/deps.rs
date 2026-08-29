@@ -188,13 +188,31 @@ fn probe_npcap() -> DependencyRow {
         id: "npcap",
         name: "Npcap",
         enables: "Live capture on a physical or virtual Ethernet adapter",
-        status: if admin_only { "blocked" } else if installed { "installed" } else { "missing" },
+        status: if admin_only {
+            "blocked"
+        } else if installed {
+            "installed"
+        } else {
+            "missing"
+        },
         version,
         path: path.is_file().then(|| path.display().to_string()),
-        detail: admin_only.then(|| "installed with 'Restrict Npcap driver's access to Administrators only' — reinstall without that option or run as administrator".into()),
+        detail: if admin_only {
+            Some("installed with 'Restrict Npcap driver's access to Administrators only' — reinstall without that option or run as administrator".into())
+        } else if installed {
+            Some(NPCAP_VLAN_NOTE.into())
+        } else {
+            None
+        },
         download_url: NPCAP_URL,
     }
 }
+
+/// Intel/Realtek drivers strip 802.1Q tags before Npcap sees the frame unless
+/// tag pass-through is enabled — the difference between seeing VLAN traffic
+/// and an empty trace on a tagged bench.
+#[cfg(windows)]
+const NPCAP_VLAN_NOTE: &str = "VLAN-tagged traffic: most Windows NIC drivers strip 802.1Q tags before capture — in the adapter's Advanced properties set 'Priority & VLAN' to Disabled (Intel) or 'VLAN Support' Off (Realtek), or Npcap only ever sees untagged frames.";
 
 #[cfg(not(windows))]
 fn probe_npcap() -> DependencyRow {
