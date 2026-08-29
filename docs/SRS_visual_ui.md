@@ -347,10 +347,13 @@ cursor.
 ### 5.2 Trace
 
 A full-height virtualized table with a 50 px vertical control rail on its left
-edge — raised surface, 1 px right border, 16 px top padding, four icon buttons
+edge — raised surface, 1 px right border, 16 px top padding, five icon buttons
 at 40 px pitch with right-placed tooltips: display settings, load service
-catalog (badged with a 6 px `success` dot when loaded), pause/resume, clear.
-There is no horizontal toolbar; filtering is per column.
+catalog (badged with a 6 px `success` dot when loaded), pause/resume, clear,
+and export buffered frames as pcap (Download glyph; disabled with the reason
+"no frames buffered" when the frame ring is empty; the save dialog defaults
+to `radeau-<session start>.pcap`; SRS_capture §3). There is no horizontal
+toolbar; filtering is per column.
 
 Columns (formatting rules — zero-padded uppercase hex, 4-decimal seconds,
 right-aligned numerics, mono for machine data — are inherited unchanged; the
@@ -475,6 +478,17 @@ disabled source-path field, and a split button whose main action browses and
 whose caret lists the five most recent captures as basename over ellipsized
 path. The recording panel takes a static 3 px `error` left rule while
 capturing, never a blinking one.
+
+Until the recording core lands (v0.6) the view shows only true state: the
+Record panel's arm switch and directory controls are disabled with the
+caption "recording arrives with v0.6", the recent-captures list is the honest
+empty state "no recordings yet" — never fabricated file names — and the panel
+offers the one thing that exists today, **Export buffered frames** (the same
+action as the Trace rail button, with the buffered frame count and byte size
+beside it). The Replay panel's source-path control opens a `.pcap` / `.pcapng`
+file and sets the Interface to the pcap source (SRS_capture §2) — that is
+replay for the bench-proto, honest about being file playback through the
+capture path.
 
 ### 5.4 Simulation
 

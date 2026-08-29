@@ -24,6 +24,7 @@ deleted. `scripts/check-req-ids.mjs` fails CI on duplicate definitions.
 | NS- | Network simulator | SRS_ecu_netsim.md | 001–006 | 007 |
 | NV- | Network view | SRS_ecu_netsim.md | 001–003 | 004 |
 | TR- | Trace view | SRS_trace_view.md (planned) | — | 001 |
+| CP- | Capture sources and backends | SRS_capture.md | 001–009 | 010 |
 
 ## E2E test numbers
 
