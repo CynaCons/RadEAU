@@ -17,7 +17,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub use crate::channel::SourceSpec;
 use crate::channel::{Capabilities, ChannelRead, ChannelStatus, Source};
@@ -216,6 +216,9 @@ struct CaptureStatsEvent {
     malformed: u64,
     kernel_dropped: u64,
     by_class: [u64; crate::codes::PROTO_CLASS_COUNT],
+    recording_frames: u64,
+    recording_bytes: u64,
+    recording_dropped: u64,
 }
 impl CaptureStats {
     fn observe(&self, f: &GenFrame) {
@@ -239,11 +242,18 @@ impl CaptureStats {
             malformed: self.malformed.load(Ordering::Relaxed),
             kernel_dropped: self.kernel_dropped.load(Ordering::Relaxed),
             by_class: std::array::from_fn(|n| self.by_class[n].load(Ordering::Relaxed)),
+            recording_frames: 0,
+            recording_bytes: 0,
+            recording_dropped: 0,
         }
     }
 }
 fn emit_stats(app: &AppHandle, stats: &CaptureStats, start: Instant, seq: &mut u64) {
-    let event = stats.event(*seq, start.elapsed().as_secs_f64());
+    let mut event = stats.event(*seq, start.elapsed().as_secs_f64());
+    let (frames, bytes, dropped) = app.state::<crate::recording::RecordingState>().counters();
+    event.recording_frames = frames;
+    event.recording_bytes = bytes;
+    event.recording_dropped = dropped;
     *seq += 1;
     let _ = app.emit(EVENT_CAPTURE_STATS, event);
 }
@@ -372,6 +382,10 @@ impl CaptureState {
         self.session.lock().ok()?.take()
     }
 
+    pub fn is_running(&self) -> bool {
+        self.session.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
     /// Reads a retained frame after capture has stopped as well as while live.
     pub fn frame_detail(
         &self,
@@ -428,6 +442,8 @@ fn reader_loop(
     let mut last_stats = Instant::now();
     let source_kind = source.source_kind();
     let caps = source.capabilities();
+    let recording = app.state::<crate::recording::RecordingState>();
+    let mut recording_handle: Option<crate::recording::RecordingHandle> = None;
 
     while !stop.load(Ordering::Relaxed) {
         let status = source.status();
@@ -487,6 +503,16 @@ fn reader_loop(
                 let t_s = ts_ns.saturating_sub(first) as f64 / 1_000_000_000.0;
                 let frame = classify_frame(&wire, idx, t_s, dir, &mut endpoints);
                 stats.observe(&frame);
+                if recording.is_active() {
+                    if recording_handle.is_none() {
+                        recording_handle = recording.handle();
+                    }
+                    if let Some(handle) = &recording_handle {
+                        handle.push(ts_ns, wire.clone());
+                    }
+                } else if recording_handle.is_some() {
+                    recording_handle = None;
+                }
                 retain_frame(&frame_ring, &frame, wire);
                 push_frame(&accumulator, frame, &stats);
                 let grown = endpoints.len();
@@ -520,6 +546,7 @@ fn reader_loop(
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 flush_remaining(&app, &credits, &accumulator, &mut batch_seq, &stats);
+                recording.end(&app);
                 emit_stats(&app, &stats, start, &mut stats_seq);
                 crate::log::log(
                     crate::log::Level::Info,
@@ -545,6 +572,7 @@ fn reader_loop(
             if let Some(dropped) = source.kernel_drops() {
                 stats.kernel_dropped.store(dropped, Ordering::Relaxed);
             }
+            recording.tick(&app);
             emit_stats(&app, &stats, start, &mut stats_seq);
             last_stats = Instant::now();
         }
@@ -552,7 +580,15 @@ fn reader_loop(
     if let Some(dropped) = source.kernel_drops() {
         stats.kernel_dropped.store(dropped, Ordering::Relaxed);
     }
+    recording.end(&app);
     emit_stats(&app, &stats, start, &mut stats_seq);
+    crate::log::log(
+        crate::log::Level::Info,
+        "stats",
+        "session final stats",
+        serde_json::to_value(stats.event(stats_seq, start.elapsed().as_secs_f64()))
+            .unwrap_or(serde_json::Value::Null),
+    );
     emit_link(&app, "closed", None);
 }
 
@@ -584,6 +620,17 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     let stats = Arc::new(CaptureStats::default());
     if let Ok(mut ring) = state.frame_ring.lock() {
         ring.clear();
+    }
+    if let Err(error) = app
+        .state::<crate::recording::RecordingState>()
+        .begin(&app, std::time::SystemTime::now())
+    {
+        crate::log::log(
+            crate::log::Level::Error,
+            "recording",
+            "recording could not start",
+            serde_json::json!({ "error": error }),
+        );
     }
     let thread_stop = Arc::clone(&stop);
     let thread_credits = Arc::clone(&credits);

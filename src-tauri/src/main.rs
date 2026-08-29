@@ -24,6 +24,7 @@ mod dissect;
 mod endpoints;
 mod frame;
 mod log;
+mod recording;
 mod simlink;
 
 fn main() {
@@ -35,11 +36,14 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(capture::CaptureState::default())
         .manage(catalog::CatalogState::default())
+        .manage(recording::RecordingState::default())
         .setup(|app| {
             if let Ok(dir) = app.path().app_log_dir() {
                 log::init(dir);
                 diag::log_startup();
             }
+            app.state::<recording::RecordingState>()
+                .init_dir(&app.handle());
             catalog::emit_initial(app.state::<catalog::CatalogState>().inner(), &app.handle());
             Ok(())
         })
@@ -61,6 +65,11 @@ fn main() {
             diag::app_info,
             diag::log_path,
             diag::open_url,
+            recording::recording_state,
+            recording::recording_arm,
+            recording::recording_dir_get,
+            recording::recording_dir_set,
+            recording::recording_list,
         ])
         .run(tauri::generate_context!())
         .expect("error while running RadEAU");
