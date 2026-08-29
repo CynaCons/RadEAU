@@ -15,6 +15,7 @@ serde_json = "1"
 radeau-proto = { path = "../crates/radeau-proto" }
 radeau-catalog = { path = "../crates/radeau-catalog" }
 radeau-pcap = { path = "../crates/radeau-pcap" }
+radeau-livecap = { path = "../crates/radeau-livecap" }
 tauri-plugin-dialog = "2"
 open = "5"
 

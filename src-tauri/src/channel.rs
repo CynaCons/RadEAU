@@ -30,6 +30,12 @@ pub enum SourceSpec {
     Pcap { path: String, pace: String },
     #[serde(rename = "pcapStream")]
     PcapStream { addr: String },
+    #[serde(rename = "live")]
+    Live {
+        #[serde(rename = "interfaceId")]
+        interface_id: String,
+        filter: Option<String>,
+    },
     #[serde(rename = "stub")]
     Stub,
 }
@@ -64,6 +70,7 @@ pub enum Source {
     Sim(SimSource),
     Pcap(PcapSource),
     PcapStream(PcapStreamSource),
+    Live(LiveSource),
 }
 
 impl Source {
@@ -93,6 +100,16 @@ impl Source {
             SourceSpec::PcapStream { addr } => {
                 Ok(Self::PcapStream(PcapStreamSource::connect(addr)?))
             }
+            SourceSpec::Live { interface_id, .. } if interface_id.trim().is_empty() => {
+                Err("live interfaceId must not be empty".into())
+            }
+            SourceSpec::Live {
+                interface_id,
+                filter,
+            } => Ok(Self::Live(LiveSource::open(
+                interface_id,
+                filter.as_deref(),
+            )?)),
             SourceSpec::Stub => Err("no link available".into()),
         }
     }
@@ -104,6 +121,7 @@ impl Source {
             Self::Sim(source) => source.read(timeout),
             Self::Pcap(source) => source.read(timeout),
             Self::PcapStream(source) => source.read(timeout),
+            Self::Live(source) => source.read(timeout),
         }
     }
 
@@ -114,6 +132,7 @@ impl Source {
             Self::Sim(source) => source.status.clone(),
             Self::Pcap(source) => source.status.clone(),
             Self::PcapStream(source) => source.status.clone(),
+            Self::Live(source) => source.status.clone(),
         }
     }
 
@@ -135,6 +154,11 @@ impl Source {
                 timestamp_source: "file",
                 transmit: false,
             },
+            Self::Live(_) => Capabilities {
+                direction: false,
+                timestamp_source: "host",
+                transmit: false,
+            },
         }
     }
 
@@ -145,6 +169,7 @@ impl Source {
             Self::Sim(_) => "sim",
             Self::Pcap(_) => "pcap",
             Self::PcapStream(_) => "pcapStream",
+            Self::Live(_) => "live",
         }
     }
 
@@ -179,6 +204,7 @@ impl Source {
             Self::Sim(source) => Some(source.epoch_ns),
             Self::Pcap(source) => source.first_ts,
             Self::PcapStream(source) => source.first_ts,
+            Self::Live(source) => Some(source.epoch_ns),
         }
     }
 
@@ -193,6 +219,13 @@ impl Source {
 
     pub fn fast_replay(&self) -> bool {
         matches!(self, Self::Pcap(PcapSource { fast: true, .. }))
+    }
+
+    pub fn kernel_drops(&mut self) -> Option<u64> {
+        match self {
+            Self::Live(source) => source.kernel_drops(),
+            _ => None,
+        }
     }
 }
 
@@ -598,6 +631,81 @@ impl PcapStreamSource {
                         detail: format!("read: {error}"),
                     };
                 }
+            }
+        }
+    }
+}
+
+pub struct LiveSource {
+    capture: radeau_livecap::LiveCapture,
+    epoch_ns: u64,
+    status: ChannelStatus,
+    failed: bool,
+}
+
+impl LiveSource {
+    fn open(interface_id: &str, filter: Option<&str>) -> Result<Self, String> {
+        let filter = filter.unwrap_or(radeau_livecap::DEFAULT_FILTER);
+        let capture = radeau_livecap::LiveCapture::open(interface_id, Some(filter))
+            .map_err(|error| error.to_string())?;
+        crate::log::log(
+            crate::log::Level::Info,
+            "link",
+            "live capture opened",
+            serde_json::json!({
+                "interfaceId": interface_id,
+                "filter": filter,
+                "timestampPrecision": if capture.precision_ns { "ns" } else { "us" },
+                "warnings": capture.warnings,
+            }),
+        );
+        Ok(Self {
+            capture,
+            epoch_ns: now_ns(),
+            status: ChannelStatus::Up,
+            failed: false,
+        })
+    }
+
+    fn fail(&mut self, error: String) {
+        let remedy = radeau_livecap::capture_error_remedy(&error);
+        crate::log::log(
+            crate::log::Level::Error,
+            "link",
+            "live capture failed",
+            serde_json::json!({ "error": error, "remedy": remedy }),
+        );
+        self.status = ChannelStatus::Down(remedy);
+        self.failed = true;
+    }
+
+    fn read(&mut self, _timeout: Duration) -> ChannelRead {
+        if self.failed {
+            return ChannelRead::Idle;
+        }
+        match self.capture.next() {
+            Ok(Some(packet)) => ChannelRead::Frame {
+                ts_ns: packet.ts_ns,
+                dir: crate::codes::DIR_RX,
+                wire: packet.data,
+            },
+            Ok(None) => ChannelRead::Idle,
+            Err(error) => {
+                self.fail(error);
+                ChannelRead::Idle
+            }
+        }
+    }
+
+    fn kernel_drops(&mut self) -> Option<u64> {
+        if self.failed {
+            return None;
+        }
+        match self.capture.stats() {
+            Ok(stats) => Some(stats.drop),
+            Err(error) => {
+                self.fail(error);
+                None
             }
         }
     }

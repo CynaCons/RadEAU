@@ -181,7 +181,9 @@ fn probe_npcap() -> DependencyRow {
     if let Some(key) = registry {
         close_registry_key(key);
     }
-    let version = file_version(&path).or(registry_version);
+    let version = file_version(&path)
+        .or(registry_version)
+        .or_else(|| radeau_livecap::library_version().ok());
     DependencyRow {
         id: "npcap",
         name: "Npcap",
@@ -220,7 +222,8 @@ fn probe_libpcap() -> DependencyRow {
         .find(|path| path.is_file());
     DependencyRow {
         id: "libpcap", name: "libpcap", enables: "Live capture on a physical or virtual Ethernet adapter",
-        status: if found.is_some() { "installed" } else { "missing" }, version: None,
+        status: if found.is_some() { "installed" } else { "missing" },
+        version: radeau_livecap::library_version().ok(),
         path: found.map(|path| path.display().to_string()),
         detail: Some("Install the distro package (for example libpcap1 on Debian/Ubuntu or libpcap on Fedora).".into()),
         download_url: LIBPCAP_URL,

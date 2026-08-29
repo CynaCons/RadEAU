@@ -542,9 +542,15 @@ fn reader_loop(
             &attached,
         );
         if last_stats.elapsed() >= Duration::from_secs(1) {
+            if let Some(dropped) = source.kernel_drops() {
+                stats.kernel_dropped.store(dropped, Ordering::Relaxed);
+            }
             emit_stats(&app, &stats, start, &mut stats_seq);
             last_stats = Instant::now();
         }
+    }
+    if let Some(dropped) = source.kernel_drops() {
+        stats.kernel_dropped.store(dropped, Ordering::Relaxed);
     }
     emit_stats(&app, &stats, start, &mut stats_seq);
     emit_link(&app, "closed", None);
@@ -557,6 +563,12 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     let source = match Source::open(&source) {
         Ok(source) => source,
         Err(error) => {
+            crate::log::log(
+                crate::log::Level::Error,
+                "link",
+                "capture source open failed",
+                serde_json::json!({ "remedy": error }),
+            );
             state.starting.store(false, Ordering::Release);
             return Err(error);
         }
@@ -669,6 +681,36 @@ pub fn capture_stop(state: State<CaptureState>) -> Result<(), String> {
         serde_json::json!({ "error": result.as_ref().err() }),
     );
     result
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterfaceInfo {
+    id: String,
+    name: String,
+    description: Option<String>,
+    addresses: Vec<String>,
+    up: bool,
+    loopback: bool,
+}
+
+#[tauri::command]
+pub fn capture_list_interfaces() -> Result<Vec<InterfaceInfo>, String> {
+    radeau_livecap::list_devices()
+        .map(|devices| {
+            devices
+                .into_iter()
+                .map(|device| InterfaceInfo {
+                    id: device.id,
+                    name: device.name,
+                    description: device.description,
+                    addresses: device.addresses,
+                    up: device.up,
+                    loopback: device.loopback,
+                })
+                .collect()
+        })
+        .map_err(|error| radeau_livecap::capture_error_remedy(&error))
 }
 
 /// Exactly one ack per animation frame from the UI; each restores one credit

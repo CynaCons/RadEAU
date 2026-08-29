@@ -46,6 +46,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             capture::capture_start,
             capture::capture_stop,
+            capture::capture_list_interfaces,
             capture::ack_frames,
             capture::export_ring,
             catalog::catalog_model,
