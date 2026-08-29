@@ -12,6 +12,7 @@ import {
   type CaptureSessionInfo,
   type CaptureStats,
   type SourceKind,
+  type TimestampSource,
 } from "./captureSource";
 import { PROTO_LABELS } from "./wireCodes";
 
@@ -47,6 +48,7 @@ export interface ConnectionPanelModel {
   readonly linkChipLabel: string | null;
   readonly linkState: CaptureLinkStatus["state"] | null;
   readonly linkDetail: string | null;
+  readonly timestampSource: TimestampSource | null;
   readonly stoppedHint: string | null;
   /** Null when there are no stats to render. */
   readonly stats: ConnectionStatsModel | null;
@@ -62,17 +64,41 @@ export function formatClassCounts(byClass: readonly number[]): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+function sourceAddress(input: {
+  sourceKind: SourceKind;
+  simAddr: string;
+  pcapPath?: string;
+  pcapStreamAddr?: string;
+}): string | null {
+  switch (input.sourceKind) {
+    case "sim":
+      return input.simAddr;
+    case "pcap": {
+      const p = (input.pcapPath ?? "").trim();
+      return p || null;
+    }
+    case "pcapStream": {
+      const a = (input.pcapStreamAddr ?? "").trim();
+      return a || null;
+    }
+    default:
+      return null;
+  }
+}
+
 /** Builds the Connection panel model from the shared session snapshot. */
 export function connectionPanelModel(input: {
   running: boolean;
   sourceKind: SourceKind;
   simAddr: string;
+  pcapPath?: string;
+  pcapStreamAddr?: string;
   linkStatus: CaptureLinkStatus | null;
   sessionInfo: CaptureSessionInfo | null;
   stats?: CaptureStats | null;
 }): ConnectionPanelModel {
-  const { running, sourceKind, simAddr, linkStatus, sessionInfo, stats = null } = input;
-  const address = sourceKind === "sim" ? simAddr : null;
+  const { running, sourceKind, linkStatus, sessionInfo, stats = null } = input;
+  const address = sourceAddress(input);
   const scenario = sessionInfo?.scenario ?? null;
   return {
     sourceLabel: sourceKindLabel(sourceKind),
@@ -83,6 +109,7 @@ export function connectionPanelModel(input: {
     linkChipLabel: linkStatus ? linkChipLabel(linkStatus.state) : null,
     linkState: linkStatus?.state ?? null,
     linkDetail: linkStatus?.detail ?? null,
+    timestampSource: sessionInfo?.timestampSource ?? null,
     stoppedHint: running ? null : SESSION_STOPPED_HINT,
     stats: stats
       ? {

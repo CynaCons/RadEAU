@@ -51,6 +51,9 @@ import {
 
 export interface TraceFrame {
   id: number;
+  /** Session-relative seconds (raw); Time column formats from this. */
+  tS: number;
+  /** Default session-relative display (`tS.toFixed(4)`). */
   time: string;
   dir: "rx" | "tx" | "unknown";
   source: string;
@@ -528,6 +531,7 @@ export function projectRow(
 
   return {
     id: idx,
+    tS: t,
     time: t.toFixed(4),
     dir,
     source,

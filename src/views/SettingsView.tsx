@@ -1,7 +1,8 @@
 /**
  * Settings view (SRS_visual_ui.md §5.7): Interface is the only place the
- * capture source is chosen; groups whose core has not landed render disabled
- * with a caption naming the arriving version.
+ * capture source is chosen; Dependencies and Diagnostics are live probes;
+ * groups whose core has not landed render disabled with a caption naming
+ * the arriving version.
  */
 
 import {
@@ -9,11 +10,14 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   IconButton,
   MenuItem,
   Stack,
   Switch,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -21,20 +25,41 @@ import BugReportIcon from "@mui/icons-material/BugReport";
 import CodeIcon from "@mui/icons-material/Code";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import ExtensionIcon from "@mui/icons-material/Extension";
+import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import MemoryIcon from "@mui/icons-material/Memory";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import SettingsEthernetIcon from "@mui/icons-material/SettingsEthernet";
 import SpeedIcon from "@mui/icons-material/Speed";
-import { useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import { RaisedPanel } from "../components/RaisedPanel";
 import {
   interfaceLockedReason,
+  pcapPaceCaption,
+  pcapSourceAvailable,
+  showPcapPathField,
+  showPcapStreamAddrField,
   showSimAddressField,
   simSourceAvailable,
   sourceControlsDisabled,
+  type PcapPace,
   type SourceKind,
 } from "../runtime/captureSource";
-import { isDesktop } from "../runtime/desktop";
+import {
+  dependencyChipModel,
+  dependencyPathLine,
+  type DependencyRow,
+} from "../runtime/dependencyDisplay";
+import {
+  dependencyProbe,
+  diagnosticsReport,
+  isDesktop,
+  logPath,
+  openUrl,
+  pickPcapFile,
+} from "../runtime/desktop";
 import { sessionStore } from "../runtime/sessionStore";
 import { useViewLifecycle } from "../shell/viewLifecycle";
 
@@ -45,16 +70,6 @@ const REFRESH_OPTIONS = [
   { value: 33, label: "33 ms (30 Hz)" },
   { value: 100, label: "100 ms (10 Hz)" },
 ];
-
-const DIAG_REPORT = [
-  "RadEAU diagnostic report",
-  "generated   —",
-  "build       —",
-  "channel     —",
-  "uptime      —",
-  "",
-  "(live diagnostic collection arrives with the diagnostics core)",
-].join("\n");
 
 const MEMORY_POOLS = [
   { id: "ring", label: "Ring buffers — —" },
@@ -108,6 +123,74 @@ function DisabledReason(props: { reason: string; disabled: boolean; children: Re
   );
 }
 
+function DependencyRowView(props: { row: DependencyRow }) {
+  const { row } = props;
+  const chip = dependencyChipModel(row);
+  const pathLine = dependencyPathLine(row);
+  return (
+    <Box
+      data-testid={`settings-dep-row-${row.id}`}
+      sx={{
+        py: 1.5,
+        borderBottom: "1px solid var(--border)",
+        "&:last-of-type": { borderBottom: "none" },
+      }}
+    >
+      <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={2}>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography sx={{ fontSize: 14, fontWeight: 500 }}>{row.name}</Typography>
+          <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
+            enables {row.enables}
+          </Typography>
+          <Chip
+            size="small"
+            variant="outlined"
+            label={chip.label}
+            data-testid={`settings-dep-status-${row.id}`}
+            sx={{
+              mt: 0.75,
+              height: 22,
+              fontSize: 12,
+              color: chip.colorVar,
+              borderColor: chip.colorVar,
+            }}
+          />
+          {pathLine ? (
+            <Typography
+              sx={{ ...MONO_SX, fontSize: 12, color: "text.secondary", mt: 0.5 }}
+              data-testid={`settings-dep-path-${row.id}`}
+            >
+              {pathLine}
+            </Typography>
+          ) : null}
+          {row.detail ? (
+            <Typography
+              sx={{ fontSize: 12, color: "text.secondary", mt: 0.5 }}
+              data-testid={`settings-dep-detail-${row.id}`}
+            >
+              {row.detail}
+            </Typography>
+          ) : null}
+        </Box>
+        {chip.showDownload ? (
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<OpenInNewIcon />}
+            onClick={() => {
+              void openUrl(row.downloadUrl);
+            }}
+            data-testid={`settings-dep-download-${row.id}`}
+            sx={{ flexShrink: 0 }}
+          >
+            Open download page
+          </Button>
+        ) : null}
+      </Stack>
+    </Box>
+  );
+}
+
 export function SettingsView() {
   useViewLifecycle("settings", {});
   const desktop = isDesktop();
@@ -115,12 +198,64 @@ export function SettingsView() {
   const controlsLocked = sourceControlsDisabled(session.running);
   const lockReason = interfaceLockedReason(session.running) ?? "";
   const simOk = simSourceAvailable(desktop);
+  const pcapOk = pcapSourceAvailable(desktop);
 
   const [transmitOnly, setTransmitOnly] = useState(false);
   const [refreshMs] = useState(33);
 
+  const [deps, setDeps] = useState<DependencyRow[] | null>(null);
+  const [depsLoading, setDepsLoading] = useState(false);
+  const [depsError, setDepsError] = useState<string | null>(null);
+
+  const [diagReport, setDiagReport] = useState("");
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [diagError, setDiagError] = useState<string | null>(null);
+  const [appLogPath, setAppLogPath] = useState("");
+
+  const loadDeps = useCallback(async () => {
+    setDepsLoading(true);
+    setDepsError(null);
+    try {
+      const rows = await dependencyProbe();
+      setDeps(rows);
+    } catch (err) {
+      setDeps(null);
+      setDepsError(
+        err instanceof Error ? err.message : typeof err === "string" ? err : String(err),
+      );
+    } finally {
+      setDepsLoading(false);
+    }
+  }, []);
+
+  const loadDiag = useCallback(async () => {
+    setDiagLoading(true);
+    setDiagError(null);
+    try {
+      const [report, path] = await Promise.all([diagnosticsReport(), logPath()]);
+      setDiagReport(report);
+      setAppLogPath(path);
+    } catch (err) {
+      setDiagError(
+        err instanceof Error ? err.message : typeof err === "string" ? err : String(err),
+      );
+    } finally {
+      setDiagLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDeps();
+    void loadDiag();
+  }, [loadDeps, loadDiag]);
+
   const copyReport = () => {
-    void navigator.clipboard?.writeText(DIAG_REPORT);
+    void navigator.clipboard?.writeText(diagReport);
+  };
+
+  const browsePcap = async () => {
+    const path = await pickPcapFile();
+    if (path) sessionStore.setPcapPath(path);
   };
 
   return (
@@ -143,6 +278,7 @@ export function SettingsView() {
               onChange={(e) => {
                 const next = e.target.value as SourceKind;
                 if (next === "sim" && !simOk) return;
+                if ((next === "pcap" || next === "pcapStream") && !pcapOk) return;
                 sessionStore.setSourceKind(next);
               }}
               data-testid="settings-source-select"
@@ -157,6 +293,22 @@ export function SettingsView() {
                 data-testid="settings-source-option-sim"
               >
                 Simulator link
+              </MenuItem>
+              <MenuItem
+                value="pcap"
+                disabled={!pcapOk}
+                title={pcapOk ? undefined : "desktop app only"}
+                data-testid="settings-source-option-pcap"
+              >
+                pcap file
+              </MenuItem>
+              <MenuItem
+                value="pcapStream"
+                disabled={!pcapOk}
+                title={pcapOk ? undefined : "desktop app only"}
+                data-testid="settings-source-option-pcapstream"
+              >
+                pcap stream
               </MenuItem>
             </TextField>
           </DisabledReason>
@@ -182,6 +334,85 @@ export function SettingsView() {
               />
             </DisabledReason>
           ) : null}
+          {showPcapPathField(session.sourceKind) ? (
+            <Stack spacing={1.5}>
+              <DisabledReason disabled={controlsLocked} reason={lockReason}>
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    size="small"
+                    fullWidth
+                    label="pcap path"
+                    value={session.pcapPath}
+                    disabled={controlsLocked}
+                    onChange={(e) => sessionStore.setPcapPath(e.target.value)}
+                    placeholder="path to .pcap or .pcapng"
+                    inputProps={{
+                      "aria-label": "pcap file path",
+                      sx: MONO_SX,
+                    }}
+                    data-testid="settings-pcap-path"
+                  />
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<FolderOpenIcon />}
+                    disabled={controlsLocked}
+                    onClick={() => {
+                      void browsePcap();
+                    }}
+                    data-testid="settings-pcap-browse"
+                  >
+                    Browse
+                  </Button>
+                </Stack>
+              </DisabledReason>
+              <DisabledReason disabled={controlsLocked} reason={lockReason}>
+                <Box>
+                  <Typography sx={{ fontSize: 12, color: "text.secondary", mb: 0.5 }}>
+                    Pace
+                  </Typography>
+                  <ToggleButtonGroup
+                    exclusive
+                    size="small"
+                    value={session.pcapPace}
+                    disabled={controlsLocked}
+                    onChange={(_, value: PcapPace | null) => {
+                      if (value) sessionStore.setPcapPace(value);
+                    }}
+                    data-testid="settings-pcap-pace"
+                  >
+                    <ToggleButton value="realtime" data-testid="settings-pcap-pace-realtime">
+                      realtime
+                    </ToggleButton>
+                    <ToggleButton value="fast" data-testid="settings-pcap-pace-fast">
+                      fast
+                    </ToggleButton>
+                  </ToggleButtonGroup>
+                  <Typography sx={{ fontSize: 12, color: "text.secondary", mt: 0.5 }}>
+                    {pcapPaceCaption(session.pcapPace)}
+                  </Typography>
+                </Box>
+              </DisabledReason>
+            </Stack>
+          ) : null}
+          {showPcapStreamAddrField(session.sourceKind) ? (
+            <DisabledReason disabled={controlsLocked} reason={lockReason}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Stream address"
+                value={session.pcapStreamAddr}
+                disabled={controlsLocked}
+                onChange={(e) => sessionStore.setPcapStreamAddr(e.target.value)}
+                placeholder="host:port"
+                inputProps={{
+                  "aria-label": "pcap stream host:port",
+                  sx: MONO_SX,
+                }}
+                data-testid="settings-pcapstream-addr"
+              />
+            </DisabledReason>
+          ) : null}
           <SwitchRow
             label="Transmit-only mode"
             caption="Disables the receive path — the channel carries only frames generated by Simulation and Automation."
@@ -189,6 +420,48 @@ export function SettingsView() {
             onChange={setTransmitOnly}
             testId="settings-transmit-only-switch"
           />
+        </Stack>
+      </RaisedPanel>
+
+      <RaisedPanel
+        icon={<ExtensionIcon sx={{ color: "var(--accent-secondary)" }} />}
+        title="Dependencies"
+        subtitle="Runtime dependencies of the capture backends — presence, version, and where to get them."
+        testId="settings-dependencies-panel"
+      >
+        <Stack spacing={1.5}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
+              Read-only probes — never loads a capture driver
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={
+                depsLoading ? <CircularProgress size={14} color="inherit" /> : <RefreshIcon />
+              }
+              disabled={depsLoading}
+              onClick={() => {
+                void loadDeps();
+              }}
+              data-testid="settings-deps-refresh"
+            >
+              Refresh
+            </Button>
+          </Stack>
+          {depsError ? (
+            <Alert severity="error" data-testid="settings-deps-error">
+              {depsError}
+            </Alert>
+          ) : null}
+          {depsLoading && deps === null ? (
+            <Typography sx={{ fontSize: 13, color: "text.secondary" }} data-testid="settings-deps-loading">
+              Probing…
+            </Typography>
+          ) : null}
+          {deps?.map((row) => (
+            <DependencyRowView key={row.id} row={row} />
+          ))}
         </Stack>
       </RaisedPanel>
 
@@ -285,7 +558,7 @@ export function SettingsView() {
         <Stack spacing={2}>
           <SwitchRow
             label="Collect frame statistics"
-            caption="arrives v0.1.6"
+            caption="arrives v0.6"
             checked={false}
             onChange={() => {}}
             testId="settings-collect-stats-switch"
@@ -293,7 +566,7 @@ export function SettingsView() {
           />
           <SwitchRow
             label="Log SD state transitions"
-            caption="arrives v0.1.6"
+            caption="arrives v0.6"
             checked={false}
             onChange={() => {}}
             testId="settings-log-sd-switch"
@@ -304,23 +577,47 @@ export function SettingsView() {
               <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
                 Diagnostic report
               </Typography>
-              <Tooltip title="Copy report">
-                <IconButton
-                  size="small"
-                  aria-label="Copy report"
-                  onClick={copyReport}
-                  data-testid="settings-diag-copy-btn"
-                >
-                  <ContentCopyIcon fontSize="inherit" />
-                </IconButton>
-              </Tooltip>
+              <Stack direction="row" spacing={0.5}>
+                <Tooltip title="Refresh report">
+                  <IconButton
+                    size="small"
+                    aria-label="Refresh report"
+                    disabled={diagLoading}
+                    onClick={() => {
+                      void loadDiag();
+                    }}
+                    data-testid="settings-diag-refresh"
+                  >
+                    {diagLoading ? (
+                      <CircularProgress size={14} color="inherit" />
+                    ) : (
+                      <RefreshIcon fontSize="inherit" />
+                    )}
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Copy report">
+                  <IconButton
+                    size="small"
+                    aria-label="Copy report"
+                    onClick={copyReport}
+                    data-testid="settings-diag-copy"
+                  >
+                    <ContentCopyIcon fontSize="inherit" />
+                  </IconButton>
+                </Tooltip>
+              </Stack>
             </Stack>
+            {diagError ? (
+              <Alert severity="error" sx={{ mb: 1 }} data-testid="settings-diag-error">
+                {diagError}
+              </Alert>
+            ) : null}
             <TextField
               multiline
               fullWidth
               minRows={8}
               maxRows={16}
-              value={DIAG_REPORT}
+              value={diagReport}
               InputProps={{ readOnly: true }}
               inputProps={{
                 "aria-label": "Diagnostic report",
@@ -329,6 +626,12 @@ export function SettingsView() {
               data-testid="settings-diag-report-field"
             />
           </Box>
+          <Typography
+            sx={{ ...MONO_SX, fontSize: 12, color: "text.secondary" }}
+            data-testid="settings-log-path"
+          >
+            Log path: {appLogPath || "—"}
+          </Typography>
         </Stack>
       </RaisedPanel>
 

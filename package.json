@@ -26,6 +26,7 @@
     "@mui/icons-material": "^7.1.0",
     "@mui/material": "^7.1.0",
     "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-virtuoso": "^4.12.6"

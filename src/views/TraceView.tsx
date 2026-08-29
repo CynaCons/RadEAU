@@ -18,6 +18,7 @@ import {
 import type { SxProps } from "@mui/material";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import DownloadIcon from "@mui/icons-material/Download";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import PauseIcon from "@mui/icons-material/Pause";
@@ -47,6 +48,7 @@ import {
   type TraceExpansion,
 } from "../runtime/frameDetail";
 import { catalogStore } from "../runtime/catalogStore";
+import { runExportRing } from "../runtime/ringExport";
 import { sessionStore } from "../runtime/sessionStore";
 import {
   DEFAULT_HISTORY_WINDOW,
@@ -67,6 +69,12 @@ import {
   type TraceFilterDir,
   type TraceFilterOption,
 } from "../runtime/traceFilter";
+import {
+  DEFAULT_TRACE_TIME_MODE,
+  formatTraceTime,
+  wallTimeDisabledReason,
+  type TraceTimeMode,
+} from "../runtime/traceTime";
 import { traceStore } from "../runtime/traceStore";
 import type { TraceFrame } from "../runtime/frameModel";
 
@@ -204,6 +212,8 @@ interface TraceTableContext {
   onTogglePin: (key: string) => void;
   expansion: TraceExpansion | null;
   onToggleExpand: (frame: TraceFrame) => void;
+  timeMode: TraceTimeMode;
+  sessionEpochMs: number | null;
 }
 
 function makeTableComponents(columns: ColumnDef[]): TableComponents<TraceFrame, TraceTableContext> {
@@ -354,7 +364,11 @@ function rowContent(
           </IconButton>
         </Tooltip>
       </td>
-      <td style={MONO_RIGHT}>{f.time}</td>
+      <td style={MONO_RIGHT} data-testid={`trace-time-cell-${f.id}`}>
+        {context
+          ? formatTraceTime(f.tS, context.timeMode, context.sessionEpochMs)
+          : f.time}
+      </td>
       <td
         style={{
           color:
@@ -419,6 +433,7 @@ export function TraceView() {
 
   const [paused, setPaused] = useState(false);
   const [mode, setMode] = useState<TraceDisplayMode>(DEFAULT_TRACE_MODE);
+  const [timeMode, setTimeMode] = useState<TraceTimeMode>(DEFAULT_TRACE_TIME_MODE);
   const [historyWindow, setHistoryWindow] = useState<HistoryWindow>(DEFAULT_HISTORY_WINDOW);
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set());
   const [filter, setFilter] = useState<TraceFilter>(EMPTY_FILTER);
@@ -427,6 +442,11 @@ export function TraceView() {
   const [filterAnchor, setFilterAnchor] = useState<HTMLElement | null>(null);
   const [filterColumn, setFilterColumn] = useState<TraceFilterColumn | null>(null);
   const [filterOptions, setFilterOptions] = useState<readonly TraceFilterOption[]>([]);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportResult, setExportResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
 
   const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
   const displayRows = useMemo(
@@ -436,12 +456,17 @@ export function TraceView() {
   const filterActive = isFilterActive(filter);
   const columns = useMemo(() => columnsForMode(mode), [mode]);
   const tableComponents = useMemo(() => makeTableComponents(columns), [columns]);
+  const sessionEpochMs = session.sessionInfo?.sessionEpochMs ?? null;
+  const wallDisabledReason = wallTimeDisabledReason(sessionEpochMs);
+
   const tableContext = useMemo<TraceTableContext>(
     () => ({
       columns,
       mode,
       pinned,
       expansion,
+      timeMode,
+      sessionEpochMs,
       onTogglePin: (key: string) => {
         setPinned((prev) => {
           const next = new Set(prev);
@@ -458,8 +483,15 @@ export function TraceView() {
         });
       },
     }),
-    [columns, mode, pinned, expansion],
+    [columns, mode, pinned, expansion, timeMode, sessionEpochMs],
   );
+
+  // Auto-dismiss the export result chip.
+  useEffect(() => {
+    if (!exportResult) return;
+    const t = setTimeout(() => setExportResult(null), 6_000);
+    return () => clearTimeout(t);
+  }, [exportResult]);
 
   // Live pipeline: subscribe to batches while the shared session is running;
   // restore exactly one backpressure credit per animation frame on desktop.
@@ -537,6 +569,10 @@ export function TraceView() {
   const catalogTooltip = catalogStore.railTooltip();
   const clearLabel =
     snap.rows.length > 0 ? "Clear trace" : "Trace is already empty";
+  const exportLabel =
+    snap.rows.length === 0
+      ? "no frames buffered"
+      : "Export buffered frames as pcap";
   const showLinkChip = showDegradedLinkChip(capturing, sourceKind, linkStatus?.state);
   const chipColor = linkStatus ? linkChipColorVar(linkStatus.state) : "var(--text-secondary)";
   const stats = session.stats;
@@ -549,7 +585,18 @@ export function TraceView() {
         `Kernel ${stats.kernelDropped.toLocaleString("en-US")}`,
       ].join(" · ")
     : "";
-  const showChipStack = paused || showLinkChip || showDroppedChip || filterActive;
+  const showChipStack =
+    paused || showLinkChip || showDroppedChip || filterActive || exportResult !== null;
+
+  const onExport = (): void => {
+    if (exportBusy || snap.rows.length === 0) return;
+    setExportBusy(true);
+    void runExportRing().then((outcome) => {
+      setExportBusy(false);
+      if (outcome.message === "export cancelled") return;
+      setExportResult({ ok: outcome.ok, message: outcome.message });
+    });
+  };
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
@@ -629,6 +676,46 @@ export function TraceView() {
                     control={<Radio size="small" inputProps={{ "aria-label": "Sequential mode" }} />}
                     label={<Typography sx={{ fontSize: 13 }}>Sequential</Typography>}
                   />
+                </RadioGroup>
+              </FormControl>
+              <FormControl component="fieldset" sx={{ mb: 1.5, width: "100%" }}>
+                <FormLabel component="legend" sx={{ fontSize: 12, mb: 0.5 }}>
+                  Time
+                </FormLabel>
+                <RadioGroup
+                  value={timeMode}
+                  onChange={(_, value) => {
+                    setTimeMode(value as TraceTimeMode);
+                  }}
+                  data-testid="trace-time-mode-group"
+                >
+                  <FormControlLabel
+                    value="session"
+                    data-testid="trace-time-mode-session"
+                    control={
+                      <Radio size="small" inputProps={{ "aria-label": "Session time" }} />
+                    }
+                    label={<Typography sx={{ fontSize: 13 }}>Session (s)</Typography>}
+                  />
+                  <Tooltip
+                    title={wallDisabledReason ?? ""}
+                    disableHoverListener={wallDisabledReason === null}
+                  >
+                    <Box component="span">
+                      <FormControlLabel
+                        value="wall"
+                        data-testid="trace-time-mode-wall"
+                        disabled={wallDisabledReason !== null}
+                        control={
+                          <Radio
+                            size="small"
+                            inputProps={{ "aria-label": "Wall-clock time" }}
+                          />
+                        }
+                        label={<Typography sx={{ fontSize: 13 }}>Wall clock</Typography>}
+                      />
+                    </Box>
+                  </Tooltip>
                 </RadioGroup>
               </FormControl>
               <TextField
@@ -724,6 +811,22 @@ export function TraceView() {
                 sx={{ color: "text.secondary" }}
               >
                 <DeleteSweepIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
+        <Box sx={RAIL_SLOT_SX}>
+          <Tooltip title={exportLabel} placement="right">
+            <span>
+              <IconButton
+                size="small"
+                aria-label="Export buffered frames as pcap"
+                disabled={snap.rows.length === 0 || exportBusy}
+                onClick={onExport}
+                data-testid="trace-export-btn"
+                sx={{ color: "text.secondary" }}
+              >
+                <DownloadIcon fontSize="small" />
               </IconButton>
             </span>
           </Tooltip>
@@ -827,6 +930,26 @@ export function TraceView() {
                     }}
                   />
                 </Tooltip>
+              ) : null}
+              {exportResult ? (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={exportResult.message}
+                  data-testid="trace-export-result"
+                  sx={{
+                    height: 22,
+                    fontSize: 12,
+                    color: exportResult.ok ? "var(--success)" : "var(--error)",
+                    borderColor: exportResult.ok ? "var(--success)" : "var(--error)",
+                    backgroundColor: "var(--surface-raised-2)",
+                    maxWidth: 360,
+                    "& .MuiChip-label": {
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    },
+                  }}
+                />
               ) : null}
             </Stack>
           ) : null}

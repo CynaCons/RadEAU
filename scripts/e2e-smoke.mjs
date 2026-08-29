@@ -317,6 +317,97 @@ function setSimAddrProbe(addr) {
   })()`;
 }
 
+function setTextFieldProbe(testId, value) {
+  return `(() => {
+    const root = document.querySelector('[data-testid="${testId}"]');
+    const input = root ? root.querySelector("input") : null;
+    if (!input) return false;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, "value").set;
+    setter.call(input, ${JSON.stringify(value)});
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`;
+}
+
+const DEPS_PROBE = `(() => {
+  const panel = document.querySelector('[data-testid="settings-dependencies-panel"]');
+  const ids = ["npcap", "libpcap", "vxlapi", "vector-driver"];
+  const allowed = new Set([
+    "Installed", "Missing", "Incompatible", "Blocked", "N/A",
+  ]);
+  const rows = ids.map((id) => {
+    const chip = document.querySelector('[data-testid="settings-dep-status-' + id + '"]');
+    const label = chip ? (chip.textContent || "").trim() : null;
+    const head = label ? label.split("·")[0].trim() : null;
+    return { id, label, head, ok: head ? allowed.has(head) : false };
+  });
+  return {
+    panelPresent: !!panel,
+    rows,
+    allOk: rows.every((r) => r.ok),
+  };
+})()`;
+
+const DIAG_PROBE = `(() => {
+  const field = document.querySelector('[data-testid="settings-diag-report-field"]');
+  const input = field
+    ? (field.querySelector("textarea") || field.querySelector("input"))
+    : null;
+  const report = input ? (input.value || "") : "";
+  const logEl = document.querySelector('[data-testid="settings-log-path"]');
+  const logText = logEl ? (logEl.textContent || "") : "";
+  return {
+    report,
+    hasRadeau: /RadEAU/i.test(report),
+    hasLogPath: /log/i.test(report) || /log path/i.test(logText),
+    logText,
+  };
+})()`;
+
+const APPBAR_RUN_LABEL_PROBE = `(() => {
+  const btn = document.querySelector('[data-testid="appbar-run-btn"]');
+  if (!btn) return null;
+  return {
+    label: (btn.getAttribute("aria-label") || btn.textContent || "").trim(),
+    pressed: btn.getAttribute("aria-pressed"),
+  };
+})()`;
+
+const NETWORK_EOF_PROBE = `(() => {
+  const q = (t) => document.querySelector('[data-testid="' + t + '"]');
+  return {
+    linkLabel: q("network-link-chip")?.textContent?.trim() || null,
+    linkDetail: q("network-link-detail")?.textContent?.trim() || null,
+    sourceKind: q("network-source-kind")?.textContent?.trim() || null,
+  };
+})()`;
+
+const FIRST_TIME_CELL_PROBE = `(() => {
+  const table = document.querySelector('[data-testid="trace-table"]');
+  if (!table) return null;
+  const row = [...table.querySelectorAll("tbody tr")].find(
+    (r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"),
+  );
+  if (!row) return null;
+  const cells = row.querySelectorAll("td");
+  // Time is column index 1 (expand, time, …).
+  return cells[1] ? (cells[1].textContent || "").trim() : null;
+})()`;
+
+const CLICK_WALL_TIME_PROBE = `(() => {
+  const radio = document.querySelector('[data-testid="trace-time-mode-wall"]');
+  if (!radio) return false;
+  if (radio.getAttribute("aria-disabled") === "true" || radio.classList.contains("Mui-disabled"))
+    return false;
+  const input = radio.matches("input") ? radio : radio.querySelector("input");
+  if (input && input.disabled) return false;
+  (input || radio).click();
+  return true;
+})()`;
+
+const PCAP_FIXTURE = join(repoRoot, "fixtures", "pcap", "sensor-fusion-5s.pcap");
+
 const SIM_STATE_PROBE = `(() => {
   const q = (t) => document.querySelector('[data-testid="' + t + '"]');
   const table = q("trace-table");
@@ -1065,12 +1156,184 @@ async function main() {
       rowCount: cleared.rowCount,
     }));
 
+    // v0.1.6 phases — each is isolated so a missing Rust command/fixture
+    // reports its own FAIL without skipping the rest of the report.
+    const v016 = {
+      dependencies: false,
+      diagnostics: false,
+      pcapEof: false,
+      timeToggle: false,
+    };
+
+    // Phase (a) — Settings › Dependencies (CP-008).
+    try {
+      await waitFor(
+        () => session.eval(clickProbe("nav-settings")),
+        10_000,
+        "nav-settings clickable",
+      );
+      const deps = await waitFor(async () => {
+        const s = await session.eval(DEPS_PROBE);
+        return s.panelPresent && s.rows.every((r) => r.label) ? s : null;
+      }, 15_000, "Dependencies panel with 4 status chips");
+      if (!deps.allOk) {
+        fail(
+          `Dependencies statuses outside allowed set: ${JSON.stringify(deps.rows)}`,
+        );
+      } else if (deps.rows.length !== 4) {
+        fail(`expected 4 dependency rows, got ${deps.rows.length}`);
+      } else {
+        v016.dependencies = true;
+        console.log(
+          "dependencies: PASS",
+          JSON.stringify(deps.rows.map((r) => `${r.id}=${r.label}`)),
+        );
+      }
+    } catch (err) {
+      fail(`dependencies phase: ${err?.message ?? err}`);
+      const snap = await session.eval(`(() => {
+        const err = document.querySelector('[data-testid="settings-deps-error"]');
+        const panel = document.querySelector('[data-testid="settings-dependencies-panel"]');
+        return {
+          panel: !!panel,
+          error: err ? (err.textContent || "").trim() : null,
+        };
+      })()`).catch(() => null);
+      if (snap) console.log("dependencies snapshot:", JSON.stringify(snap));
+    }
+
+    // Phase (b) — Settings › Diagnostics report (CP-008).
+    try {
+      const diag = await waitFor(async () => {
+        const s = await session.eval(DIAG_PROBE);
+        return s.report.length > 20 ? s : null;
+      }, 15_000, "Diagnostics report text");
+      if (!diag.hasRadeau) fail(`Diagnostics report missing "RadEAU": ${diag.report.slice(0, 200)}`);
+      else if (!diag.hasLogPath)
+        fail(`Diagnostics report / log line missing a log path: report=${diag.report.slice(0, 200)} log=${diag.logText}`);
+      else {
+        v016.diagnostics = true;
+        console.log(
+          "diagnostics: PASS",
+          JSON.stringify({ logText: diag.logText.slice(0, 120) }),
+        );
+      }
+    } catch (err) {
+      fail(`diagnostics phase: ${err?.message ?? err}`);
+    }
+
+    // Phase (c) — pcap file source end-of-file (CP-005).
+    let sessionTimeSample = null;
+    try {
+      if (!existsSync(PCAP_FIXTURE)) {
+        fail(
+          `pcap fixture missing at ${PCAP_FIXTURE} (expected once Rust side lands fixtures)`,
+        );
+      } else {
+        const runState = await session.eval(APPBAR_RUN_LABEL_PROBE);
+        if (runState && /stop/i.test(runState.label || "")) {
+          if (!(await session.eval(clickProbe("appbar-run-btn"))))
+            fail("could not Stop before pcap phase");
+          await sleep(500);
+        }
+
+        await waitFor(
+          () => session.eval(clickProbe("nav-settings")),
+          10_000,
+          "nav-settings for pcap",
+        );
+        if (!(await session.eval(OPEN_SETTINGS_SOURCE_SELECT_PROBE)))
+          fail("could not open source select for pcap");
+        await sleep(200);
+        if (!(await session.eval(clickProbe("settings-source-option-pcap"))))
+          fail("could not select pcap file source");
+        await sleep(200);
+        if (!(await session.eval(setTextFieldProbe("settings-pcap-path", PCAP_FIXTURE))))
+          fail("could not set settings-pcap-path");
+        if (!(await session.eval(clickProbe("settings-pcap-pace-fast"))))
+          fail("could not click settings-pcap-pace-fast");
+
+        await waitFor(
+          () => session.eval(clickProbe("nav-trace")),
+          10_000,
+          "nav-trace before pcap start",
+        );
+        await session.eval(clickProbe("trace-clear-btn"));
+        if (!(await session.eval(clickProbe("appbar-run-btn"))))
+          fail("could not Start pcap session");
+
+        const pcapLive = await waitFor(async () => {
+          const s = await session.eval(TRACE_STATE_PROBE);
+          return s.tablePresent && s.rowCount > 0 ? s : null;
+        }, 15_000, "pcap rows to appear");
+        console.log("pcap live:", JSON.stringify({ rowCount: pcapLive.rowCount }));
+        sessionTimeSample = await session.eval(FIRST_TIME_CELL_PROBE);
+
+        const ended = await waitFor(async () => {
+          const s = await session.eval(APPBAR_RUN_LABEL_PROBE);
+          if (!s) return null;
+          const label = (s.label || "").toLowerCase();
+          if (label.includes("start") || s.pressed === "false") return s;
+          return null;
+        }, 15_000, "app-bar Start after pcap EOF");
+        console.log("pcap eof appbar:", JSON.stringify(ended));
+
+        const after = await session.eval(TRACE_STATE_PROBE);
+        if (after.rowCount <= 0)
+          fail(`pcap rows disappeared after EOF: ${JSON.stringify(after)}`);
+
+        await waitFor(
+          () => session.eval(clickProbe("nav-network")),
+          10_000,
+          "nav-network after pcap EOF",
+        );
+        const netEof = await waitFor(async () => {
+          const s = await session.eval(NETWORK_EOF_PROBE);
+          return s.linkLabel && /closed/i.test(s.linkLabel) ? s : null;
+        }, 10_000, "Network Closed after pcap EOF");
+        if (!netEof.linkDetail || !/end of file/i.test(netEof.linkDetail)) {
+          throw new Error(
+            `Network closed detail missing end of file: ${JSON.stringify(netEof)}`,
+          );
+        }
+        console.log("pcap network:", JSON.stringify(netEof));
+        v016.pcapEof = true;
+
+        // Phase (d) — Time toggle wall mode on the pcap session.
+        await waitFor(
+          () => session.eval(clickProbe("nav-trace")),
+          10_000,
+          "nav-trace for time toggle",
+        );
+        if (!(await session.eval(OPEN_DISPLAY_SETTINGS_PROBE)))
+          throw new Error("could not open display-settings for time toggle");
+        await sleep(200);
+        const wallClicked = await session.eval(CLICK_WALL_TIME_PROBE);
+        if (!wallClicked) {
+          throw new Error(
+            "wall time mode disabled or missing (source has no wall-clock anchor?)",
+          );
+        }
+        const wallSample = await waitFor(async () => {
+          const t = await session.eval(FIRST_TIME_CELL_PROBE);
+          return t && /^\d{2}:\d{2}:\d{2}\.\d{3}$/.test(t) ? t : null;
+        }, 5_000, "Time cell HH:MM:SS.mmm in wall mode");
+        v016.timeToggle = true;
+        console.log(
+          "time toggle: PASS",
+          JSON.stringify({ session: sessionTimeSample, wall: wallSample }),
+        );
+      }
+    } catch (err) {
+      fail(`pcap/time phase: ${err?.message ?? err}`);
+    }
+
     console.log(
       `PASS — devgen ${trace.rowCount} rows (Fixed→Sequential); simulator link ${sim.rowCount} rows, ` +
         `degraded chip absent, protocols [${[...protocolsRendered].join(", ")}], ` +
         `LidarClusters + Dir Rx + VLAN 802.1Q; Network Connection "${network.sourceKind}" / "${network.linkLabel}" ` +
         `received=${network.receivedN}; catalog names + clean dissections + decoded signals; ` +
-        `filters Protocol/Dir/Name`,
+        `filters Protocol/Dir/Name; v0.1.6=${JSON.stringify(v016)}`,
     );
   } catch (err) {
     failures += 1;

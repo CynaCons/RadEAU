@@ -1,98 +1,150 @@
+/**
+ * Recorder view (SRS_visual_ui.md §5.3): honest empty state until recording
+ * lands in v0.6; Export buffered frames (same action as the Trace rail);
+ * Replay Browse opens a pcap into the Interface source.
+ */
+
 import {
   Box,
   Button,
-  ButtonGroup,
-  IconButton,
-  Menu,
-  MenuItem,
   Stack,
   Switch,
   TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
-import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
-import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DownloadIcon from "@mui/icons-material/Download";
 import FiberManualRecordIcon from "@mui/icons-material/FiberManualRecord";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+import { EmptyState } from "../components/EmptyState";
 import { RaisedPanel } from "../components/RaisedPanel";
+import { pickPcapFile } from "../runtime/desktop";
+import {
+  RECORDER_EMPTY,
+  RECORDER_RECORDING_CAPTION,
+  RECORDER_REPLAY_CAPTION,
+  recorderExportLabel,
+} from "../runtime/recorderDisplay";
+import { runExportRing } from "../runtime/ringExport";
+import { sessionStore } from "../runtime/sessionStore";
+import { traceStore } from "../runtime/traceStore";
 import { useViewLifecycle } from "../shell/viewLifecycle";
-
-// Mock data — replaced by live recorder state when the core lands (PRD §6).
-const RECENT_CAPTURES = [
-  { base: "20260826-1402_fusion-baseline.jsonl", dir: "C:\\Users\\dev\\RadEAU\\captures" },
-  { base: "20260825-1731_sd-reboot-fault.jsonl", dir: "C:\\Users\\dev\\RadEAU\\captures" },
-  { base: "20260825-0918_ptp-convergence.jsonl", dir: "C:\\Users\\dev\\RadEAU\\captures" },
-  { base: "20260824-1650_burst-stress.jsonl", dir: "C:\\Users\\dev\\RadEAU\\captures\\stress" },
-  { base: "20260824-1101_camera-dropout.jsonl", dir: "C:\\Users\\dev\\RadEAU\\captures" },
-];
 
 export function RecorderView() {
   useViewLifecycle("recorder", {});
-  const [armed, setArmed] = useState(false);
-  const [capturing] = useState(false);
-  const [replayMode, setReplayMode] = useState(false);
-  const [recentAnchor, setRecentAnchor] = useState<HTMLElement | null>(null);
+  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
+  const frameCount = snap.rows.length;
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [exportError, setExportError] = useState(false);
+
+  const onExport = async () => {
+    if (exportBusy || frameCount === 0) return;
+    setExportBusy(true);
+    setExportMessage(null);
+    const outcome = await runExportRing();
+    setExportBusy(false);
+    if (outcome.message === "export cancelled") return;
+    setExportError(!outcome.ok);
+    setExportMessage(outcome.message);
+  };
+
+  const onReplayBrowse = async () => {
+    if (session.running) return;
+    const path = await pickPcapFile();
+    if (!path) return;
+    sessionStore.setPcapSource(path);
+  };
+
+  const exportTooltip =
+    frameCount === 0 ? "no frames buffered" : "Export buffered frames as pcap";
 
   return (
     <Stack spacing={4} sx={{ maxWidth: 800 }}>
       <RaisedPanel
         icon={<FiberManualRecordIcon sx={{ color: "var(--error)" }} />}
         title="Record"
-        leftRule={capturing ? "var(--error)" : undefined}
         testId="recorder-record-panel"
       >
         <Stack spacing={2}>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Switch
-              size="small"
-              checked={armed}
-              onChange={(e) => setArmed(e.target.checked)}
-              inputProps={{ "aria-label": "Arm recording" }}
-              data-testid="recorder-arm-switch"
-            />
-            <Typography sx={{ fontSize: 14 }}>Arm recording at session start</Typography>
-          </Stack>
+          <Tooltip title={RECORDER_RECORDING_CAPTION}>
+            <Box>
+              <Stack direction="row" alignItems="center" spacing={1}>
+                <Switch
+                  size="small"
+                  checked={false}
+                  disabled
+                  inputProps={{ "aria-label": "Arm recording" }}
+                  data-testid="recorder-arm-switch"
+                />
+                <Typography sx={{ fontSize: 14 }}>Arm recording at session start</Typography>
+              </Stack>
+            </Box>
+          </Tooltip>
           <Stack direction="row" spacing={1}>
             <TextField
               size="small"
               fullWidth
               disabled
-              value="C:\Users\dev\RadEAU\captures"
+              value=""
+              placeholder="—"
               inputProps={{ "aria-label": "Recording directory" }}
               data-testid="recorder-directory-field"
             />
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<FolderOpenIcon />}
-              data-testid="recorder-browse-btn"
-            >
-              Browse
-            </Button>
+            <Tooltip title={RECORDER_RECORDING_CAPTION}>
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<FolderOpenIcon />}
+                  disabled
+                  data-testid="recorder-browse-btn"
+                >
+                  Browse
+                </Button>
+              </span>
+            </Tooltip>
           </Stack>
           <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
-            Recordings are written to the captures directory as timestamped JSONL files.
+            {RECORDER_RECORDING_CAPTION}
           </Typography>
-          {capturing ? (
-            <Stack direction="row" spacing={1} alignItems="center">
-              <TextField
-                size="small"
-                fullWidth
-                disabled
-                value="C:\Users\dev\RadEAU\captures\20260826-1544_session.jsonl"
-                inputProps={{ "aria-label": "Active capture file", sx: { fontFamily: "var(--font-mono)", fontSize: 13 } }}
-                data-testid="recorder-active-file-field"
-              />
-              <Tooltip title="Copy path">
-                <IconButton size="small" aria-label="Copy path" data-testid="recorder-copy-path-btn">
-                  <ContentCopyIcon fontSize="inherit" />
-                </IconButton>
-              </Tooltip>
-            </Stack>
-          ) : null}
+
+          <Box sx={{ position: "relative", minHeight: 36 }}>
+            <EmptyState text={RECORDER_EMPTY} inset testId="recorder-empty" />
+          </Box>
+
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Tooltip title={exportTooltip}>
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<DownloadIcon />}
+                  disabled={frameCount === 0 || exportBusy}
+                  onClick={() => {
+                    void onExport();
+                  }}
+                  data-testid="recorder-export-btn"
+                >
+                  {recorderExportLabel(frameCount)}
+                </Button>
+              </span>
+            </Tooltip>
+            {exportMessage ? (
+              <Typography
+                sx={{
+                  fontSize: 12,
+                  color: exportError ? "var(--error)" : "text.secondary",
+                }}
+                data-testid="recorder-export-result"
+              >
+                {exportMessage}
+              </Typography>
+            ) : null}
+          </Stack>
         </Stack>
       </RaisedPanel>
 
@@ -102,68 +154,45 @@ export function RecorderView() {
         testId="recorder-replay-panel"
       >
         <Stack spacing={2}>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <Switch
-              size="small"
-              checked={replayMode}
-              onChange={(e) => setReplayMode(e.target.checked)}
-              inputProps={{ "aria-label": "Replay mode" }}
-              data-testid="recorder-replay-switch"
-            />
-            <Typography sx={{ fontSize: 14 }}>Replay mode</Typography>
-          </Stack>
           <Stack direction="row" spacing={1}>
             <TextField
               size="small"
               fullWidth
               disabled
+              value={session.sourceKind === "pcap" ? session.pcapPath : ""}
               placeholder="No replay source configured"
-              inputProps={{ "aria-label": "Replay source" }}
+              inputProps={{
+                "aria-label": "Replay source",
+                sx: { fontFamily: "var(--font-mono)", fontSize: 13 },
+              }}
               data-testid="recorder-source-field"
             />
-            <ButtonGroup variant="outlined" size="small">
-              <Button startIcon={<FolderOpenIcon />} data-testid="recorder-replay-browse-btn">
-                Browse
-              </Button>
-              <Button
-                size="small"
-                aria-label="Recent captures"
-                onClick={(e) => setRecentAnchor(e.currentTarget)}
-                data-testid="recorder-recent-btn"
-              >
-                <ArrowDropDownIcon />
-              </Button>
-            </ButtonGroup>
-            <Menu
-              anchorEl={recentAnchor}
-              open={recentAnchor !== null}
-              onClose={() => setRecentAnchor(null)}
+            <Tooltip
+              title={
+                session.running
+                  ? "Interface cannot change while a session is running"
+                  : "Open a pcap / pcapng as the capture source"
+              }
             >
-              {RECENT_CAPTURES.map((c) => (
-                <MenuItem
-                  key={c.base}
-                  onClick={() => setRecentAnchor(null)}
-                  data-testid={`recorder-recent-${c.base}`}
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<FolderOpenIcon />}
+                  disabled={session.running}
+                  onClick={() => {
+                    void onReplayBrowse();
+                  }}
+                  data-testid="recorder-replay-browse"
                 >
-                  <Box>
-                    <Typography sx={{ fontSize: 14 }}>{c.base}</Typography>
-                    <Typography
-                      sx={{
-                        fontSize: 12,
-                        color: "text.secondary",
-                        maxWidth: 360,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {c.dir}
-                    </Typography>
-                  </Box>
-                </MenuItem>
-              ))}
-            </Menu>
+                  Browse
+                </Button>
+              </span>
+            </Tooltip>
           </Stack>
+          <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
+            {RECORDER_REPLAY_CAPTION}
+          </Typography>
         </Stack>
       </RaisedPanel>
     </Stack>

@@ -59,6 +59,7 @@ const SOMEIP_DETAIL: FrameDetail = {
 /** Minimal TraceFrame for expansion-slot tests. */
 function frame(partial: Partial<TraceFrame> & Pick<TraceFrame, "id" | "protocol" | "serviceMethod" | "source">): TraceFrame {
   return {
+    tS: 0,
     time: "0.0000",
     dir: "rx",
     sourceTitle: partial.source,

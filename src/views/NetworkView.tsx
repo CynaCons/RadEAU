@@ -35,6 +35,8 @@ export function NetworkView() {
         running: session.running,
         sourceKind: session.sourceKind,
         simAddr: session.simAddr,
+        pcapPath: session.pcapPath,
+        pcapStreamAddr: session.pcapStreamAddr,
         linkStatus: session.linkStatus,
         sessionInfo: session.sessionInfo,
         stats: session.stats,
@@ -77,6 +79,14 @@ export function NetworkView() {
                 Scenario: {model.scenario}
               </Typography>
             ) : null}
+            {model.timestampSource ? (
+              <Typography
+                sx={{ fontSize: 13, color: "text.secondary" }}
+                data-testid="network-timestamp-source"
+              >
+                Timestamp source: {model.timestampSource}
+              </Typography>
+            ) : null}
           </Box>
 
           {model.stoppedHint ? (
@@ -117,6 +127,14 @@ export function NetworkView() {
                   borderColor: linkColor,
                 }}
               />
+            ) : null}
+            {model.linkDetail ? (
+              <Typography
+                sx={{ ...MONO, fontSize: 12, color: "text.secondary", alignSelf: "center" }}
+                data-testid="network-link-detail"
+              >
+                {model.linkDetail}
+              </Typography>
             ) : null}
             {stats ? (
               <>

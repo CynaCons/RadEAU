@@ -12,6 +12,7 @@ function row(
   partial: Partial<TraceFrame> & Pick<TraceFrame, "id" | "protocol" | "source" | "key">,
 ): TraceFrame {
   return {
+    tS: 0,
     time: "0.0000",
     dir: "rx",
     sourceTitle: partial.source,

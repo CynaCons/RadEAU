@@ -79,6 +79,8 @@ describe("networkDisplay Connection panel", () => {
         sourceKind: "sim",
         scenario: "demo-lane",
         endpoints: [],
+        sessionEpochMs: 1_700_000_000_000,
+        timestampSource: "switch",
       },
     });
     expect(model.sourceLabel).toBe("Simulator link");
@@ -87,7 +89,31 @@ describe("networkDisplay Connection panel", () => {
     expect(model.sessionChipLabel).toBe("Session running");
     expect(model.linkChipLabel).toBe("Connected");
     expect(model.linkState).toBe("connected");
+    expect(model.timestampSource).toBe("switch");
     expect(model.stoppedHint).toBeNull();
+  });
+
+  it("shows pcap path, closed link detail, and file timestamp source", () => {
+    const model = connectionPanelModel({
+      running: false,
+      sourceKind: "pcap",
+      simAddr: "127.0.0.1:5560",
+      pcapPath: "fixtures/pcap/sensor-fusion-5s.pcap",
+      linkStatus: { state: "closed", detail: "end of file · 120 frames" },
+      sessionInfo: {
+        sourceKind: "pcap",
+        scenario: null,
+        endpoints: [],
+        sessionEpochMs: 1_700_000_000_000,
+        timestampSource: "file",
+      },
+      stats: makeStats({ received: 120, emitted: 120 }),
+    });
+    expect(model.sourceLabel).toBe("pcap file");
+    expect(model.address).toBe("fixtures/pcap/sensor-fusion-5s.pcap");
+    expect(model.linkChipLabel).toBe("Closed");
+    expect(model.linkDetail).toBe("end of file · 120 frames");
+    expect(model.timestampSource).toBe("file");
   });
 
   it("exposes capture:stats counters and a non-zero class line", () => {

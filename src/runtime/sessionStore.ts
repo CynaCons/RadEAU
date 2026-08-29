@@ -9,11 +9,13 @@
 import {
   buildCaptureSource,
   DEFAULT_DEVGEN_PROFILE,
+  DEFAULT_PCAP_PACE,
   DEFAULT_SIM_ADDR,
   type CaptureLinkStatus,
   type CaptureSessionInfo,
   type CaptureSource,
   type CaptureStats,
+  type PcapPace,
   type SourceKind,
 } from "./captureSource";
 import {
@@ -28,6 +30,9 @@ export interface SessionSnapshot {
   readonly running: boolean;
   readonly sourceKind: SourceKind;
   readonly simAddr: string;
+  readonly pcapPath: string;
+  readonly pcapPace: PcapPace;
+  readonly pcapStreamAddr: string;
   readonly linkStatus: CaptureLinkStatus | null;
   readonly sessionInfo: CaptureSessionInfo | null;
   /** Live / last-session capture counters; null until the first stats event. */
@@ -40,6 +45,9 @@ export class SessionStore {
   private running = false;
   private sourceKind: SourceKind = "devgen";
   private simAddr = DEFAULT_SIM_ADDR;
+  private pcapPath = "";
+  private pcapPace: PcapPace = DEFAULT_PCAP_PACE;
+  private pcapStreamAddr = "";
   private linkStatus: CaptureLinkStatus | null = null;
   private sessionInfo: CaptureSessionInfo | null = null;
   private stats: CaptureStats | null = null;
@@ -56,6 +64,17 @@ export class SessionStore {
       this.publish();
     });
     onCaptureLink((status) => {
+      // CP-005: a closed link while running means the session ended itself
+      // (end of file / stream). Keep stats and the closed linkStatus so
+      // Network can show "Closed · end of file · n frames"; Trace never
+      // surfaces the closed chip (showDegradedLinkChip excludes it).
+      if (status.state === "closed" && this.running) {
+        this.running = false;
+        this.linkStatus = status;
+        this.lastError = null;
+        this.publish();
+        return;
+      }
       this.linkStatus = status;
       this.publish();
     });
@@ -77,6 +96,9 @@ export class SessionStore {
     return buildCaptureSource(this.sourceKind, {
       profile: DEFAULT_DEVGEN_PROFILE,
       addr: this.simAddr,
+      path: this.pcapPath,
+      pace: this.pcapPace,
+      streamAddr: this.pcapStreamAddr,
     });
   }
 
@@ -93,6 +115,36 @@ export class SessionStore {
     this.publish();
   }
 
+  setPcapPath(path: string): void {
+    if (this.running || path === this.pcapPath) return;
+    this.pcapPath = path;
+    this.publish();
+  }
+
+  setPcapPace(pace: PcapPace): void {
+    if (this.running || pace === this.pcapPace) return;
+    this.pcapPace = pace;
+    this.publish();
+  }
+
+  setPcapStreamAddr(addr: string): void {
+    if (this.running || addr === this.pcapStreamAddr) return;
+    this.pcapStreamAddr = addr;
+    this.publish();
+  }
+
+  /**
+   * Configures the session as a pcap-file source (Recorder Replay Browse).
+   * No-op while running.
+   */
+  setPcapSource(path: string, pace: PcapPace = this.pcapPace): void {
+    if (this.running) return;
+    this.sourceKind = "pcap";
+    this.pcapPath = path;
+    this.pcapPace = pace;
+    this.publish();
+  }
+
   async start(): Promise<void> {
     if (this.running || this.startInFlight) return;
     this.lastError = null;
@@ -100,6 +152,18 @@ export class SessionStore {
     const source = this.currentSource();
     if (source.kind === "sim") {
       this.linkStatus = { state: "connecting", detail: source.addr };
+      this.publish();
+    } else if (source.kind === "pcapStream") {
+      this.linkStatus = {
+        state: "connecting",
+        detail: source.addr || null,
+      };
+      this.publish();
+    } else if (source.kind === "pcap") {
+      this.linkStatus = {
+        state: "connecting",
+        detail: source.path || null,
+      };
       this.publish();
     } else {
       this.linkStatus = null;
@@ -157,6 +221,9 @@ export class SessionStore {
       running: this.running,
       sourceKind: this.sourceKind,
       simAddr: this.simAddr,
+      pcapPath: this.pcapPath,
+      pcapPace: this.pcapPace,
+      pcapStreamAddr: this.pcapStreamAddr,
       linkStatus: this.linkStatus,
       sessionInfo: this.sessionInfo,
       stats: this.stats,

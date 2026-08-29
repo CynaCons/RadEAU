@@ -16,6 +16,10 @@ import type {
   CaptureStats,
 } from "./captureSource";
 import { emptyByClass } from "./captureSource";
+import {
+  browserDependencyRows,
+  type DependencyRow,
+} from "./dependencyDisplay";
 import { FrameBatchRaw, setSessionEndpoints } from "./frameModel";
 import { DevGenMirror, profileRateAt, projectMirrorBatch, RateProfile } from "./devGenMirror";
 import { PROTO_CLASS_COUNT } from "./wireCodes";
@@ -26,6 +30,7 @@ export type {
   CaptureSource,
   CaptureStats,
 } from "./captureSource";
+export type { DependencyRow } from "./dependencyDisplay";
 
 export function isDesktop(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -121,16 +126,18 @@ class MirrorCapture {
       const ip = `10.42.0.${11 + ep}`;
       return { name: ip, ip };
     });
+    this.t0 = Date.now();
     const session: CaptureSessionInfo = {
       sourceKind: "devgen",
       scenario: null,
       endpoints,
+      sessionEpochMs: this.t0,
+      timestampSource: "host",
     };
     setSessionEndpoints(endpoints);
     for (const cb of this.sessionSubs) cb(session);
     for (const cb of this.linkSubs) cb({ state: "connected", detail: null });
 
-    this.t0 = Date.now();
     this.lastTick = this.t0;
     this.timer = setInterval(() => {
       const now = Date.now();
@@ -235,6 +242,12 @@ export function startCapture(source: CaptureSource): Promise<boolean> {
   if (!isDesktop()) {
     if (source.kind === "sim") {
       return Promise.reject(new Error("simulator link is desktop-app only"));
+    }
+    if (source.kind === "pcap") {
+      return Promise.reject(new Error("pcap file is desktop-app only"));
+    }
+    if (source.kind === "pcapStream") {
+      return Promise.reject(new Error("pcap stream is desktop-app only"));
     }
     mirror.start(source.profile);
     return Promise.resolve(true);
@@ -416,3 +429,132 @@ export function catalogUnload(): Promise<void> {
 export function onCatalogState(cb: (state: CatalogStateEvent) => void): () => void {
   return listenEvent<CatalogStateEvent>(CATALOG_STATE_EVENT, cb);
 }
+
+// ---------------------------------------------------------------------------
+// Capture backends I (v0.1.6): dependency probes, diagnostics report, ring
+// export, file dialogs, open_url. Browser mode stays honest — never fakes
+// installed drivers or exported bytes.
+// ---------------------------------------------------------------------------
+
+const EXPORT_EVENT = "capture:export";
+
+export interface ExportRingResult {
+  frames: number;
+  bytes: number;
+  firstTsMs: number;
+  lastTsMs: number;
+}
+
+export interface CaptureExportProgress {
+  done: number;
+  total: number;
+}
+
+const BROWSER_DIAG_REPORT = [
+  "RadEAU diagnostic report",
+  "mode       browser",
+  "build      frontend only",
+  "log path   (desktop app only)",
+  "",
+  "Dependency probes, the on-disk log, and ring→pcap export require the",
+  "desktop app. Open Settings › Diagnostics there for a pasteable report.",
+].join("\n");
+
+/** Read-only dependency probe rows (CP-008). */
+export function dependencyProbe(): Promise<DependencyRow[]> {
+  if (!isDesktop()) {
+    return Promise.resolve(browserDependencyRows());
+  }
+  return invoke<DependencyRow[]>("dependency_probe");
+}
+
+/** Plain-text diagnostics report for Settings › Diagnostics (CP-008). */
+export function diagnosticsReport(): Promise<string> {
+  if (!isDesktop()) {
+    return Promise.resolve(BROWSER_DIAG_REPORT);
+  }
+  return invoke<string>("diagnostics_report");
+}
+
+/** Absolute path of radeau.log (CP-007). */
+export function logPath(): Promise<string> {
+  if (!isDesktop()) {
+    return Promise.resolve("(desktop app only)");
+  }
+  return invoke<string>("log_path");
+}
+
+/**
+ * Writes the frame ring as classic pcap (CP-006). Browser mode rejects.
+ */
+export function exportRing(path: string): Promise<ExportRingResult> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<ExportRingResult>("export_ring", { path });
+}
+
+/** Progress while export_ring runs; no-op-safe in browser mode. */
+export function onCaptureExport(
+  cb: (progress: CaptureExportProgress) => void,
+): () => void {
+  return listenEvent<CaptureExportProgress>(EXPORT_EVENT, cb);
+}
+
+/**
+ * Opens a URL in the system browser via `open_url`, falling back to
+ * `window.open` when the command is unavailable.
+ */
+export async function openUrl(url: string): Promise<void> {
+  if (!isDesktop()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  try {
+    await invoke<void>("open_url", { url });
+  } catch {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
+/**
+ * Native open dialog for .pcap / .pcapng. Returns null on cancel or when
+ * the dialog plugin is unavailable (caller keeps a plain editable path).
+ */
+export async function pickPcapFile(): Promise<string | null> {
+  if (!isDesktop()) return null;
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "pcap", extensions: ["pcap", "pcapng"] }],
+    });
+    if (typeof selected === "string") return selected;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Native save dialog defaulting to `defaultName`. Returns null on cancel;
+ * rejects with an honest message when the dialog cannot run at all.
+ */
+export async function pickSavePath(defaultName: string): Promise<string | null> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const selected = await save({
+      defaultPath: defaultName,
+      filters: [{ name: "pcap", extensions: ["pcap"] }],
+    });
+    return typeof selected === "string" ? selected : null;
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+    return Promise.reject(new Error(msg || "save dialog unavailable"));
+  }
+}
+

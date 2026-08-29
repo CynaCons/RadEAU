@@ -12,11 +12,16 @@ vi.mock("./desktop", () => ({
     if (source.kind === "sim") {
       throw new Error("simulator link is desktop-app only");
     }
+    if (source.kind === "pcap" || source.kind === "pcapStream") {
+      throw new Error(`${source.kind} is desktop-app only`);
+    }
     desktopState.mirrorRunning = true;
     desktopState.sessionCb?.({
       sourceKind: "devgen",
       scenario: null,
       endpoints: [{ name: "10.42.0.11", ip: "10.42.0.11" }],
+      sessionEpochMs: Date.now(),
+      timestampSource: "host",
     });
     desktopState.linkCb?.({ state: "connected", detail: null });
     return true;
@@ -168,5 +173,70 @@ describe("SessionStore", () => {
     await store.stop();
     expect(seen).toContain(true);
     expect(seen[seen.length - 1]).toBe(false);
+  });
+
+  it("locks pcap path/pace/stream addr while running", async () => {
+    store.setSourceKind("pcap");
+    store.setPcapPath("a.pcap");
+    store.setPcapPace("fast");
+    expect(store.getSnapshot().pcapPath).toBe("a.pcap");
+    expect(store.getSnapshot().pcapPace).toBe("fast");
+    expect(store.currentSource()).toEqual({
+      kind: "pcap",
+      path: "a.pcap",
+      pace: "fast",
+    });
+
+    // Switch to devgen so start succeeds under the browser mock.
+    store.setSourceKind("devgen");
+    await store.start();
+    store.setPcapPath("b.pcap");
+    store.setPcapPace("realtime");
+    store.setPcapStreamAddr("1.2.3.4:9");
+    expect(store.getSnapshot().pcapPath).toBe("a.pcap");
+    expect(store.getSnapshot().pcapPace).toBe("fast");
+    expect(store.getSnapshot().pcapStreamAddr).toBe("");
+    await store.stop();
+
+    store.setPcapStreamAddr("127.0.0.1:5561");
+    expect(store.getSnapshot().pcapStreamAddr).toBe("127.0.0.1:5561");
+  });
+
+  it("setPcapSource configures the Interface for Replay Browse", () => {
+    store.setPcapSource("C:\\fixtures\\demo.pcap", "fast");
+    const snap = store.getSnapshot();
+    expect(snap.sourceKind).toBe("pcap");
+    expect(snap.pcapPath).toBe("C:\\fixtures\\demo.pcap");
+    expect(snap.pcapPace).toBe("fast");
+  });
+
+  it("CP-005: closed link while running ends the session and keeps closed status + stats", async () => {
+    await store.start();
+    desktopState.statsCb?.({
+      seq: 2,
+      elapsedS: 5,
+      received: 42,
+      emitted: 42,
+      accumulatorDropped: 0,
+      gapRecords: 0,
+      gapDropped: 0,
+      malformed: 0,
+      kernelDropped: 0,
+      byClass: new Array(12).fill(0),
+    });
+    expect(store.getSnapshot().running).toBe(true);
+
+    desktopState.linkCb?.({
+      state: "closed",
+      detail: "end of file · 42 frames",
+    });
+
+    const snap = store.getSnapshot();
+    expect(snap.running).toBe(false);
+    expect(snap.linkStatus?.state).toBe("closed");
+    expect(snap.linkStatus?.detail).toBe("end of file · 42 frames");
+    expect(snap.stats?.received).toBe(42);
+    expect(snap.sessionInfo?.sourceKind).toBe("devgen");
+    expect(stopCapture).not.toHaveBeenCalled();
   });
 });
