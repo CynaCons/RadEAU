@@ -197,7 +197,7 @@ Contents left to right:
 | 4 | Autosave toggle | Save | `accent-primary` on, `text-secondary` off; tooltip states resulting state |
 | 5 | Session title field | — | Centered in remaining space, 300 px, small outlined, `fill-subtle` interior, placeholder 60% opacity, 300 ms debounce |
 | 6 | Record indicator | RadioButtonChecked | 16 px: `text-secondary` idle, `warning` armed, `error` recording |
-| 7 | Record switch | — | Small, track and thumb `error` when checked, disabled in replay; disabled with the tooltip "Recording arrives with v0.6" until the recording core exists — the indicator never shows `error` for a recording that is not being written |
+| 7 | Record switch | — | Small, track and thumb `error` when checked, disabled in replay; arms continuous pcap recording (SRS_capture §7): armed while stopped stores the intent, the file opens with the next session; the indicator shows `warning` while armed and `error` only while bytes are actually being written — never for a recording that is not happening |
 | 8 | Run control | PlayArrow / Stop | Filled: `success` live start, `info` replay start, `error` running; icon and label both change; 60% opacity disabled |
 | 9 | Window controls | Remove / CropSquare / Close | As §4.1 |
 
@@ -498,16 +498,23 @@ whose caret lists the five most recent captures as basename over ellipsized
 path. The recording panel takes a static 3 px `error` left rule while
 capturing, never a blinking one.
 
-Until the recording core lands (v0.6) the view shows only true state: the
-Record panel's arm switch and directory controls are disabled with the
-caption "recording arrives with v0.6", the recent-captures list is the honest
-empty state "no recordings yet" — never fabricated file names — and the panel
-offers the one thing that exists today, **Export buffered frames** (the same
-action as the Trace rail button, with the buffered frame count and byte size
-beside it). The Replay panel's source-path control opens a `.pcap` / `.pcapng`
-file and sets the Interface to the pcap source (SRS_capture §2) — that is
-replay for the bench-proto, honest about being file playback through the
-capture path.
+The Record panel is the pcap recording of SRS_capture §7: the arm switch
+mirrors the app-bar record switch (one state), the directory field shows the
+recordings directory with a Browse button (`recording_dir_set`, locked while
+a recording is active) and a 12 px caption naming the default location; while
+a recording is active the panel shows the file path in a disabled `font-mono`
+field with a Copy button and live `frames · bytes · dropped` counters from
+`recording:state`; a write error appears as an inline `error` alert and
+disarms the switch. The recent-recordings list holds only true files from
+`recording_list()` (basename over ellipsized path, bytes, frame count when
+known), newest first, with the honest empty state "no recordings yet". The
+panel also keeps **Export buffered frames** (the same action as the Trace rail
+button, with the buffered frame count beside it). The Replay panel's
+source-path control opens a `.pcap` / `.pcapng` file (a recording from the
+list can be replayed the same way) and sets the Interface to the pcap source
+(SRS_capture §2) — replay for the bench-proto, honest about being file
+playback through the capture path. The JSONL recording with decoded names
+and the paced replay worker remain v0.6.
 
 ### 5.4 Simulation
 
