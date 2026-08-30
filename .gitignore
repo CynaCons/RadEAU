@@ -3,12 +3,22 @@ node_modules/
 dist/
 dist-portable/
 *.local
+.env
+.env.*
 
 # Rust
 target/
 
 # Tauri
-src-tauri/gen/schemas/
+src-tauri/gen/
+**/EBWebView/
+
+# Runtime output
+*.log
+recordings/
+
+# Agent / tooling local state
+.claude/
 
 # Editors / OS
 .vscode/*
@@ -22,5 +32,6 @@ src-tauri/gen/schemas/
 .DS_Store
 Thumbs.db
 
-# Local design references (never published)
+# Local-only material
 design-reference/
+.mcp.json

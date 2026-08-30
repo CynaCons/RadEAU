@@ -1,6 +1,6 @@
 /**
  * Portable bench zip — vite release assets + release binaries + fixture +
- * catalog + README, packed for a work laptop with no toolchain.
+ * catalog + README, packed for a bench machine with no toolchain.
  *
  * Run: npm run build:portable
  */
@@ -68,9 +68,9 @@ required on the target machine.
    https://npcap.com/#download. During install, leave
    **"Restrict Npcap driver's access to Administrators only"** **unchecked**
    so a normal user session can open adapters.
-3. **Vector driver package** (and XL Driver Library) only if you will attach a
-   Vector VN box — **pending in v0.1.10**; the Dependencies panel still probes
-   for them so you can see Installed / Missing ahead of that release.
+3. **Vector VN hardware is not supported yet** (planned). The Dependencies
+   panel already reports whether the XL Driver Library and the Vector driver
+   package are installed so the bench can be prepared ahead of that release.
 
 ## How to run
 

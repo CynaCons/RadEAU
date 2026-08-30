@@ -222,10 +222,6 @@ export function getCatalogNames(): ReadonlyMap<string, CatalogNameEntry> | null 
   return catalogNames;
 }
 
-export function isCatalogNamesLoaded(): boolean {
-  return catalogNames !== null;
-}
-
 /** IPv4 u32 (network byte order) → dotted decimal. */
 export function ipv4String(n: number): string {
   const v = n >>> 0;

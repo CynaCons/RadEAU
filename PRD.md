@@ -3,7 +3,7 @@
 **Product:** RadEAU — a high-performance automotive Ethernet network analysis tool
 (SOME/IP, SOME/IP-SD, gPTP).
 **Status:** v0.3 draft — foundation phase, Ethernet-first.
-**Plan:** [PLAN.md](PLAN.md) (operated via the powerplan MCP server).
+**Plan:** [PLAN.md](PLAN.md).
 
 This document is the product-level requirements: what RadEAU is, for whom, on
 what stack, and under which architectural and methodological constraints.
@@ -351,7 +351,7 @@ directly to the simulator; RadEAU observes them like any other traffic.
 External processes act as **additional network nodes through RadEAU's core** —
 independent of which channel backend is active, so a node written against this
 API works identically over the simulator link, a future physical Ethernet
-interface, or replay. (This surface subsumes the earlier SIL API role.)
+interface, or replay — it is also the software-in-the-loop surface.
 
 - Version-checked handshake; each node registers a **node identity** (id +
   display name). Encoding mirrors the simulator monitor link: **JSON for the
@@ -373,7 +373,8 @@ interface, or replay. (This surface subsumes the earlier SIL API role.)
 
 **Node session state machine.** Every attached node advances through an
 explicit, observable state machine — the state exists first for the operator
-(§6 connectivity panel shows it per node), second for protocol robustness:
+(the Network view's connection panel, docs/SRS_visual_ui.md §5.8, shows it per
+node), second for protocol robustness:
 
 ```
 CONNECTED ──hello──▶ DECLARED ──subscribe──▶ ACTIVE ──bye / EOF──▶ CLOSED
@@ -409,8 +410,8 @@ any other client — the runner launches and observes, never a privileged path.
 
 ### 9.1 Plan discipline
 
-A single PLAN.md at the repository root, chronological and append-only, operated
-through the **powerplan MCP server as the single writer**. Checklists only;
+A single PLAN.md at the repository root, chronological and append-only, with
+**one writer** so its format never drifts. Checklists only;
 exactly one active iteration at a time; every iteration follows the four
 movements: plan/docs → implementation → tests/validation → release.
 
@@ -422,9 +423,10 @@ Acceptance criteria; Test IDs join as tests land) using stable ID prefixes
 (`VU-`, `GR-`, `ZM-`, `AS-`, `LM-`, `MG-`, `FF-`, `TR-`, `PF-`, `SP-`, `SD-`,
 `PT-`, `NS-`, `NV-`, …). IDs are never reused or renumbered; superseded
 requirements are marked, not deleted. Spec updates land **in the same change
-that implements them**. Two supporting documents keep the system auditable: a
-changes-summary (symptom → gap → requirements added) and a bidirectional
-test↔requirement map. The most valuable requirements are interaction semantics
+that implements them**. One index keeps the system auditable —
+[docs/REQUIREMENT_IDS.md](docs/REQUIREMENT_IDS.md) lists every ID and the E2E
+numbers, and CI fails on duplicates; a bidirectional test↔requirement map is
+planned. The most valuable requirements are interaction semantics
 — which control wins when states disagree — written down with an explicit
 priority ordering.
 
@@ -464,17 +466,14 @@ priority ordering.
 Conventional commit prefixes (`feat:`, `fix:`, `release:` with the version).
 Test/plan numbering allocated from one index file; CI fails on duplicates.
 
-### 9.5 Standing agent rules
+### 9.5 Contributor rules
 
-- Never terminate the running application process — the developer may be
-  mid-session with a live setup. Test binaries build under a staged executable
-  name that cleanup may kill freely; the production name is untouchable; one
-  test asserts a clean unforced exit. The same rule covers a developer-launched
-  `ecu-netsim`.
-- Always build with the canonical command.
-- Always update PLAN.md (via powerplan) and the relevant SRS with any change.
-- No unsolicited attribution or signoff trailers in commits.
-- Push only to configured remotes, on explicit request.
+- Test runs never kill a developer's running application: test binaries build
+  under a staged executable name that cleanup may terminate freely, the
+  production name is left alone, and one test asserts a clean unforced exit.
+  The same rule covers a developer-launched `ecu-netsim`.
+- Build with the canonical command only.
+- Update PLAN.md and the relevant SRS in the same change as the code.
 
 ---
 

@@ -117,7 +117,7 @@ reason when the ring is empty) and from the Recorder view's Record panel.
 
 ## 4. On-disk log (CP-007)
 
-`radeau.log` in the platform app-log directory (`%LOCALAPPDATA%\RadEAU\logs`
+`radeau.log` in the platform app-log directory (`%LOCALAPPDATA%\com.cynacons.radeau\logs`
 on Windows, `~/.local/share/RadEAU/logs` on Linux): one JSON object per line —
 `{"ts": RFC 3339 ms, "level": "info"|"warn"|"error", "area": "session"|
 "link"|"stats"|"catalog"|"deps"|"export"|"cmd", "msg": …, plus fields}` —

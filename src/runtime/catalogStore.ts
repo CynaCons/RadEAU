@@ -339,14 +339,3 @@ export class CatalogStore {
 
 /** Application-wide catalog singleton. */
 export const catalogStore = new CatalogStore();
-
-export function resolveCatalogName(
-  serviceId: number,
-  methodId: number,
-): CatalogName | null {
-  return catalogStore.resolve(serviceId, methodId);
-}
-
-export function isCatalogLoaded(): boolean {
-  return catalogStore.isLoaded();
-}

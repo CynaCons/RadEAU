@@ -519,7 +519,7 @@ panel also keeps **Export buffered frames** (the same action as the Trace rail
 button, with the buffered frame count beside it). The Replay panel's
 source-path control opens a `.pcap` / `.pcapng` file (a recording from the
 list can be replayed the same way) and sets the Interface to the pcap source
-(SRS_capture §2) — replay for the bench-proto, honest about being file
+(SRS_capture §2) — replay for the bench prototype build, honest about being file
 playback through the capture path. The JSONL recording with decoded names
 and the paced replay worker remain v0.6.
 
@@ -631,7 +631,7 @@ scrolling — the same panel language as Settings/Recorder. Composition:
   plane, PRD §8.3): id, display name, and its session state
   (CONNECTED / DECLARED / ACTIVE / REJECTED / CLOSED, with the reason on the
   terminal states) as a fixed-width state chip, plus per-node injected/received
-  counters and drop count. Automation clients (§8.1) list the same way when
+  counters and drop count. Automation clients (PRD §8.1) list the same way when
   that surface lands. Empty states name what is absent ("no external nodes
   attached").
 - **Topology panel:** ECU nodes with offered services and subscription edges,

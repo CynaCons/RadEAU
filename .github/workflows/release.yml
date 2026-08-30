@@ -1,0 +1,118 @@
+name: Release
+
+# Pushing a version tag builds the release artifacts on hosted runners and
+# publishes them on the matching GitHub Release:
+#   - Windows: the portable zip (scripts/build-portable.mjs) — RadEAU-<v>-win64.zip
+#   - Linux:   the Tauri AppImage plus a tarball with ecu-netsim, the fixture
+#              and the catalog extract — RadEAU-<v>-linux-x64.tar.gz
+# The release body is the version's CHANGELOG.md section.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - name: Check the tag matches the manifests
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          pkg=$(node -p "require('./package.json').version")
+          test "$v" = "$conf" -a "$v" = "$pkg" || { echo "tag $v != tauri.conf.json $conf / package.json $pkg"; exit 1; }
+      - name: Portable zip
+        run: npm run build:portable
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: dist-portable/RadEAU-*-win64.zip
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2 file
+      - run: npm ci
+      - name: AppImage
+        run: npx tauri build --bundles appimage
+      - name: Simulator + fixture tarball
+        run: |
+          cargo build --release -p ecu-netsim
+          v=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          stage="RadEAU-$v-linux-x64"
+          mkdir -p "$stage"
+          cp target/release/ecu-netsim "$stage/"
+          cp fixtures/pcap/sensor-fusion-5s.pcap catalog/sensor-fusion.arxml "$stage/"
+          cp target/release/bundle/appimage/*.AppImage "$stage/"
+          cat > "$stage/README-linux.md" <<'EOF'
+          # RadEAU — Linux x64
+
+          `RadEAU_<version>_amd64.AppImage` is the application (make it executable:
+          `chmod +x *.AppImage`). Live capture binds `libpcap.so` at runtime — install
+          your distribution's libpcap package and grant the capability or run with
+          the privileges your distribution requires for packet capture.
+          `ecu-netsim` is the companion simulator (`./ecu-netsim --monitor-port 5560
+          --udp-target 127.0.0.1`), `sensor-fusion-5s.pcap` a replay fixture and
+          `sensor-fusion.arxml` the matching catalog extract.
+          EOF
+          tar -czf "$stage.tar.gz" "$stage"
+          ls -l "$stage.tar.gz" target/release/bundle/appimage/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundle
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            RadEAU-*-linux-x64.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+      - name: Release body from CHANGELOG.md
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > release-body.md
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(find assets -type f \( -name '*.zip' -o -name '*.AppImage' -o -name '*.tar.gz' \) | sort)
+          echo "$files"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" $files --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file release-body.md
+          else
+            gh release create "$GITHUB_REF_NAME" $files --title "RadEAU $GITHUB_REF_NAME" --notes-file release-body.md
+          fi

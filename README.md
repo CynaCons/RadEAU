@@ -1,19 +1,50 @@
 # RadEAU
 
 A high-performance automotive Ethernet network analysis tool — SOME/IP,
-SOME/IP-SD, and gPTP — with a no-decimation chart engine at its core.
+SOME/IP-SD, gPTP and DoIP, plus the standard protocols a bench NIC carries —
+built to grow a no-decimation chart engine at its core.
 **The plot is the product.**
 
 - Product requirements: [PRD.md](PRD.md)
 - Software specifications: [docs/](docs/) (`SRS_<functionality>.md`)
 - Implementation plan: [PLAN.md](PLAN.md)
+- Release notes: [CHANGELOG.md](CHANGELOG.md)
+
+## Status
+
+v0.1.x is a **bench build**: capture from a NIC (Npcap/libpcap), a pcap file,
+a pcap stream or the simulator; read the trace like Wireshark (29 protocol
+classes with layered dissection); decode SOME/IP payloads against an AUTOSAR
+Ethernet communication extract; record and export pcap. The Signals chart
+engine, live topology, transmission and automation are planned and show
+honest empty states until they land — see the
+[known limitations](CHANGELOG.md) for the current release.
+
+## Download
+
+Each [release](https://github.com/CynaCons/RadEAU/releases) ships:
+
+- **Windows 10/11 x64** — `RadEAU-<version>-win64.zip`, portable (no
+  installer): unzip and run `radeau.exe`; install
+  [Npcap](https://npcap.com/#download) separately for live capture. See
+  "Bench test on another machine" below for the contents and first-run steps.
+- **Linux x64** — `RadEAU_<version>_amd64.AppImage` (`chmod +x`, run), plus
+  `RadEAU-<version>-linux-x64.tar.gz` with the simulator, the replay fixture
+  and the catalog extract. Live capture binds your distribution's `libpcap`
+  at runtime and needs the usual packet-capture privileges. The Linux build
+  is produced by CI and has had less bench time than the Windows one.
+
+Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml)
+when a `v*` tag is pushed; the release body is that version's
+[CHANGELOG.md](CHANGELOG.md) section.
 
 ## Stack
 
 Tauri 2 (Rust core + WebView), React 19 + TypeScript + Vite, MUI (dark),
-custom WebGL2 chart engine with a wrapped Canvas2D fallback, and a companion
-ECU network simulator (`ecu-netsim`) that generates a PTP-synchronized
-SOME/IP sensor-fusion network for development, testing, and demos.
+a planned custom WebGL2 chart engine with a wrapped Canvas2D fallback, and a
+companion ECU network simulator (`ecu-netsim`) that generates a
+PTP-synchronized SOME/IP sensor-fusion network for development, testing, and
+demos.
 
 ## Canonical build
 
@@ -42,12 +73,15 @@ cargo run -p ecu-netsim          # monitor link on 127.0.0.1:5560
 npm run tauri dev                # in a second terminal
 ```
 
-In the app: **Trace → Source: Simulator link → ▶** (the address field
-defaults to `127.0.0.1:5560`). Frames appear with their source node names
-from the link handshake; the chip next to the picker shows the link state.
-`--monitor-port` and `--seed` adjust the port and the deterministic traffic.
-The **Dev generator** source needs no external process and remains the
-default.
+In the app: **Settings › Interface › Simulator link** (the address defaults
+to `127.0.0.1:5560`), then **Start** from the app bar. Frames appear with
+their source node names from the link handshake; the link chip in the Trace
+header shows the link state. `--monitor-port` and `--seed` adjust the port and
+the deterministic traffic; `--udp-target 127.0.0.1` additionally sends the
+SOME/IP, SD and DoIP datagrams from real sockets so a live NIC or the Npcap
+loopback adapter sees them. Debug builds default to the built-in **Dev
+generator** source, which needs no external process; release builds default
+to the physical interface when Npcap is installed, otherwise to pcap replay.
 
 ## Checks
 
@@ -67,7 +101,8 @@ next `tauri dev`).
 
 ## Bench test on another machine
 
-Build a portable zip on a development PC (Node + Rust required here only):
+Download the release zip, or build one on a development PC (Node + Rust
+required here only):
 
 ```
 npm run build:portable
@@ -83,10 +118,11 @@ That produces `dist-portable/RadEAU-<version>-win64.zip` containing:
 | `sensor-fusion.arxml` | Catalog extract |
 | `README-portable.md` | Target-machine instructions |
 
-**Prerequisites on the work laptop (Windows 10/11):** WebView2 (already on
-updated Windows), [Npcap](https://npcap.com/#download) for live capture —
-leave **"Restrict Npcap driver's access to Administrators only"** unchecked —
-and the Vector driver package only when attaching a VN box (v0.1.10 pending).
+**Prerequisites on the bench machine (Windows 10/11):** WebView2 (already on
+updated Windows) and [Npcap](https://npcap.com/#download) for live capture —
+leave **"Restrict Npcap driver's access to Administrators only"** unchecked.
+Vector VN hardware is not supported yet (planned); the Dependencies panel only
+reports whether the XL Driver Library and driver package are installed.
 
 **First-run checklist:** unzip → double-click `radeau.exe` → **Settings ›
 Dependencies** (confirm Npcap) → **Settings › Interface** (Physical /
