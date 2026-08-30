@@ -350,6 +350,8 @@ release.
 - [x] E2E: the sim phase's cumulative protocol set gains ICMPv6, DHCP, DNS, NTP, LLDP, AVTP, PTP, HTTP, TLS; per-class dissection spot checks (RA options list, DNS question name, TLS SNI, LLDP system name); no-malformed sweep across all classes [delegated: Grok]
 - [x] Integration wave found by the E2E: PTP over UDP parsed regardless of the transportSpecific nibble, devgen frames carry real SOME/IP / SD / gPTP headers, pcap counting/fixture tests feed the bounded reader in chunks, netsim standard traffic on periodic schedules (AVTP 100 Hz); dissection responsiveness — frame_detail async with an O(1) ring lookup, plain row action buttons, React dev perf tracks disabled in the Vite build (they alone took half the UI thread), page-side frame_detail timings + RADEAU_E2E_PROFILE sampler in the E2E [Claude]
 
+> Released 2026-08-30: repository published at https://github.com/CynaCons/RadEAU and v0.1.12 tagged. The tag-driven release workflow (`.github/workflows/release.yml`) built and attached `RadEAU-0.1.12-win64.zip` (portable, release-E2E-verified locally) and the Linux `RadEAU_0.1.12_amd64.AppImage` + `RadEAU-0.1.12-linux-x64.tar.gz` (first Linux compile; CI workspace tests green on ubuntu). Release body extracted from CHANGELOG.md by `scripts/release-notes.mjs`.
+
 ## Backlog
 - [ ] CAN / CAN FD backend behind the channel abstraction + DBC schema pipeline (dual bit-walk decoders, shared vectors)
 - [ ] Npcap/libpcap live-capture backend + capture-privilege diagnostics in Settings
