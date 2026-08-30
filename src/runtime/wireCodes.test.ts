@@ -37,7 +37,8 @@ describe("wireCodes ↔ codes.rs mirror", () => {
   it("parses every Rust pub const from codes.rs", () => {
     expect(rust.size).toBeGreaterThan(20);
     expect(rust.get("PROTO_SOMEIP")).toBe(0);
-    expect(rust.get("PROTO_CLASS_COUNT")).toBe(12);
+    expect(rust.get("PROTO_CLASS_COUNT")).toBe(29);
+    expect(rust.get("PROTO_SNMP")).toBe(28);
     expect(rust.get("DIR_UNKNOWN")).toBe(2);
     expect(rust.get("ENDPOINT_OVERFLOW")).toBe(255);
   });

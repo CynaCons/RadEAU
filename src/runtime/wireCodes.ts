@@ -18,7 +18,43 @@ export const PROTO_IPV4_OTHER = 8;
 export const PROTO_OTHER = 9;
 export const PROTO_DOIP = 10;
 export const PROTO_MALFORMED = 11;
-export const PROTO_CLASS_COUNT = 12;
+export const PROTO_ICMPV6 = 12;
+export const PROTO_IGMP = 13;
+export const PROTO_DHCP = 14;
+export const PROTO_DNS = 15;
+export const PROTO_NTP = 16;
+export const PROTO_SSDP = 17;
+export const PROTO_PTP = 18;
+export const PROTO_LLDP = 19;
+export const PROTO_AVTP = 20;
+export const PROTO_MACSEC = 21;
+export const PROTO_EAPOL = 22;
+export const PROTO_HTTP = 23;
+export const PROTO_TLS = 24;
+export const PROTO_SSH = 25;
+export const PROTO_SCTP = 26;
+export const PROTO_TFTP = 27;
+export const PROTO_SNMP = 28;
+export const PROTO_CLASS_COUNT = 29;
+
+export const DHCP_TY_V6_OFFSET = 100;
+
+export const DNS_TY_QUERY = 0;
+export const DNS_TY_RESPONSE = 1;
+export const DNS_TY_MDNS_QUERY = 2;
+export const DNS_TY_MDNS_RESPONSE = 3;
+export const DNS_TY_LLMNR_QUERY = 4;
+export const DNS_TY_LLMNR_RESPONSE = 5;
+
+export const SSDP_TY_MSEARCH = 0;
+export const SSDP_TY_NOTIFY = 1;
+export const SSDP_TY_RESPONSE = 2;
+
+export const HTTP_TY_REQUEST = 0;
+export const HTTP_TY_RESPONSE = 1;
+
+export const SSH_TY_BANNER = 0;
+export const SSH_TY_PACKET = 1;
 
 // Direction (`d` column).
 export const DIR_TX = 0;
@@ -96,6 +132,23 @@ export const PROTO_LABELS: readonly string[] = [
   "Other",
   "DoIP",
   "Malformed",
+  "ICMPv6",
+  "IGMP",
+  "DHCP",
+  "DNS",
+  "NTP",
+  "SSDP",
+  "PTP",
+  "LLDP",
+  "AVTP",
+  "MACsec",
+  "EAPOL",
+  "HTTP",
+  "TLS",
+  "SSH",
+  "SCTP",
+  "TFTP",
+  "SNMP",
 ];
 
 export function protoLabel(p: number): string {

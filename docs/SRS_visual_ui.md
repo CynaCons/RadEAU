@@ -400,8 +400,12 @@ direction (never a guessed Rx). Malformed frames set the offending cells to
 
 **Every frame is a row** (SRS_protocols §2): the Protocol column carries one
 of the tokens `SOME/IP`, `SD`, `gPTP`, `ARP`, `UDP`, `TCP`, `ICMP`, `IPv6`,
-`IPv4`, `Other`, `DoIP`, `Malformed` — an unknown class code renders
-`Unknown (n)`, never a default protocol. Per class, Name and Type read:
+`IPv4`, `Other`, `DoIP`, `Malformed`, plus the standard-protocol tokens of
+SRS_protocols §7 (`ICMPv6`, `IGMP`, `DHCP`, `DNS`, `NTP`, `SSDP`, `PTP`,
+`LLDP`, `AVTP`, `MACsec`, `EAPOL`, `HTTP`, `TLS`, `SSH`, `SCTP`, `TFTP`,
+`SNMP`) whose Name / Type and fixed-mode keys are the §7 table — an unknown
+class code renders `Unknown (n)`, never a default protocol. Per class, Name
+and Type read:
 SOME/IP — catalog name, Type Notification / Request / Request-no-return /
 Response / Error; SD — the first entry kind (Offer, Find, StopOffer,
 Subscribe, StopSubscribe, SubscribeAck, SubscribeNack), Name

@@ -61,7 +61,57 @@ pub const PROTO_OTHER: u8 = 9;
 pub const PROTO_DOIP: u8 = 10;
 /// Ethernet header unparseable (runt frame).
 pub const PROTO_MALFORMED: u8 = 11;
-pub const PROTO_CLASS_COUNT: usize = 12;
+/// Standard protocol classes (SRS_protocols.md §7). Identity columns for the
+/// application classes: `sv` / `m` = source / destination port, `ty` = the
+/// class's message kind, `se` = its secondary id (transaction id, query type,
+/// handshake type, status code, stratum) or -1.
+pub const PROTO_ICMPV6: u8 = 12;
+pub const PROTO_IGMP: u8 = 13;
+pub const PROTO_DHCP: u8 = 14;
+pub const PROTO_DNS: u8 = 15;
+pub const PROTO_NTP: u8 = 16;
+pub const PROTO_SSDP: u8 = 17;
+/// IEEE 1588 PTP over UDP 319/320 (gPTP over Ethernet stays PROTO_GPTP).
+pub const PROTO_PTP: u8 = 18;
+pub const PROTO_LLDP: u8 = 19;
+/// IEEE 1722 audio/video transport (EtherType 0x22F0).
+pub const PROTO_AVTP: u8 = 20;
+pub const PROTO_MACSEC: u8 = 21;
+pub const PROTO_EAPOL: u8 = 22;
+pub const PROTO_HTTP: u8 = 23;
+pub const PROTO_TLS: u8 = 24;
+pub const PROTO_SSH: u8 = 25;
+pub const PROTO_SCTP: u8 = 26;
+pub const PROTO_TFTP: u8 = 27;
+pub const PROTO_SNMP: u8 = 28;
+pub const PROTO_CLASS_COUNT: usize = 29;
+
+/// DHCP message kinds (`ty` when `p == PROTO_DHCP`): DHCPv4 option 53
+/// values 1..8 as-is, DHCPv6 message types offset by 100.
+pub const DHCP_TY_V6_OFFSET: u8 = 100;
+
+/// DNS message kinds (`ty` when `p == PROTO_DNS`).
+pub const DNS_TY_QUERY: u8 = 0;
+pub const DNS_TY_RESPONSE: u8 = 1;
+pub const DNS_TY_MDNS_QUERY: u8 = 2;
+pub const DNS_TY_MDNS_RESPONSE: u8 = 3;
+pub const DNS_TY_LLMNR_QUERY: u8 = 4;
+pub const DNS_TY_LLMNR_RESPONSE: u8 = 5;
+
+/// SSDP message kinds (`ty` when `p == PROTO_SSDP`).
+pub const SSDP_TY_MSEARCH: u8 = 0;
+pub const SSDP_TY_NOTIFY: u8 = 1;
+pub const SSDP_TY_RESPONSE: u8 = 2;
+
+/// HTTP message kinds (`ty` when `p == PROTO_HTTP`); `se` = method code for
+/// requests (1 GET, 2 POST, 3 PUT, 4 DELETE, 5 HEAD, 6 OPTIONS, 7 PATCH,
+/// 0 other) or the status code for responses.
+pub const HTTP_TY_REQUEST: u8 = 0;
+pub const HTTP_TY_RESPONSE: u8 = 1;
+
+/// SSH message kinds (`ty` when `p == PROTO_SSH`).
+pub const SSH_TY_BANNER: u8 = 0;
+pub const SSH_TY_PACKET: u8 = 1;
 
 /// Direction (`d` column): observed on the wire vs originated by RadEAU.
 pub const DIR_TX: u8 = 0;

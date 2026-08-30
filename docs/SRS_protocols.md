@@ -246,3 +246,58 @@ activation request / response at 2 s, TesterPresent every 2 s with its
 positive response, ReadDataByIdentifier 0xF190 (VIN) every 10 s with its
 response — all over real TCP-shaped frames on the virtual switch (UDP for
 discovery) so the trace shows a realistic diagnostic session.
+
+## 7. Standard protocol dissection (SP-015..018)
+
+A bench NIC carries far more than the automotive protocols: neighbour
+discovery, address configuration, name resolution, time sync over UDP,
+switch discovery, streaming, and the occasional HTTP/TLS session. Each of
+these is a public, stable wire format; RadEAU classifies and dissects them so
+the trace reads like Wireshark rather than "IPv6 · next header 58". Every
+class gets its own row token (`codes.rs` 12..28), its identity columns, a
+dissection layer, and a fixed-mode key. Column rules for the application
+classes: `sv` / `m` = source / destination port, `ty` = message kind, `se` =
+a secondary numeric id (or -1); endpoint identity by source IPv4 when present
+and by source MAC otherwise (IPv6 addresses live in the dissection).
+
+**Transport over IPv6 (SP-015).** The IPv6 header walk consumes the
+extension headers (hop-by-hop 0, routing 43, fragment 44, destination options
+60; AH 51 and ESP 50 end the walk with a named layer) and dispatches on the
+final next header exactly as IPv4 does: UDP and TCP payloads reach the same
+application dispatch (SOME/IP by plausibility, DoIP on 13400, and every class
+below), so SOME/IP over IPv6 classifies as SOME/IP. ICMPv6 (58) becomes its
+own class; ICMPv4 rows name their type (Echo Request/Reply, Destination
+Unreachable + code, Redirect, Time Exceeded).
+
+| Class | Trigger | `ty` / `se` | Row Name · Type | Dissection layer fields |
+|---|---|---|---|---|
+| ICMPv6 | IPv6 next header 58 | ty = type; se = code | Router Solicitation / Router Advertisement / Neighbor Solicitation / Neighbor Advertisement / Redirect / Echo Request / Echo Reply / MLD Query / MLD Report / MLD Done / MLDv2 Report / Destination Unreachable / Packet Too Big / Time Exceeded / Parameter Problem · code | type, code, checksum; NS/NA target address + flags (R/S/O); RA hop limit, flags, router lifetime; options as a list (source/target link-layer address, prefix information, MTU) |
+| IGMP | IPv4 protocol 2 | ty = type | Membership Query / v1 Report / v2 Report / Leave Group / v3 Report | type, max response time, group address; v3 group records (count, record type, source count) |
+| DHCP | UDP 67/68 (v4), 546/547 (v6) | ty = v4 option-53 value, v6 message type + 100; se = xid (low 31 bits) | DHCP Discover / Offer / Request / Decline / Ack / Nak / Release / Inform; DHCPv6 Solicit / Advertise / Request / Confirm / Renew / Rebind / Reply / Release / Decline / Reconfigure / Information-request | v4: op, xid, client MAC, yiaddr/siaddr, options (message type, server id, lease time, subnet, router, DNS, hostname, requested address); v6: message type, transaction id, options (client id, server id, IA_NA, DNS servers) |
+| DNS | UDP/TCP 53, 5353 (mDNS), 5355 (LLMNR) | ty = DNS_TY_*; se = first question type | DNS / mDNS / LLMNR query · <qtype name> (A, AAAA, PTR, SRV, TXT, CNAME, MX, NS, SOA, ANY) or response · rcode | transaction id, flags (QR, opcode, AA, TC, RD, RA, rcode), counts, questions (name, type, class), answers (name, type, TTL, rdata rendered for A/AAAA/PTR/CNAME/SRV/TXT) — name compression followed, bounded |
+| NTP | UDP 123 | ty = mode; se = stratum | NTP client / server / broadcast / symmetric · stratum n | LI, version, mode, stratum, poll, precision, root delay/dispersion, reference id, reference/origin/receive/transmit timestamps (rendered as UTC) |
+| SSDP | UDP 1900 | ty = SSDP_TY_* | SSDP M-SEARCH / NOTIFY / response | start line, headers (HOST, NT/ST, NTS, USN, LOCATION, SERVER, CACHE-CONTROL) |
+| PTP | UDP 319/320 | ty = message type via the gPTP table; se = -1 | PTP Sync / Follow_Up / Delay_Req / Delay_Resp / Pdelay_* / Announce / Signaling / Management · domain n | the same header fields as gPTP plus the UDP transport (domain, sequence id, flags, correction, source port identity, origin timestamp) |
+| LLDP | EtherType 0x88CC | ty = 0 | LLDP · <chassis id> | TLVs: Chassis ID (subtype + value), Port ID, TTL, Port Description, System Name, System Description, System Capabilities, Management Address, organisation-specific (OUI + subtype, hex) |
+| AVTP | EtherType 0x22F0 | ty = subtype | AVTP <subtype name> (61883/IIDC, MMA, AAF, CVF, CRF, TSCF, SVF, RVF, AEF, VSF, control/ACF) · stream id | subtype, stream-id-valid, version, sequence number, timestamp valid + avtp timestamp, stream id, stream data length; AAF/CVF format fields when present |
+| MACsec | EtherType 0x88E5 | ty = 0 | MACsec · AN n | TCI/AN flags (V, ES, SC, SCB, E, C, AN), short length, packet number, SCI when present; payload "encrypted · n bytes" |
+| EAPOL | EtherType 0x888E | ty = packet type | EAPOL EAP / Start / Logoff / Key / ASF-Alert | version, packet type, body length; EAPOL-Key descriptor type + key info flags |
+| HTTP | TCP 80 / 8080 / 8000 when the payload starts with a method or `HTTP/` | ty = HTTP_TY_*; se = method code or status | HTTP GET /path / HTTP 200 OK … | request line or status line, headers up to 32 (Host, Content-Type, Content-Length, User-Agent, Server…), body length |
+| TLS | TCP 443 / 8443 or any TCP payload starting with a TLS record header (content type 20–23, version 0x03 0x0x) | ty = content type; se = handshake type or -1 | TLS ClientHello · <SNI> / ServerHello / Certificate / Application Data / Alert | record header (type, version, length), handshake type + length, ClientHello version, random, cipher-suite count, SNI, ALPN; ServerHello version + chosen suite |
+| SSH | TCP 22 | ty = SSH_TY_* | SSH banner <version string> / SSH packet | banner text or packet length + padding |
+| SCTP | IPv4/IPv6 protocol 132 | ty = first chunk type | SCTP <chunk name> (DATA, INIT, INIT ACK, SACK, HEARTBEAT, ABORT, SHUTDOWN, COOKIE ECHO, COOKIE ACK…) | ports, verification tag, checksum, chunk list (type, flags, length; DATA: TSN, stream id, PPID) |
+| TFTP | UDP 69 | ty = opcode | TFTP RRQ / WRQ <file> / DATA block / ACK block / ERROR | opcode, filename + mode, block number, error code + message |
+| SNMP | UDP 161/162 | ty = PDU type | SNMP GetRequest / GetNextRequest / Response / SetRequest / Trap / GetBulk / Inform / TrapV2 | version, community, PDU type, request id, error status/index, variable bindings (OID · value rendered for INTEGER/OCTET STRING/OID/NULL/Counter/TimeTicks) — ASN.1 BER walked with bounds, never recursed beyond depth 8 |
+
+**Fixed-mode keys:** application classes over UDP/TCP key per flow (source
+address:port → destination address:port) like plain UDP/TCP; ICMPv6 per
+(source, type); IGMP per (source, type); LLDP per source MAC; AVTP per
+(source MAC, subtype); PTP per (source, message type) like gPTP; MACsec /
+EAPOL per source MAC. The UI Name/Type tables above are the display
+contract; `ty`/`se` never carry strings — names come from tables keyed by
+these codes, and the dissection carries the text (hostnames, SNI, paths).
+
+**Discipline:** every decoder is bounded and panic-free on arbitrary input
+(random-prefix tests), names are table-driven, unknown types render their
+number, and a failed application parse leaves the transport class (UDP/TCP)
+with the payload shown as data — never a silent drop or a mislabelled row.
