@@ -1,3 +1,5 @@
+// Must stay the first import: it has to run before react-dom evaluates.
+import "./devPerfTracks";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 // Fonts are bundled with the application (VU-006), never referenced by name

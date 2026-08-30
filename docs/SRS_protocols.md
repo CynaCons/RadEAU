@@ -110,7 +110,10 @@ them, plus the full frame bytes. Malformed regions dissect as far as the
 codecs reach and state the failure per layer; an evicted frame returns a
 distinct "no longer buffered" error. One dissector, core-side, built on the
 same codecs as classification (decision D9) — the UI never re-parses wire
-bytes.
+bytes. The service runs on the core's worker pool, never on the thread that
+delivers streaming events, and finds a frame by index in constant time
+(indexes are contiguous in the buffer, so position = index − oldest index)
+so a lookup under the buffer lock never stalls the reader.
 
 ## 4. Service catalog
 

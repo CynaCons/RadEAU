@@ -88,6 +88,19 @@ OOM crash in 1–2 h in prior art). Evicted slots are explicitly nulled.
 - Every table over a screenful is virtualized; filtering memoized inside the
   memoized table; search input deferred over a prebuilt lowercased/hex index.
 - Live numeric readouts at 10 Hz, gated on visibility.
+- Hot row cells are plain elements: a live trace re-renders thousands of
+  cells per second, and a styled component with a tooltip wrapper per cell
+  (the Material `Tooltip` + `IconButton` pair) dominated the UI thread. Row
+  action buttons keep their hover tooltip through the native `title`.
+- Cold-path commands (`frame_detail`) are timed page-side; the last twenty
+  round-trips are readable at `window.__radeauFrameDetail` so a "Loading…"
+  stall can be attributed to IPC latency or a saturated main thread.
+- Development build only: React's dev bundle streams one user-timing entry
+  per component render into the Performance panel. Under a live trace that
+  alone took half the UI thread and made dissection panels resolve in 10+ s,
+  so the entry module disables that hook before React evaluates (production
+  React never emits it). `RADEAU_E2E_PROFILE=<ms> npm run test:e2e` samples
+  the UI thread under simulator load and prints the hottest frames.
 
 ## 6. Native core discipline
 

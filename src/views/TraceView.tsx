@@ -19,14 +19,12 @@ import {
   Typography,
 } from "@mui/material";
 import type { SxProps } from "@mui/material";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import DownloadIcon from "@mui/icons-material/Download";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import PushPinIcon from "@mui/icons-material/PushPin";
 import StopIcon from "@mui/icons-material/Stop";
 import TuneIcon from "@mui/icons-material/Tune";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
@@ -214,7 +212,36 @@ const TABLE_WRAP_SX: SxProps = {
     borderBottom: "1px solid var(--border)",
   },
   "& tbody tr:hover td.trace-detail-cell": { backgroundColor: "transparent" },
+  // Row action buttons are plain elements: thousands re-render per second
+  // under a live trace, and a MUI Tooltip + IconButton per cell dominated the
+  // UI thread. Native `title` keeps the hover tooltip.
+  "& button.trace-row-btn": {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 24,
+    height: 24,
+    padding: 0,
+    margin: 0,
+    border: 0,
+    borderRadius: "50%",
+    background: "transparent",
+    color: "var(--text-secondary)",
+    cursor: "default",
+    "& svg": { fill: "currentColor" },
+  },
+  "& button.trace-row-btn:hover": { backgroundColor: "var(--fill-subtle)" },
+  "& button.trace-row-btn:focus-visible": {
+    outline: "2px solid var(--accent-primary)",
+    outlineOffset: -2,
+  },
+  "& button.trace-row-btn[aria-pressed='true']": { color: "var(--accent-primary)" },
 };
+
+// Material "ChevronRight" / "PushPin" glyphs inlined for the hot row cells.
+const CHEVRON_RIGHT_PATH = "M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z";
+const PUSH_PIN_PATH =
+  "M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z";
 
 // ---------------------------------------------------------------------------
 // Table pieces
@@ -361,23 +388,25 @@ function rowContent(
   return (
     <>
       <td style={{ textAlign: "center", padding: 0 }}>
-        <Tooltip title={expandLabel}>
-          <IconButton
-            size="small"
-            aria-label={expandLabel}
-            aria-expanded={expanded}
-            data-testid={`trace-expand-btn-${f.id}`}
-            onClick={() => context?.onToggleExpand(f)}
-            sx={{ p: "2px", color: "text.secondary", transition: "none" }}
+        <button
+          type="button"
+          className="trace-row-btn"
+          title={expandLabel}
+          aria-label={expandLabel}
+          aria-expanded={expanded}
+          data-testid={`trace-expand-btn-${f.id}`}
+          onClick={() => context?.onToggleExpand(f)}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width={16}
+            height={16}
+            aria-hidden="true"
+            style={{ transform: expanded ? "rotate(90deg)" : "none" }}
           >
-            <ChevronRightIcon
-              sx={{
-                fontSize: 16,
-                transform: expanded ? "rotate(90deg)" : "none",
-              }}
-            />
-          </IconButton>
-        </Tooltip>
+            <path d={CHEVRON_RIGHT_PATH} />
+          </svg>
+        </button>
       </td>
       <td style={MONO_RIGHT} data-testid={`trace-time-cell-${f.id}`}>
         {context
@@ -411,22 +440,25 @@ function rowContent(
       <td style={MONO_RIGHT}>{f.channel}</td>
       {context?.mode === "fixed" ? (
         <td style={{ textAlign: "center", padding: 0 }}>
-          <Tooltip title={pinned ? "Unpin row" : "Pin row"}>
-            <IconButton
-              size="small"
-              aria-label={pinned ? "Unpin row" : "Pin row"}
-              aria-pressed={pinned}
-              data-testid={`trace-pin-btn-${key}`}
-              onClick={() => context.onTogglePin(key)}
-              sx={{
-                p: "2px",
-                color: pinned ? "var(--accent-primary)" : "text.secondary",
-                transition: "none",
-              }}
+          <button
+            type="button"
+            className="trace-row-btn"
+            title={pinned ? "Unpin row" : "Pin row"}
+            aria-label={pinned ? "Unpin row" : "Pin row"}
+            aria-pressed={pinned}
+            data-testid={`trace-pin-btn-${key}`}
+            onClick={() => context.onTogglePin(key)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width={16}
+              height={16}
+              aria-hidden="true"
+              style={{ transform: pinned ? "none" : "rotate(45deg)" }}
             >
-              <PushPinIcon sx={{ fontSize: 16, transform: pinned ? "none" : "rotate(45deg)" }} />
-            </IconButton>
-          </Tooltip>
+              <path d={PUSH_PIN_PATH} />
+            </svg>
+          </button>
         </td>
       ) : null}
     </>

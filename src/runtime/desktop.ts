@@ -402,11 +402,47 @@ export interface FrameDetail {
  * Browser mode rejects with `"desktop app only"`. Core may reject with
  * `"frame no longer buffered"` or `"unknown frame"`.
  */
+/** Round-trip record of one `frame_detail` call, readable at `window.__radeauFrameDetail`. */
+export interface FrameDetailTiming {
+  idx: number;
+  /** `performance.now()` when the command was sent. */
+  start: number;
+  /** Round-trip in ms once settled. */
+  ms: number | null;
+  ok: boolean | null;
+}
+
+const FRAME_DETAIL_TIMINGS_KEPT = 20;
+const frameDetailTimings: FrameDetailTiming[] = [];
+(globalThis as { __radeauFrameDetail?: FrameDetailTiming[] }).__radeauFrameDetail =
+  frameDetailTimings;
+
 export function fetchFrameDetail(idx: number): Promise<FrameDetail> {
   if (!isDesktop()) {
     return Promise.reject(new Error("desktop app only"));
   }
-  return invoke<FrameDetail>("frame_detail", { idx });
+  const rec: FrameDetailTiming = {
+    idx,
+    start: Math.round(performance.now()),
+    ms: null,
+    ok: null,
+  };
+  frameDetailTimings.push(rec);
+  if (frameDetailTimings.length > FRAME_DETAIL_TIMINGS_KEPT) frameDetailTimings.shift();
+  const settle = (ok: boolean) => {
+    rec.ms = Math.round(performance.now() - rec.start);
+    rec.ok = ok;
+  };
+  return invoke<FrameDetail>("frame_detail", { idx }).then(
+    (detail) => {
+      settle(true);
+      return detail;
+    },
+    (err: unknown) => {
+      settle(false);
+      throw err;
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------

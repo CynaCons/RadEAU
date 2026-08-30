@@ -126,7 +126,15 @@ impl FrameRing {
         idx: u64,
         catalog: Option<&radeau_catalog::Catalog>,
     ) -> Result<FrameDetail, String> {
-        if let Some(frame) = self.frames.iter().find(|frame| frame.idx == idx) {
+        // Indexes are assigned monotonically and every frame is retained, so
+        // a frame's position is its distance from the oldest one — O(1)
+        // instead of a scan under the lock the reader shares.
+        let by_position = self.frames.front().and_then(|front| {
+            let pos = idx.checked_sub(front.idx)? as usize;
+            self.frames.get(pos).filter(|frame| frame.idx == idx)
+        });
+        let found = by_position.or_else(|| self.frames.iter().find(|frame| frame.idx == idx));
+        if let Some(frame) = found {
             return Ok(dissect_with_catalog(
                 frame.idx,
                 frame.t_s,
@@ -1662,7 +1670,7 @@ fn add_udp_application(
         }
     }
     if port(src, dst, 319) || port(src, dst, 320) {
-        if let Ok(p) = gptp::parse(b) {
+        if let Ok(p) = gptp::parse_any_transport(b) {
             layers.push(gptp_layer("PTP", p, b, o));
             return true;
         }
@@ -2102,7 +2110,7 @@ fn dissect_gptp(
     l2_len: usize,
     mut layers: Vec<FrameLayer>,
 ) -> FrameDetail {
-    match gptp::parse(payload) {
+    match gptp::parse_any_transport(payload) {
         Ok(message) => {
             let payload_offset = l2_len
                 + gptp::HEADER_LEN
@@ -2231,13 +2239,25 @@ fn detail_with_decoded(
 
 /// Returns a retained raw frame's cold-path protocol dissection.
 #[tauri::command]
-pub fn frame_detail(
-    state: State<crate::capture::CaptureState>,
-    catalog: State<crate::catalog::CatalogState>,
+pub async fn frame_detail(
+    state: State<'_, crate::capture::CaptureState>,
+    catalog: State<'_, crate::catalog::CatalogState>,
     idx: u64,
 ) -> Result<FrameDetail, String> {
-    let active = catalog.active_catalog();
-    state.frame_detail(idx, active.as_ref())
+    // Async so the dissection runs on the worker pool, never on the main
+    // thread that also delivers the streaming events.
+    let started = std::time::Instant::now();
+    let result = catalog.with_active(|active| state.frame_detail(idx, active));
+    let ms = started.elapsed().as_millis();
+    if ms >= 100 {
+        crate::log::log(
+            crate::log::Level::Warn,
+            "dissect",
+            "slow frame_detail",
+            serde_json::json!({ "idx": idx, "ms": ms }),
+        );
+    }
+    result
 }
 
 #[cfg(test)]

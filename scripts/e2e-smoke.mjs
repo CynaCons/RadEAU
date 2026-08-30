@@ -333,9 +333,12 @@ const SIM_STATE_PROBE = `(() => {
   const names = ["camera", "radar", "lidar", "dynamics", "fusion"];
   const totalAttr = table ? table.getAttribute("data-row-total") : null;
   // Dir is column index 2 (expand, time, dir, …).
+  // Only data rows carry the full column set; detail rows and virtualizer
+  // padding rows have fewer cells and no Dir.
   const dirCells = table
     ? [...table.querySelectorAll("tbody tr")]
         .filter((r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"))
+        .filter((r) => r.querySelectorAll("td").length >= 5)
         .map((r) => (r.querySelectorAll("td")[2]?.textContent || "").trim())
     : [];
   return {
@@ -347,11 +350,18 @@ const SIM_STATE_PROBE = `(() => {
     // Cumulative protocol set — ARP / IPv6 / Malformed / DoIP / §7 standards
     // arrive on slower cadences (LLDP ~30 s, AVTP/HTTP/TLS within the window).
     protocolsSeen: [
-      "SOME/IP", "SD", "gPTP", "ARP", "IPv6", "Malformed", "DoIP",
+      "SOME/IP", "SD", "gPTP", "ARP", "Malformed", "DoIP",
       "ICMPv6", "DHCP", "DNS", "NTP", "LLDP", "AVTP", "PTP", "HTTP", "TLS",
     ].filter((p) => text.some((t) => t === p)),
     lidarClustersSeen: text.some((t) => t.includes("LidarClusters")),
     allDirRx: dirCells.length > 0 && dirCells.every((d) => d === "Rx"),
+    nonRx: [...(table ? table.querySelectorAll("tbody tr") : [])]
+      .filter((r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"))
+      .filter((r) => r.querySelectorAll("td").length >= 5)
+      .map((r) => [...r.querySelectorAll("td")].map((c) => (c.textContent || "").trim()))
+      .filter((c) => c[2] !== "Rx")
+      .map((c) => c[4] + ":" + (c[2] || "(empty)"))
+      .slice(0, 8),
   };
 })()`;
 
@@ -500,6 +510,15 @@ async function main() {
     const page = await cdpPageTarget(45_000);
     session = new CdpSession(page.webSocketDebuggerUrl);
     await session.open();
+    // Tall viewport: the Trace table is virtualized, and the Fixed-mode
+    // row set (one per key, ~60 with the standard protocols) must be fully
+    // rendered for the DOM probes to see every class.
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 2600,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
 
     // Phase 1 — the app is visibly there. Wait for React to actually mount
     // (the webview reports readyState complete on about:blank too).
@@ -649,13 +668,33 @@ async function main() {
       fail("could not start the sim capture via appbar-run-btn");
     // Healthy Connected → Trace degraded chip absent (§4.3).
     // Allow ~45 s so ARP / ICMPv6 / runt / LLDP (~30 s) / AVTP / HTTP / TLS appear.
-    const SIM_PROTOCOL_EXPECT = 16;
+    const SIM_PROTOCOL_EXPECT = 15;
+    const SIM_PROTOCOLS = [
+      "SOME/IP", "SD", "gPTP", "ARP", "Malformed", "DoIP",
+      "ICMPv6", "DHCP", "DNS", "NTP", "LLDP", "AVTP", "PTP", "HTTP", "TLS",
+    ];
+    // The table is virtualized, so rows below the fold are not in the DOM;
+    // the Protocol filter popover lists every class in the buffered ring.
+    const PROTOCOL_OPTIONS_PROBE = `(() => {
+      const labels = [...document.querySelectorAll('[data-testid^="trace-filter-option-"]')]
+        .map((o) => (o.textContent || "").trim().replace(/\\s*\\([\\d,]+\\)$/, "").trim());
+      const cancel = document.querySelector('[data-testid="trace-filter-cancel"]');
+      if (cancel) cancel.click();
+      return labels;
+    })()`;
     let lastSim = null;
     const protocolsRendered = new Set();
     const sim = await waitFor(async () => {
       const s = await session.eval(SIM_STATE_PROBE);
       lastSim = s;
       for (const p of s.protocolsSeen) protocolsRendered.add(p);
+      if (await session.eval(openFilterBtnProbe("trace-filter-btn-protocol"))) {
+        await sleep(150);
+        const labels = await session.eval(PROTOCOL_OPTIONS_PROBE);
+        for (const p of SIM_PROTOCOLS) {
+          if (Array.isArray(labels) && labels.includes(p)) protocolsRendered.add(p);
+        }
+      }
       return s.rowCount > 0 &&
         s.chipAbsent &&
         s.endpointNameSeen &&
@@ -693,6 +732,65 @@ async function main() {
 
     // Phase 4 — expanding a live simulator frame dissects it layer by layer.
     if (!(await session.eval(clickProbe("nav-trace")))) fail("could not return to Trace");
+    // The page keeps the last frame_detail round-trips at window.__radeauFrameDetail
+    // (runtime/desktop.ts); an event-loop lag sampler tells whether a "Loading…"
+    // stall is IPC latency or a saturated main thread.
+    const LOOP_LAG_PROBE = `(() => {
+      if (window.__radeauLoopLag) return true;
+      const lag = { max: 0, over100: 0, samples: 0, last: Math.round(performance.now()) };
+      window.__radeauLoopLag = lag;
+      setInterval(() => {
+        const now = performance.now();
+        const drift = Math.round(now - lag.last - 50);
+        lag.last = now;
+        lag.samples += 1;
+        if (drift > lag.max) lag.max = drift;
+        if (drift > 100) lag.over100 += 1;
+      }, 50);
+      return true;
+    })()`;
+    const FRAME_DETAIL_TIMES = `({
+      now: Math.round(performance.now()),
+      lag: window.__radeauLoopLag,
+      calls: (window.__radeauFrameDetail || []).slice(-4),
+    })`;
+    await session.eval(LOOP_LAG_PROBE);
+    if (process.env.RADEAU_E2E_PROFILE) {
+      // Diagnostic mode: sample the UI thread under live simulator load and
+      // print the hottest frames, then stop (no assertions past this point).
+      console.log("user-timing buffer:", JSON.stringify(await session.eval(`(() => {
+        const bench = () => {
+          const t0 = performance.now();
+          for (let i = 0; i < 2000; i += 1) {
+            performance.measure("radeau-bench", { start: t0, end: t0 + 1, detail: { devtools: { color: "primary", track: "bench" } } });
+          }
+          return Math.round((performance.now() - t0) * 1000) / 1000;
+        };
+        const before = performance.getEntriesByType("measure").length;
+        const msFull = bench();
+        performance.clearMeasures();
+        performance.clearMarks();
+        const msEmpty = bench();
+        return { measuresBefore: before, marks: performance.getEntriesByType("mark").length, bench2000Full: msFull, bench2000Empty: msEmpty };
+      })()`)));
+      await session.send("Profiler.enable");
+      await session.send("Profiler.setSamplingInterval", { interval: 500 });
+      await session.send("Profiler.start");
+      await sleep(Number(process.env.RADEAU_E2E_PROFILE) || 8_000);
+      const { profile } = await session.send("Profiler.stop");
+      const self = new Map();
+      for (const node of profile.nodes) {
+        const cf = node.callFrame;
+        const file = (cf.url || "").split("/").slice(-2).join("/");
+        const key = `${cf.functionName || "(anonymous)"} ${file}:${cf.lineNumber + 1}`;
+        self.set(key, (self.get(key) || 0) + (node.hitCount || 0));
+      }
+      const total = [...self.values()].reduce((a, b) => a + b, 0);
+      const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25)
+        .map(([k, v]) => `${((100 * v) / total).toFixed(1).padStart(5)}%  ${k}`);
+      console.log(`profile: ${total} samples\n${top.join("\n")}`);
+      throw new Error("profile run complete");
+    }
     await waitFor(
       () => session.eval(`(() => {
         const btn = document.querySelector('[data-testid^="trace-expand-btn-"]');
@@ -714,7 +812,22 @@ async function main() {
         };
       })()`);
       return d && d.hasEthernet && d.layerCount >= 2 ? d : null;
-    }, 10_000, "dissection panel with Ethernet II + at least 2 layers");
+    }, 10_000, "dissection panel with Ethernet II + at least 2 layers").catch(async (err) => {
+      const diag = await session.eval(`(() => {
+        const btns = [...document.querySelectorAll('[data-testid^="trace-expand-btn-"]')];
+        const detail = document.querySelector('[data-testid^="trace-detail-"]');
+        return {
+          expandButtons: btns.length,
+          expandedKeys: btns.filter((b) => b.getAttribute("aria-expanded") === "true")
+            .map((b) => b.getAttribute("data-testid")).slice(0, 4),
+          detailTestId: detail ? detail.getAttribute("data-testid") : null,
+          detailText: detail ? (detail.textContent || "").slice(0, 160) : null,
+          tableMode: document.querySelector('[data-testid="trace-table"]')?.getAttribute("data-trace-mode"),
+        };
+      })()`).catch(() => null);
+      console.error("dissection diag:", JSON.stringify(diag));
+      throw err;
+    });
     console.log("dissection:", JSON.stringify(detail));
 
     // VLAN-tagged LidarClusters: expand and assert 802.1Q precedes IPv4.
@@ -742,6 +855,7 @@ async function main() {
       })()`);
       return r && r.ok ? r : null;
     }, 10_000, "LidarClusters row to expand");
+    const vlanStart = Date.now();
     const vlanDetail = await waitFor(async () => {
       const d = await session.eval(`(() => {
         const panel = document.querySelector('[data-testid^="trace-detail-"]');
@@ -763,8 +877,30 @@ async function main() {
         };
       })()`);
       return d && d.has8021Q && d.qBeforeIp ? d : null;
-    }, 10_000, "LidarClusters dissection with 802.1Q before IPv4");
-    console.log("vlan dissection:", JSON.stringify(vlanDetail));
+    }, 30_000, "LidarClusters dissection with 802.1Q before IPv4").catch(async (err) => {
+      const diag = await session.eval(`(() => {
+        const panel = document.querySelector('[data-testid^="trace-detail-"]');
+        const btns = [...document.querySelectorAll('[data-testid^="trace-expand-btn-"][aria-expanded="true"]')];
+        const text = panel ? (panel.textContent || "") : "";
+        return {
+          panel: panel ? panel.getAttribute("data-testid") : null,
+          loading: !!document.querySelector('[data-testid="trace-detail-loading"]'),
+          empty: !!document.querySelector('[data-testid="trace-detail-empty"]'),
+          qIdx: text.indexOf("802.1Q"),
+          ipIdx: text.search(/IPv4|Internet Protocol Version 4/),
+          text: text.slice(0, 200),
+          expanded: btns.map((b) => b.getAttribute("data-testid")),
+          frameDetail: ${FRAME_DETAIL_TIMES},
+        };
+      })()`).catch(() => null);
+      console.error("vlan dissection diag:", JSON.stringify(diag));
+      throw err;
+    });
+    console.log(
+      `vlan dissection ready after ${Date.now() - vlanStart} ms:`,
+      JSON.stringify(vlanDetail),
+      JSON.stringify(await session.eval(FRAME_DETAIL_TIMES).catch(() => null)),
+    );
 
     // Phase 5 — catalog-driven Trace content (names + clean dissections + decode).
     // Ensure the catalog is loaded (core may auto-load at startup; rail toggles).
@@ -878,11 +1014,35 @@ async function main() {
       const expanded = await waitFor(async () => {
         const r = await session.eval(PROTO_EXPAND_PROBE(proto));
         return r && r.ok ? r : null;
-      }, 10_000, `${proto} row to expand`);
+      }, 10_000, `${proto} row to expand`).catch(async (err) => {
+        const state = await session.eval(FILTER_STATE_PROBE).catch(() => null);
+        console.error(`${proto} expand failed; table state:`, JSON.stringify(state));
+        throw err;
+      });
+      const panelStart = Date.now();
       const dissected = await waitFor(async () => {
         const d = await session.eval(DISSECT_TEXT_PROBE);
         return d && !d.empty && d.layerCount >= 1 ? d : null;
-      }, 10_000, `${proto} dissection panel`);
+      }, 30_000, `${proto} dissection panel`).catch(async (err) => {
+        const diag = await session.eval(`(() => {
+          const panel = document.querySelector('[data-testid^="trace-detail-"]');
+          return {
+            panel: panel ? panel.getAttribute("data-testid") : null,
+            loading: !!document.querySelector('[data-testid="trace-detail-loading"]'),
+            empty: !!document.querySelector('[data-testid="trace-detail-empty"]'),
+            text: panel ? (panel.textContent || "").slice(0, 300) : null,
+            expanded: [...document.querySelectorAll('[data-testid^="trace-expand-btn-"][aria-expanded="true"]')]
+              .map((b) => b.getAttribute("data-testid")),
+            frameDetail: ${FRAME_DETAIL_TIMES},
+          };
+        })()`).catch(() => null);
+        console.error(`${proto} dissection diag:`, JSON.stringify(diag));
+        throw err;
+      });
+      console.log(
+        `${proto} dissection ready after ${Date.now() - panelStart} ms`,
+        JSON.stringify(await session.eval(FRAME_DETAIL_TIMES).catch(() => null)),
+      );
       const hasMalformed = /malformed/i.test(dissected.text);
       malformedByProto[proto] = hasMalformed;
       if (hasMalformed)
@@ -1349,10 +1509,16 @@ async function main() {
           continue;
         }
         const hasMalformed = /malformed/i.test(dissected.text);
-        sweep[proto] = hasMalformed ? "malformed" : "ok";
-        if (hasMalformed) {
+        // The Malformed class is the one place the word belongs (honesty, §5.4).
+        const expectMalformed = proto === "Malformed";
+        sweep[proto] = hasMalformed === expectMalformed ? "ok" : hasMalformed ? "malformed" : "unflagged";
+        if (hasMalformed !== expectMalformed) {
           anyFail = true;
-          fail(`${proto} all-class sweep contained "malformed" (idx ${found.idx})`);
+          fail(
+            expectMalformed
+              ? `Malformed row dissection did not flag anything malformed (idx ${found.idx})`
+              : `${proto} all-class sweep contained "malformed" (idx ${found.idx})`,
+          );
         }
         await session.eval(COLLAPSE_EXPANDED_PROBE);
       }

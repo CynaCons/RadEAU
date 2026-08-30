@@ -99,9 +99,13 @@ impl Default for CatalogState {
     }
 }
 impl CatalogState {
-    pub fn active_catalog(&self) -> Option<Catalog> {
-        let i = self.inner.read().ok()?;
-        i.loaded.then(|| i.catalog.clone())
+    /// Runs `f` with the active catalog borrowed under the read lock — no
+    /// clone per call on the dissection path.
+    pub fn with_active<R>(&self, f: impl FnOnce(Option<&Catalog>) -> R) -> R {
+        match self.inner.read() {
+            Ok(i) => f(i.loaded.then_some(&i.catalog)),
+            Err(_) => f(None),
+        }
     }
     fn model(&self) -> CatalogModel {
         let i = self.inner.read().expect("catalog state poisoned");
