@@ -77,6 +77,7 @@ function frame(partial: Partial<TraceFrame> & Pick<TraceFrame, "id" | "protocol"
     m: 0,
     srcEp: 0,
     ty: 0,
+    se: -1,
     sa: 0,
     da: 0,
     sm: 0,

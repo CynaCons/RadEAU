@@ -17,30 +17,55 @@ import {
 import {
   ARP_TY_REPLY,
   ARP_TY_REQUEST,
+  DHCP_TY_V6_OFFSET,
   DIR_RX,
   DIR_TX,
   DIR_UNKNOWN,
+  DNS_TY_MDNS_QUERY,
+  DNS_TY_QUERY,
+  DNS_TY_RESPONSE,
   DOIP_TY_DIAG,
   DOIP_TY_VEHICLE_ANNOUNCE,
   ENDPOINT_OVERFLOW,
   GPTP_TY_ANNOUNCE,
   GPTP_TY_SYNC,
+  HTTP_TY_REQUEST,
+  HTTP_TY_RESPONSE,
   PROTO_ARP,
+  PROTO_AVTP,
+  PROTO_DHCP,
+  PROTO_DNS,
   PROTO_DOIP,
+  PROTO_EAPOL,
   PROTO_GPTP,
+  PROTO_HTTP,
   PROTO_ICMP,
+  PROTO_ICMPV6,
+  PROTO_IGMP,
   PROTO_IPV4_OTHER,
   PROTO_IPV6,
+  PROTO_LLDP,
+  PROTO_MACSEC,
   PROTO_MALFORMED,
+  PROTO_NTP,
   PROTO_OTHER,
+  PROTO_PTP,
+  PROTO_SCTP,
   PROTO_SD,
+  PROTO_SNMP,
   PROTO_SOMEIP,
+  PROTO_SSDP,
+  PROTO_SSH,
   PROTO_TCP,
+  PROTO_TFTP,
+  PROTO_TLS,
   PROTO_UDP,
   SD_TY_FIND,
   SD_TY_OFFER,
   SOMEIP_TY_NOTIFICATION,
   SOMEIP_TY_REQUEST,
+  SSDP_TY_MSEARCH,
+  SSH_TY_BANNER,
 } from "./wireCodes";
 
 function baseBatch(overrides: Partial<FrameBatchRaw> & Pick<FrameBatchRaw, "p">): FrameBatchRaw {
@@ -488,6 +513,419 @@ describe("projectRow per class", () => {
     });
     expect(projectRow(nrc, 0, null, new Map()).type).toBe("NRC");
   });
+
+  it("projects ICMPv6 Router Advertisement with code in Type", () => {
+    const row = projectRow(
+      baseBatch({
+        p: [PROTO_ICMPV6],
+        ty: [134],
+        se: [0],
+        sa: [0],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.protocol).toBe("ICMPv6");
+    expect(row.name).toBe("Router Advertisement");
+    expect(row.type).toBe("0");
+    expect(row.serviceMethod).toBe("--");
+    expect(row.session).toBe("--");
+  });
+
+  it("projects IGMP Membership Query", () => {
+    const row = projectRow(
+      baseBatch({ p: [PROTO_IGMP], ty: [0x11], sa: [sa], sm: [sm] }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.protocol).toBe("IGMP");
+    expect(row.name).toBe("Membership Query");
+    expect(row.serviceMethod).toBe("--");
+  });
+
+  it("projects DHCP Discover and DHCPv6 Solicit", () => {
+    const v4 = projectRow(
+      baseBatch({
+        p: [PROTO_DHCP],
+        ty: [1],
+        se: [0x1234],
+        sv: [68],
+        m: [67],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(v4.name).toBe("DHCP Discover");
+    expect(v4.serviceMethod).toBe("68:67");
+    expect(v4.session).toBe("--");
+
+    const v6 = projectRow(
+      baseBatch({
+        p: [PROTO_DHCP],
+        ty: [DHCP_TY_V6_OFFSET + 1],
+        se: [0x55],
+        sv: [546],
+        m: [547],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(v6.name).toBe("DHCPv6 Solicit");
+  });
+
+  it("projects DNS query · A and response · NXDomain", () => {
+    const query = projectRow(
+      baseBatch({
+        p: [PROTO_DNS],
+        ty: [DNS_TY_QUERY],
+        se: [1],
+        sv: [53],
+        m: [53],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(query.name).toBe("DNS query · A");
+    expect(query.type).toBe("A");
+    expect(query.serviceMethod).toBe("53:53");
+
+    const mdns = projectRow(
+      baseBatch({
+        p: [PROTO_DNS],
+        ty: [DNS_TY_MDNS_QUERY],
+        se: [12],
+        sv: [5353],
+        m: [5353],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(mdns.name).toBe("mDNS query · PTR");
+
+    const resp = projectRow(
+      baseBatch({
+        p: [PROTO_DNS],
+        ty: [DNS_TY_RESPONSE],
+        se: [3],
+        sv: [53],
+        m: [53],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(resp.name).toBe("DNS response · NXDomain");
+    expect(resp.type).toBe("NXDomain");
+  });
+
+  it("projects NTP client · stratum n", () => {
+    const row = projectRow(
+      baseBatch({
+        p: [PROTO_NTP],
+        ty: [3],
+        se: [2],
+        sv: [123],
+        m: [123],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("NTP client · stratum 2");
+    expect(row.type).toBe("stratum 2");
+    expect(row.serviceMethod).toBe("123:123");
+  });
+
+  it("projects SSDP M-SEARCH", () => {
+    const row = projectRow(
+      baseBatch({
+        p: [PROTO_SSDP],
+        ty: [SSDP_TY_MSEARCH],
+        sv: [1900],
+        m: [1900],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("SSDP M-SEARCH");
+    expect(row.type).toBe("M-SEARCH");
+  });
+
+  it("projects PTP Sync · domain n with Service:Method --", () => {
+    const row = projectRow(
+      baseBatch({
+        p: [PROTO_PTP],
+        ty: [GPTP_TY_SYNC],
+        sv: [0],
+        m: [42],
+        sa: [sa],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.protocol).toBe("PTP");
+    expect(row.name).toBe("PTP Sync · domain 0");
+    expect(row.type).toBe("domain 0");
+    expect(row.serviceMethod).toBe("--");
+  });
+
+  it("projects LLDP", () => {
+    const row = projectRow(
+      baseBatch({ p: [PROTO_LLDP], ty: [0], sm: [sm] }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("LLDP");
+    expect(row.serviceMethod).toBe("--");
+  });
+
+  it("projects AVTP AAF subtype", () => {
+    const row = projectRow(
+      baseBatch({ p: [PROTO_AVTP], ty: [0x02], sm: [sm] }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("AVTP AAF");
+    expect(row.type).toBe("AAF");
+  });
+
+  it("projects MACsec · AN n", () => {
+    const row = projectRow(
+      baseBatch({ p: [PROTO_MACSEC], ty: [2], sm: [sm] }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("MACsec · AN 2");
+    expect(row.type).toBe("AN 2");
+  });
+
+  it("projects EAPOL Key", () => {
+    const row = projectRow(
+      baseBatch({ p: [PROTO_EAPOL], ty: [3], sm: [sm] }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("EAPOL Key");
+  });
+
+  it("projects HTTP GET and HTTP 200", () => {
+    const req = projectRow(
+      baseBatch({
+        p: [PROTO_HTTP],
+        ty: [HTTP_TY_REQUEST],
+        se: [1],
+        sv: [51234],
+        m: [80],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(req.name).toBe("HTTP GET");
+    expect(req.type).toBe("GET");
+    expect(req.serviceMethod).toBe("51234:80");
+
+    const res = projectRow(
+      baseBatch({
+        p: [PROTO_HTTP],
+        ty: [HTTP_TY_RESPONSE],
+        se: [200],
+        sv: [80],
+        m: [51234],
+        sa: [da],
+        da: [sa],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(res.name).toBe("HTTP 200");
+  });
+
+  it("projects TLS ClientHello and Application Data", () => {
+    const hello = projectRow(
+      baseBatch({
+        p: [PROTO_TLS],
+        ty: [22],
+        se: [1],
+        sv: [51234],
+        m: [443],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(hello.name).toBe("TLS ClientHello");
+    expect(hello.type).toBe("ClientHello");
+
+    const app = projectRow(
+      baseBatch({
+        p: [PROTO_TLS],
+        ty: [23],
+        se: [-1],
+        sv: [51234],
+        m: [443],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(app.name).toBe("TLS Application Data");
+  });
+
+  it("projects SSH banner", () => {
+    const row = projectRow(
+      baseBatch({
+        p: [PROTO_SSH],
+        ty: [SSH_TY_BANNER],
+        sv: [22],
+        m: [51234],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("SSH banner");
+  });
+
+  it("projects SCTP INIT", () => {
+    const row = projectRow(
+      baseBatch({
+        p: [PROTO_SCTP],
+        ty: [1],
+        sv: [5000],
+        m: [5001],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("SCTP INIT");
+    expect(row.serviceMethod).toBe("5000:5001");
+  });
+
+  it("projects TFTP RRQ", () => {
+    const row = projectRow(
+      baseBatch({
+        p: [PROTO_TFTP],
+        ty: [1],
+        sv: [69],
+        m: [69],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("TFTP RRQ");
+  });
+
+  it("projects SNMP GetRequest", () => {
+    const row = projectRow(
+      baseBatch({
+        p: [PROTO_SNMP],
+        ty: [0xa0],
+        sv: [161],
+        m: [161],
+        sa: [sa],
+        da: [da],
+        sm: [sm],
+      }),
+      0,
+      null,
+      new Map(),
+    );
+    expect(row.name).toBe("SNMP GetRequest");
+  });
+
+  it("renders unknown ty/se as numbers without crashing", () => {
+    expect(
+      projectRow(
+        baseBatch({ p: [PROTO_ICMPV6], ty: [200], se: [9], sm: [sm] }),
+        0,
+        null,
+        new Map(),
+      ).name,
+    ).toBe("Type 200");
+    expect(
+      projectRow(
+        baseBatch({
+          p: [PROTO_DNS],
+          ty: [DNS_TY_QUERY],
+          se: [99],
+          sv: [53],
+          m: [53],
+          sa: [sa],
+          da: [da],
+          sm: [sm],
+        }),
+        0,
+        null,
+        new Map(),
+      ).name,
+    ).toBe("DNS query · 99");
+    expect(
+      projectRow(
+        baseBatch({ p: [PROTO_AVTP], ty: [0x40], sm: [sm] }),
+        0,
+        null,
+        new Map(),
+      ).name,
+    ).toBe("AVTP subtype 64");
+  });
 });
 
 describe("udsTypeLabel", () => {
@@ -605,6 +1043,74 @@ describe("frameKey", () => {
     );
     expect(reqKey).toBe(`10:${tester}<>${gateway}:${0x3e}`);
     expect(resKey).toBe(reqKey);
+  });
+
+  it("keys §7 classes per Fixed-mode rules", () => {
+    expect(
+      frameKey(baseBatch({ p: [PROTO_ICMPV6], sa: [sa], sm: [sm], ty: [134] }), 0),
+    ).toBe(`12:${sa}:134`);
+    expect(
+      frameKey(baseBatch({ p: [PROTO_ICMPV6], sa: [0], sm: [sm], ty: [134] }), 0),
+    ).toBe(`12:${sm}:134`);
+    expect(
+      frameKey(baseBatch({ p: [PROTO_IGMP], sa: [sa], sm: [sm], ty: [0x11] }), 0),
+    ).toBe(`13:${sa}:17`);
+    expect(
+      frameKey(
+        baseBatch({
+          p: [PROTO_DHCP],
+          sa: [sa],
+          da: [da],
+          sv: [68],
+          m: [67],
+          sm: [sm],
+          ty: [1],
+        }),
+        0,
+      ),
+    ).toBe(`14:${sa}:68>${da}:67`);
+    expect(
+      frameKey(
+        baseBatch({
+          p: [PROTO_DNS],
+          sa: [sa],
+          da: [da],
+          sv: [53],
+          m: [53],
+          sm: [sm],
+          ty: [DNS_TY_QUERY],
+        }),
+        0,
+      ),
+    ).toBe(`15:${sa}:53>${da}:53`);
+    expect(
+      frameKey(
+        baseBatch({
+          p: [PROTO_HTTP],
+          sa: [sa],
+          da: [da],
+          sv: [1],
+          m: [80],
+          sm: [sm],
+        }),
+        0,
+      ),
+    ).toBe(`23:${sa}:1>${da}:80`);
+    expect(
+      frameKey(baseBatch({ p: [PROTO_PTP], sa: [sa], sm: [sm], ty: [GPTP_TY_SYNC] }), 0),
+    ).toBe(`18:${sa}:0`);
+    expect(frameKey(baseBatch({ p: [PROTO_LLDP], sm: [sm], ty: [0] }), 0)).toBe(
+      `19:${sm}`,
+    );
+    expect(frameKey(baseBatch({ p: [PROTO_AVTP], sm: [sm], ty: [2] }), 0)).toBe(
+      `20:${sm}:2`,
+    );
+    expect(frameKey(baseBatch({ p: [PROTO_MACSEC], sm: [sm], ty: [1] }), 0)).toBe(
+      `21:${sm}`,
+    );
+    expect(frameKey(baseBatch({ p: [PROTO_EAPOL], sm: [sm], ty: [3] }), 0)).toBe(
+      `22:${sm}`,
+    );
   });
 
   it("computes per-node cycle time for SD offers from different sources", () => {

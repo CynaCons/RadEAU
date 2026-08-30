@@ -5,7 +5,27 @@
  */
 
 import type { TraceFrame } from "./frameModel";
-import { PROTO_DOIP, protoLabel } from "./wireCodes";
+import {
+  PROTO_AVTP,
+  PROTO_DHCP,
+  PROTO_DNS,
+  PROTO_DOIP,
+  PROTO_EAPOL,
+  PROTO_HTTP,
+  PROTO_ICMPV6,
+  PROTO_IGMP,
+  PROTO_LLDP,
+  PROTO_MACSEC,
+  PROTO_NTP,
+  PROTO_PTP,
+  PROTO_SCTP,
+  PROTO_SNMP,
+  PROTO_SSDP,
+  PROTO_SSH,
+  PROTO_TFTP,
+  PROTO_TLS,
+  protoLabel,
+} from "./wireCodes";
 
 export type TraceFilterDir = "rx" | "tx" | "unknown";
 
@@ -15,8 +35,9 @@ export type TraceFilterColumn = "service" | "name" | "protocol" | "dir";
  * Per-column criteria. `null` = column unfiltered. An empty Set is an active
  * filter that matches nothing (allowed — yields the filtered empty state).
  * Service keys are `${sv}:${m}` id pairs; Name keys are `${sv}:${m}` for
- * MOST classes and `doip:${ty}` for DoIP (payload-type name once each);
- * Protocol keys are PROTO_* integers; Direction keys are the row `dir` strings.
+ * MOST classes, `doip:${ty}` for DoIP, and `${p}:${ty}` (plus `:${se}` for
+ * DNS/HTTP/TLS) for the §7 standard-protocol classes; Protocol keys are
+ * PROTO_* integers; Direction keys are the row `dir` strings.
  */
 export interface TraceFilter {
   services: ReadonlySet<string> | null;
@@ -43,12 +64,49 @@ export function serviceMethodId(row: TraceFrame): string {
   return `${row.sv}:${row.m}`;
 }
 
+/** Classes keyed by message kind for the Name filter (§7). */
+function isStandardProtoNameKey(proto: number): boolean {
+  switch (proto) {
+    case PROTO_ICMPV6:
+    case PROTO_IGMP:
+    case PROTO_DHCP:
+    case PROTO_DNS:
+    case PROTO_NTP:
+    case PROTO_SSDP:
+    case PROTO_PTP:
+    case PROTO_LLDP:
+    case PROTO_AVTP:
+    case PROTO_MACSEC:
+    case PROTO_EAPOL:
+    case PROTO_HTTP:
+    case PROTO_TLS:
+    case PROTO_SSH:
+    case PROTO_SCTP:
+    case PROTO_TFTP:
+    case PROTO_SNMP:
+      return true;
+    default:
+      return false;
+  }
+}
+
 /**
- * Name-filter key: DoIP collapses by payload type (`doip:${ty}`); other
- * classes keep the `${sv}:${m}` pair so catalog renames stay stable.
+ * Name-filter key: DoIP collapses by payload type (`doip:${ty}`); §7 classes
+ * use `${p}:${ty}` (plus `:${se}` for DNS/HTTP/TLS so "DNS query · A" /
+ * "TLS ClientHello" appear once each); other classes keep `${sv}:${m}`.
  */
 export function nameFilterId(row: TraceFrame): string {
   if (row.proto === PROTO_DOIP) return `doip:${row.ty}`;
+  if (isStandardProtoNameKey(row.proto)) {
+    if (
+      row.proto === PROTO_DNS ||
+      row.proto === PROTO_HTTP ||
+      row.proto === PROTO_TLS
+    ) {
+      return `${row.proto}:${row.ty}:${row.se}`;
+    }
+    return `${row.proto}:${row.ty}`;
+  }
   return serviceMethodId(row);
 }
 
@@ -109,8 +167,8 @@ const DIR_ORDER: readonly TraceFilterDir[] = ["rx", "tx", "unknown"];
 /**
  * Distinct values present in `rows` for one filter column — one pass, with
  * occurrence counts. Labels are display strings; keys are the stable ids the
- * filter stores (Name shows display names but keys by `${sv}:${m}`, or
- * `doip:${ty}` for DoIP).
+ * filter stores (Name shows display names but keys by `${sv}:${m}`,
+ * `doip:${ty}`, or `${p}:${ty}` / `${p}:${ty}:${se}` for §7 classes).
  */
 export function distinctValues(
   rows: readonly TraceFrame[],

@@ -30,6 +30,7 @@ function row(
     m: 0x8001,
     srcEp: 0,
     ty: 0,
+    se: -1,
     sa: 0,
     da: 0,
     sm: 0,

@@ -344,9 +344,12 @@ const SIM_STATE_PROBE = `(() => {
     chipLabel: chip ? chip.textContent : null,
     chipAbsent: !chip,
     endpointNameSeen: text.some((t) => names.some((n) => t.includes(n))),
-    // Cumulative protocol set — ARP / IPv6 / Malformed / DoIP arrive on a slower cadence.
-    protocolsSeen: ["SOME/IP", "SD", "gPTP", "ARP", "IPv6", "Malformed", "DoIP"].filter((p) =>
-      text.some((t) => t === p)),
+    // Cumulative protocol set — ARP / IPv6 / Malformed / DoIP / §7 standards
+    // arrive on slower cadences (LLDP ~30 s, AVTP/HTTP/TLS within the window).
+    protocolsSeen: [
+      "SOME/IP", "SD", "gPTP", "ARP", "IPv6", "Malformed", "DoIP",
+      "ICMPv6", "DHCP", "DNS", "NTP", "LLDP", "AVTP", "PTP", "HTTP", "TLS",
+    ].filter((p) => text.some((t) => t === p)),
     lidarClustersSeen: text.some((t) => t.includes("LidarClusters")),
     allDirRx: dirCells.length > 0 && dirCells.every((d) => d === "Rx"),
   };
@@ -645,7 +648,8 @@ async function main() {
     if (!(await session.eval(clickProbe("appbar-run-btn"))))
       fail("could not start the sim capture via appbar-run-btn");
     // Healthy Connected → Trace degraded chip absent (§4.3).
-    // Allow ~25 s so ARP (2 s), ICMPv6 (5 s), and a runt (10 s) all appear.
+    // Allow ~45 s so ARP / ICMPv6 / runt / LLDP (~30 s) / AVTP / HTTP / TLS appear.
+    const SIM_PROTOCOL_EXPECT = 16;
     let lastSim = null;
     const protocolsRendered = new Set();
     const sim = await waitFor(async () => {
@@ -655,12 +659,12 @@ async function main() {
       return s.rowCount > 0 &&
         s.chipAbsent &&
         s.endpointNameSeen &&
-        protocolsRendered.size === 7 &&
+        protocolsRendered.size === SIM_PROTOCOL_EXPECT &&
         s.lidarClustersSeen &&
         s.allDirRx
         ? s
         : null;
-    }, 25_000, "simulator frames (SOME/IP+SD+gPTP+ARP+IPv6+Malformed+DoIP) + LidarClusters + Dir Rx + absent degraded chip").catch((err) => {
+    }, 45_000, "simulator frames (automotive + §7 standards) + LidarClusters + Dir Rx + absent degraded chip").catch((err) => {
       console.error(
         "last sim state:", JSON.stringify(lastSim),
         "protocols rendered so far:", [...protocolsRendered].join(", ") || "none",
@@ -858,11 +862,18 @@ async function main() {
       };
     })()`;
 
-    // Exact Protocol-cell match — DoIP rows never satisfy "SOME/IP"/"SD"/"gPTP".
-    // DoIP itself is asserted in the isolated v0.1.9 phase below (avoids failing
-    // this gate while the Rust codec/sim cast is still landing).
+    // Exact Protocol-cell match. Core automotive classes gate the main path;
+    // every class token (incl. §7) is swept in the isolated phase below so a
+    // missing Rust codec reports its own FAIL without aborting the run.
+    const CORE_NO_MALFORMED = ["SOME/IP", "SD", "gPTP"];
+    const ALL_CLASS_TOKENS = [
+      "SOME/IP", "SD", "gPTP", "ARP", "UDP", "TCP", "ICMP", "IPv6", "IPv4",
+      "Other", "DoIP", "Malformed", "ICMPv6", "IGMP", "DHCP", "DNS", "NTP",
+      "SSDP", "PTP", "LLDP", "AVTP", "MACsec", "EAPOL", "HTTP", "TLS", "SSH",
+      "SCTP", "TFTP", "SNMP",
+    ];
     const malformedByProto = {};
-    for (const proto of ["SOME/IP", "SD", "gPTP"]) {
+    for (const proto of CORE_NO_MALFORMED) {
       await session.eval(COLLAPSE_EXPANDED_PROBE);
       const expanded = await waitFor(async () => {
         const r = await session.eval(PROTO_EXPAND_PROBE(proto));
@@ -878,7 +889,7 @@ async function main() {
         fail(`${proto} dissection contained "malformed" (idx ${expanded.idx})`);
       await session.eval(COLLAPSE_EXPANDED_PROBE);
     }
-    console.log("no-malformed:", JSON.stringify(malformedByProto));
+    console.log("no-malformed (core):", JSON.stringify(malformedByProto));
 
     // 5c — decoded signal table on a SOME/IP event dissection.
     await session.eval(COLLAPSE_EXPANDED_PROBE);
@@ -1174,6 +1185,184 @@ async function main() {
       fail(`doip dissection phase: ${err?.message ?? err}`);
       v019.doipDissect = false;
     }
+
+    // v0.1.12 §7 standard-protocol dissections — isolated so a missing Rust
+    // codec / sim cast reports its own FAIL without aborting the run.
+    const v0112 = {
+      icmpv6Ra: false,
+      dnsLocal: false,
+      tlsSni: false,
+      lldpSysName: false,
+      noMalformedAll: false,
+    };
+
+    async function expandProtoRow(matchFn, label, timeoutMs = 15_000) {
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+      await waitFor(
+        () => session.eval(clickProbe("nav-trace")),
+        10_000,
+        `nav-trace for ${label}`,
+      );
+      const expanded = await waitFor(async () => {
+        const r = await session.eval(`(() => {
+          const rows = [...document.querySelectorAll("tbody tr")].filter(
+            (r) => !(r.getAttribute("data-testid") || "").startsWith("trace-detail-row"),
+          );
+          for (const row of rows) {
+            const cells = row.querySelectorAll("td");
+            const proto = (cells[4]?.textContent || "").trim();
+            const name = (cells[6]?.textContent || "").trim();
+            const type = (cells[7]?.textContent || "").trim();
+            if (!(${matchFn})) continue;
+            const btn = row.querySelector('[data-testid^="trace-expand-btn-"]');
+            if (!btn) return { ok: false, reason: "no expand" };
+            btn.click();
+            return {
+              ok: true,
+              proto,
+              name,
+              type,
+              idx: (btn.getAttribute("data-testid") || "").replace("trace-expand-btn-", ""),
+            };
+          }
+          return { ok: false, reason: "row not found" };
+        })()`);
+        return r && r.ok ? r : null;
+      }, timeoutMs, label);
+      const detail = await waitFor(async () => {
+        const d = await session.eval(`(() => {
+          const panel = document.querySelector('[data-testid^="trace-detail-"]');
+          if (!panel) return null;
+          if (panel.querySelector('[data-testid="trace-detail-loading"]')) return null;
+          if (panel.querySelector('[data-testid="trace-detail-empty"]')) {
+            return { text: "", layers: [], layerCount: 0, empty: true };
+          }
+          const layers = [...panel.querySelectorAll('[data-testid^="trace-detail-layer-"]')]
+            .map((el) => {
+              const title = el.querySelector('[data-testid^="trace-detail-layer-title-"]');
+              return (title ? title.textContent : el.textContent || "").trim();
+            });
+          return { text: panel.textContent || "", layers, layerCount: layers.length, empty: false };
+        })()`);
+        return d && !d.empty && d.layerCount >= 1 ? d : null;
+      }, 10_000, `${label} dissection panel`);
+      return { expanded, detail };
+    }
+
+    try {
+      const { expanded, detail } = await expandProtoRow(
+        `proto === "ICMPv6" && name.includes("Router Advertisement")`,
+        "ICMPv6 Router Advertisement row",
+      );
+      const hasIcmpv6 =
+        detail.layers.some((l) => /ICMPv6/i.test(l)) || /ICMPv6/i.test(detail.text);
+      const hasOpt =
+        /Prefix Information/i.test(detail.text) ||
+        /Source Link-Layer Address/i.test(detail.text);
+      if (!hasIcmpv6)
+        fail(`ICMPv6 RA missing ICMPv6 layer (idx ${expanded.idx}): layers=${JSON.stringify(detail.layers)}`);
+      else if (!hasOpt)
+        fail("ICMPv6 RA missing Prefix Information or Source Link-Layer Address");
+      else {
+        v0112.icmpv6Ra = true;
+        console.log("icmpv6 RA dissection: PASS", JSON.stringify({ name: expanded.name, layers: detail.layers }));
+      }
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+    } catch (err) {
+      fail(`icmpv6 RA dissection phase: ${err?.message ?? err}`);
+      v0112.icmpv6Ra = false;
+    }
+
+    try {
+      const { expanded, detail } = await expandProtoRow(
+        `proto === "DNS" && (name.startsWith("DNS") || name.startsWith("mDNS") || name.startsWith("LLMNR"))`,
+        "DNS/mDNS/LLMNR row",
+      );
+      const hasLocalName = /\.local\b|\.radeau\b/i.test(detail.text);
+      if (!hasLocalName)
+        fail(
+          `DNS dissection missing question name ending in .local or .radeau (idx ${expanded.idx}): text=${detail.text.slice(0, 400)}`,
+        );
+      else {
+        v0112.dnsLocal = true;
+        console.log("dns dissection: PASS", JSON.stringify({ name: expanded.name, layers: detail.layers }));
+      }
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+    } catch (err) {
+      fail(`dns dissection phase: ${err?.message ?? err}`);
+      v0112.dnsLocal = false;
+    }
+
+    try {
+      const { expanded, detail } = await expandProtoRow(
+        `proto === "TLS" && name.includes("ClientHello")`,
+        "TLS ClientHello row",
+      );
+      if (!/SNI/i.test(detail.text))
+        fail(`TLS ClientHello missing SNI (idx ${expanded.idx}): text=${detail.text.slice(0, 400)}`);
+      else {
+        v0112.tlsSni = true;
+        console.log("tls ClientHello dissection: PASS", JSON.stringify({ name: expanded.name, layers: detail.layers }));
+      }
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+    } catch (err) {
+      fail(`tls ClientHello dissection phase: ${err?.message ?? err}`);
+      v0112.tlsSni = false;
+    }
+
+    try {
+      const { expanded, detail } = await expandProtoRow(
+        `proto === "LLDP"`,
+        "LLDP row",
+      );
+      if (!/System Name/i.test(detail.text))
+        fail(`LLDP missing System Name (idx ${expanded.idx}): text=${detail.text.slice(0, 400)}`);
+      else {
+        v0112.lldpSysName = true;
+        console.log("lldp dissection: PASS", JSON.stringify({ name: expanded.name, layers: detail.layers }));
+      }
+      await session.eval(COLLAPSE_EXPANDED_PROBE);
+    } catch (err) {
+      fail(`lldp dissection phase: ${err?.message ?? err}`);
+      v0112.lldpSysName = false;
+    }
+
+    // No-malformed sweep across every class token present in the ring.
+    try {
+      const sweep = {};
+      let anyFail = false;
+      for (const proto of ALL_CLASS_TOKENS) {
+        await session.eval(COLLAPSE_EXPANDED_PROBE);
+        const found = await session.eval(PROTO_EXPAND_PROBE(proto));
+        if (!found || !found.ok) {
+          sweep[proto] = "absent";
+          continue;
+        }
+        const dissected = await waitFor(async () => {
+          const d = await session.eval(DISSECT_TEXT_PROBE);
+          return d && !d.empty && d.layerCount >= 1 ? d : null;
+        }, 10_000, `${proto} all-class dissection`).catch(() => null);
+        if (!dissected) {
+          sweep[proto] = "no-panel";
+          anyFail = true;
+          fail(`${proto} all-class sweep: dissection panel missing`);
+          continue;
+        }
+        const hasMalformed = /malformed/i.test(dissected.text);
+        sweep[proto] = hasMalformed ? "malformed" : "ok";
+        if (hasMalformed) {
+          anyFail = true;
+          fail(`${proto} all-class sweep contained "malformed" (idx ${found.idx})`);
+        }
+        await session.eval(COLLAPSE_EXPANDED_PROBE);
+      }
+      v0112.noMalformedAll = !anyFail;
+      console.log("no-malformed (all class tokens):", JSON.stringify(sweep));
+    } catch (err) {
+      fail(`all-class no-malformed phase: ${err?.message ?? err}`);
+      v0112.noMalformedAll = false;
+    }
+    console.log("v0.1.12 spot checks:", JSON.stringify(v0112));
 
     // v0.1.6 phases — each is isolated so a missing Rust command/fixture
     // reports its own FAIL without skipping the rest of the report.

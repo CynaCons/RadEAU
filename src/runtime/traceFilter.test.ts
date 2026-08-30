@@ -14,12 +14,19 @@ import {
   windowSequentialFiltered,
 } from "./traceFilter";
 import {
+  DNS_TY_QUERY,
   DOIP_TY_DIAG,
   DOIP_TY_VEHICLE_ANNOUNCE,
+  HTTP_TY_REQUEST,
+  PROTO_DNS,
   PROTO_DOIP,
   PROTO_GPTP,
+  PROTO_HTTP,
+  PROTO_ICMPV6,
+  PROTO_LLDP,
   PROTO_SD,
   PROTO_SOMEIP,
+  PROTO_TLS,
 } from "./wireCodes";
 
 function row(
@@ -44,6 +51,7 @@ function row(
     m: 0x8001,
     srcEp: 0,
     ty: 0,
+    se: -1,
     sa: 0,
     da: 0,
     sm: 0,
@@ -439,5 +447,106 @@ describe("serviceMethodId / nameFilterId", () => {
     };
     expect(matches(announce, nameFilter)).toBe(true);
     expect(matches(diag, nameFilter)).toBe(false);
+  });
+
+  it("keys §7 Name filters by p:ty (plus :se for DNS/HTTP/TLS)", () => {
+    const ra = row({
+      id: 10,
+      protocol: "ICMPv6",
+      source: "router",
+      key: "12:1:134",
+      proto: PROTO_ICMPV6,
+      ty: 134,
+      se: 0,
+      name: "Router Advertisement",
+      serviceMethod: "--",
+      sv: 0,
+      m: 0,
+    });
+    const dnsA = row({
+      id: 11,
+      protocol: "DNS",
+      source: "host",
+      key: "15:1:53>2:53",
+      proto: PROTO_DNS,
+      ty: DNS_TY_QUERY,
+      se: 1,
+      name: "DNS query · A",
+      serviceMethod: "53:53",
+      sv: 53,
+      m: 53,
+    });
+    const dnsPtr = row({
+      id: 12,
+      protocol: "DNS",
+      source: "host",
+      key: "15:1:53>2:53",
+      proto: PROTO_DNS,
+      ty: DNS_TY_QUERY,
+      se: 12,
+      name: "DNS query · PTR",
+      serviceMethod: "53:53",
+      sv: 53,
+      m: 53,
+    });
+    const httpGet = row({
+      id: 13,
+      protocol: "HTTP",
+      source: "host",
+      key: "23:1:1>2:80",
+      proto: PROTO_HTTP,
+      ty: HTTP_TY_REQUEST,
+      se: 1,
+      name: "HTTP GET",
+      serviceMethod: "51234:80",
+      sv: 51234,
+      m: 80,
+    });
+    const tlsHello = row({
+      id: 14,
+      protocol: "TLS",
+      source: "host",
+      key: "24:1:1>2:443",
+      proto: PROTO_TLS,
+      ty: 22,
+      se: 1,
+      name: "TLS ClientHello",
+      serviceMethod: "51234:443",
+      sv: 51234,
+      m: 443,
+    });
+    const lldp = row({
+      id: 15,
+      protocol: "LLDP",
+      source: "switch",
+      key: `19:1`,
+      proto: PROTO_LLDP,
+      ty: 0,
+      se: -1,
+      name: "LLDP",
+      serviceMethod: "--",
+      sv: 0,
+      m: 0,
+    });
+
+    expect(nameFilterId(ra)).toBe(`${PROTO_ICMPV6}:134`);
+    expect(nameFilterId(dnsA)).toBe(`${PROTO_DNS}:${DNS_TY_QUERY}:1`);
+    expect(nameFilterId(dnsPtr)).toBe(`${PROTO_DNS}:${DNS_TY_QUERY}:12`);
+    expect(nameFilterId(httpGet)).toBe(`${PROTO_HTTP}:${HTTP_TY_REQUEST}:1`);
+    expect(nameFilterId(tlsHello)).toBe(`${PROTO_TLS}:22:1`);
+    expect(nameFilterId(lldp)).toBe(`${PROTO_LLDP}:0`);
+
+    const names = distinctValues([dnsA, dnsPtr, dnsA, tlsHello], "name");
+    expect(names.map((o) => o.key).sort()).toEqual(
+      [
+        `${PROTO_DNS}:${DNS_TY_QUERY}:1`,
+        `${PROTO_DNS}:${DNS_TY_QUERY}:12`,
+        `${PROTO_TLS}:22:1`,
+      ].sort(),
+    );
+    expect(names.find((o) => o.key === `${PROTO_DNS}:${DNS_TY_QUERY}:1`)?.label).toBe(
+      "DNS query · A",
+    );
+    expect(names.find((o) => o.key === `${PROTO_TLS}:22:1`)?.label).toBe("TLS ClientHello");
   });
 });

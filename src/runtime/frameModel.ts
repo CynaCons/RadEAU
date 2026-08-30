@@ -12,8 +12,15 @@
 import {
   ARP_TY_REPLY,
   ARP_TY_REQUEST,
+  DHCP_TY_V6_OFFSET,
   DIR_RX,
   DIR_TX,
+  DNS_TY_LLMNR_QUERY,
+  DNS_TY_LLMNR_RESPONSE,
+  DNS_TY_MDNS_QUERY,
+  DNS_TY_MDNS_RESPONSE,
+  DNS_TY_QUERY,
+  DNS_TY_RESPONSE,
   DOIP_TY_ALIVE_REQ,
   DOIP_TY_ALIVE_RES,
   DOIP_TY_DIAG,
@@ -39,17 +46,36 @@ import {
   GPTP_TY_PDELAY_RESP_FOLLOW_UP,
   GPTP_TY_SIGNALING,
   GPTP_TY_SYNC,
+  HTTP_TY_REQUEST,
+  HTTP_TY_RESPONSE,
   PROTO_ARP,
+  PROTO_AVTP,
+  PROTO_DHCP,
+  PROTO_DNS,
   PROTO_DOIP,
+  PROTO_EAPOL,
   PROTO_GPTP,
+  PROTO_HTTP,
   PROTO_ICMP,
+  PROTO_ICMPV6,
+  PROTO_IGMP,
   PROTO_IPV4_OTHER,
   PROTO_IPV6,
+  PROTO_LLDP,
+  PROTO_MACSEC,
   PROTO_MALFORMED,
+  PROTO_NTP,
   PROTO_OTHER,
+  PROTO_PTP,
+  PROTO_SCTP,
   PROTO_SD,
+  PROTO_SNMP,
   PROTO_SOMEIP,
+  PROTO_SSDP,
+  PROTO_SSH,
   PROTO_TCP,
+  PROTO_TFTP,
+  PROTO_TLS,
   PROTO_UDP,
   SD_TY_EMPTY,
   SD_TY_FIND,
@@ -64,6 +90,11 @@ import {
   SOMEIP_TY_REQUEST,
   SOMEIP_TY_REQUEST_NO_RETURN,
   SOMEIP_TY_RESPONSE,
+  SSDP_TY_MSEARCH,
+  SSDP_TY_NOTIFY,
+  SSDP_TY_RESPONSE,
+  SSH_TY_BANNER,
+  SSH_TY_PACKET,
   protoLabel,
 } from "./wireCodes";
 
@@ -96,6 +127,8 @@ export interface TraceFrame {
   /** Endpoint index from the batch `s` column. */
   srcEp: number;
   ty: number;
+  /** Session id (SOME/IP) or secondary id (§7: qtype, status, handshake…). */
+  se: number;
   sa: number;
   da: number;
   sm: number;
@@ -321,6 +354,325 @@ function isDoipDiagnostic(ty: number): boolean {
   return ty === DOIP_TY_DIAG || ty === DOIP_TY_DIAG_ACK || ty === DOIP_TY_DIAG_NACK;
 }
 
+/** ICMPv6 type names (SRS_protocols §7). */
+export const ICMPV6_TYPE_NAMES: Readonly<Record<number, string>> = {
+  1: "Destination Unreachable",
+  2: "Packet Too Big",
+  3: "Time Exceeded",
+  4: "Parameter Problem",
+  128: "Echo Request",
+  129: "Echo Reply",
+  130: "MLD Query",
+  131: "MLD Report",
+  132: "MLD Done",
+  133: "Router Solicitation",
+  134: "Router Advertisement",
+  135: "Neighbor Solicitation",
+  136: "Neighbor Advertisement",
+  137: "Redirect",
+  143: "MLDv2 Report",
+};
+
+/** IGMP type names (wire type byte). */
+export const IGMP_TYPE_NAMES: Readonly<Record<number, string>> = {
+  0x11: "Membership Query",
+  0x12: "v1 Report",
+  0x16: "v2 Report",
+  0x17: "Leave Group",
+  0x22: "v3 Report",
+};
+
+/** DHCPv4 option-53 message kinds. */
+export const DHCP_V4_TYPE_NAMES: Readonly<Record<number, string>> = {
+  1: "Discover",
+  2: "Offer",
+  3: "Request",
+  4: "Decline",
+  5: "Ack",
+  6: "Nak",
+  7: "Release",
+  8: "Inform",
+};
+
+/** DHCPv6 message types (ty − DHCP_TY_V6_OFFSET). */
+export const DHCP_V6_TYPE_NAMES: Readonly<Record<number, string>> = {
+  1: "Solicit",
+  2: "Advertise",
+  3: "Request",
+  4: "Confirm",
+  5: "Renew",
+  6: "Rebind",
+  7: "Reply",
+  8: "Release",
+  9: "Decline",
+  10: "Reconfigure",
+  11: "Information-request",
+};
+
+/** DNS / mDNS / LLMNR first-question type names (`se`). */
+export const DNS_QTYPE_NAMES: Readonly<Record<number, string>> = {
+  1: "A",
+  2: "NS",
+  5: "CNAME",
+  6: "SOA",
+  12: "PTR",
+  15: "MX",
+  16: "TXT",
+  28: "AAAA",
+  33: "SRV",
+  255: "ANY",
+  257: "CAA",
+};
+
+/** DNS response code names (`se` when ty is a response). */
+export const DNS_RCODE_NAMES: Readonly<Record<number, string>> = {
+  0: "NoError",
+  1: "FormErr",
+  2: "ServFail",
+  3: "NXDomain",
+  4: "NotImp",
+  5: "Refused",
+};
+
+/** NTP mode names (`ty`). */
+export const NTP_MODE_NAMES: Readonly<Record<number, string>> = {
+  1: "symmetric",
+  2: "symmetric",
+  3: "client",
+  4: "server",
+  5: "broadcast",
+  6: "control",
+  7: "private",
+};
+
+/** AVTP subtype names (`ty`). */
+export const AVTP_SUBTYPE_NAMES: Readonly<Record<number, string>> = {
+  0x00: "61883/IIDC",
+  0x01: "MMA",
+  0x02: "AAF",
+  0x03: "CVF",
+  0x04: "CRF",
+  0x05: "TSCF",
+  0x06: "SVF",
+  0x07: "RVF",
+  0x6e: "AEF",
+  0x7a: "control/ACF",
+  0x7f: "VSF",
+};
+
+/** EAPOL packet-type names (`ty`). */
+export const EAPOL_TYPE_NAMES: Readonly<Record<number, string>> = {
+  0: "EAP",
+  1: "Start",
+  2: "Logoff",
+  3: "Key",
+  4: "ASF-Alert",
+};
+
+/** HTTP request method codes (`se` when ty = request). */
+export const HTTP_METHOD_NAMES: Readonly<Record<number, string>> = {
+  0: "other",
+  1: "GET",
+  2: "POST",
+  3: "PUT",
+  4: "DELETE",
+  5: "HEAD",
+  6: "OPTIONS",
+  7: "PATCH",
+};
+
+/** TLS content-type names (`ty`). */
+export const TLS_CONTENT_TYPE_NAMES: Readonly<Record<number, string>> = {
+  20: "ChangeCipherSpec",
+  21: "Alert",
+  22: "Handshake",
+  23: "Application Data",
+};
+
+/** TLS handshake-type names (`se` when content type is Handshake). */
+export const TLS_HANDSHAKE_TYPE_NAMES: Readonly<Record<number, string>> = {
+  0: "HelloRequest",
+  1: "ClientHello",
+  2: "ServerHello",
+  11: "Certificate",
+  12: "ServerKeyExchange",
+  13: "CertificateRequest",
+  14: "ServerHelloDone",
+  15: "CertificateVerify",
+  16: "ClientKeyExchange",
+  20: "Finished",
+};
+
+/** SCTP first-chunk type names (`ty`). */
+export const SCTP_CHUNK_NAMES: Readonly<Record<number, string>> = {
+  0: "DATA",
+  1: "INIT",
+  2: "INIT ACK",
+  3: "SACK",
+  4: "HEARTBEAT",
+  5: "HEARTBEAT ACK",
+  6: "ABORT",
+  7: "SHUTDOWN",
+  8: "SHUTDOWN ACK",
+  9: "ERROR",
+  10: "COOKIE ECHO",
+  11: "COOKIE ACK",
+  12: "ECNE",
+  13: "CWR",
+  14: "SHUTDOWN COMPLETE",
+};
+
+/** TFTP opcode names (`ty`). */
+export const TFTP_OPCODE_NAMES: Readonly<Record<number, string>> = {
+  1: "RRQ",
+  2: "WRQ",
+  3: "DATA",
+  4: "ACK",
+  5: "ERROR",
+  6: "OACK",
+};
+
+/** SNMP PDU type names (`ty`, BER tags 0xA0..0xA7). */
+export const SNMP_PDU_NAMES: Readonly<Record<number, string>> = {
+  0xa0: "GetRequest",
+  0xa1: "GetNextRequest",
+  0xa2: "Response",
+  0xa3: "SetRequest",
+  0xa4: "Trap",
+  0xa5: "GetBulk",
+  0xa6: "Inform",
+  0xa7: "TrapV2",
+};
+
+function lookupName(table: Readonly<Record<number, string>>, code: number, fallback: string): string {
+  return table[code] ?? fallback;
+}
+
+function icmpv6TypeName(ty: number): string {
+  return lookupName(ICMPV6_TYPE_NAMES, ty, `Type ${ty}`);
+}
+
+function igmpTypeName(ty: number): string {
+  return lookupName(IGMP_TYPE_NAMES, ty, `Type ${ty}`);
+}
+
+function dhcpKindName(ty: number): string {
+  if (ty >= DHCP_TY_V6_OFFSET) {
+    const v6 = ty - DHCP_TY_V6_OFFSET;
+    const kind = lookupName(DHCP_V6_TYPE_NAMES, v6, String(v6));
+    return `DHCPv6 ${kind}`;
+  }
+  const kind = lookupName(DHCP_V4_TYPE_NAMES, ty, String(ty));
+  return `DHCP ${kind}`;
+}
+
+function dnsFlavor(ty: number): { flavor: string; response: boolean } {
+  switch (ty) {
+    case DNS_TY_QUERY:
+      return { flavor: "DNS", response: false };
+    case DNS_TY_RESPONSE:
+      return { flavor: "DNS", response: true };
+    case DNS_TY_MDNS_QUERY:
+      return { flavor: "mDNS", response: false };
+    case DNS_TY_MDNS_RESPONSE:
+      return { flavor: "mDNS", response: true };
+    case DNS_TY_LLMNR_QUERY:
+      return { flavor: "LLMNR", response: false };
+    case DNS_TY_LLMNR_RESPONSE:
+      return { flavor: "LLMNR", response: true };
+    default:
+      return { flavor: "DNS", response: false };
+  }
+}
+
+function dnsQtypeName(se: number): string {
+  if (se < 0) return String(se);
+  return lookupName(DNS_QTYPE_NAMES, se, String(se));
+}
+
+function dnsRcodeName(se: number): string {
+  if (se < 0) return String(se);
+  return lookupName(DNS_RCODE_NAMES, se, String(se));
+}
+
+function ntpModeName(ty: number): string {
+  return lookupName(NTP_MODE_NAMES, ty, `mode ${ty}`);
+}
+
+function ssdpKindName(ty: number): string {
+  switch (ty) {
+    case SSDP_TY_MSEARCH:
+      return "M-SEARCH";
+    case SSDP_TY_NOTIFY:
+      return "NOTIFY";
+    case SSDP_TY_RESPONSE:
+      return "response";
+    default:
+      return `Type ${ty}`;
+  }
+}
+
+function avtpSubtypeName(ty: number): string {
+  return lookupName(AVTP_SUBTYPE_NAMES, ty, `subtype ${ty}`);
+}
+
+function eapolTypeName(ty: number): string {
+  return lookupName(EAPOL_TYPE_NAMES, ty, `Type ${ty}`);
+}
+
+function httpMethodName(se: number): string {
+  return lookupName(HTTP_METHOD_NAMES, se, String(se));
+}
+
+function tlsContentTypeName(ty: number): string {
+  return lookupName(TLS_CONTENT_TYPE_NAMES, ty, `Type ${ty}`);
+}
+
+function tlsHandshakeTypeName(se: number): string {
+  return lookupName(TLS_HANDSHAKE_TYPE_NAMES, se, `handshake ${se}`);
+}
+
+function sctpChunkName(ty: number): string {
+  return lookupName(SCTP_CHUNK_NAMES, ty, `chunk ${ty}`);
+}
+
+function tftpOpcodeName(ty: number): string {
+  return lookupName(TFTP_OPCODE_NAMES, ty, `opcode ${ty}`);
+}
+
+function snmpPduName(ty: number): string {
+  return lookupName(SNMP_PDU_NAMES, ty, `PDU ${ty}`);
+}
+
+/** Application classes over UDP/TCP: Service:Method is source:dest ports. */
+function appPorts(sv: number, m: number): string {
+  return `${sv}:${m}`;
+}
+
+/** True when `se` is a secondary id (not a SOME/IP session). */
+function sessionIsSecondary(proto: number): boolean {
+  return (
+    proto === PROTO_DOIP ||
+    proto === PROTO_ICMPV6 ||
+    proto === PROTO_DHCP ||
+    proto === PROTO_DNS ||
+    proto === PROTO_NTP ||
+    proto === PROTO_HTTP ||
+    proto === PROTO_TLS ||
+    proto === PROTO_IGMP ||
+    proto === PROTO_SSDP ||
+    proto === PROTO_PTP ||
+    proto === PROTO_LLDP ||
+    proto === PROTO_AVTP ||
+    proto === PROTO_MACSEC ||
+    proto === PROTO_EAPOL ||
+    proto === PROTO_SSH ||
+    proto === PROTO_SCTP ||
+    proto === PROTO_TFTP ||
+    proto === PROTO_SNMP
+  );
+}
+
 /**
  * Catalog-first SOME/IP name. Unknown ids stay honest as `Service 0x…`
  * when the catalog is loaded; otherwise the static SERVICES table fills in.
@@ -384,6 +736,29 @@ export function frameKey(batch: FrameBatchRaw, k: number): string {
     }
     case PROTO_MALFORMED:
       return `11:${sm}`;
+    // SRS_protocols §7 Fixed-mode keys.
+    case PROTO_ICMPV6:
+    case PROTO_IGMP:
+      return `${p}:${addr}:${ty}`;
+    case PROTO_DHCP:
+    case PROTO_DNS:
+    case PROTO_NTP:
+    case PROTO_SSDP:
+    case PROTO_HTTP:
+    case PROTO_TLS:
+    case PROTO_SSH:
+    case PROTO_SCTP:
+    case PROTO_TFTP:
+    case PROTO_SNMP:
+      return `${p}:${sa}:${sv}>${da}:${m}`;
+    case PROTO_PTP:
+      return `${p}:${addr}:${ty}`;
+    case PROTO_LLDP:
+    case PROTO_MACSEC:
+    case PROTO_EAPOL:
+      return `${p}:${sm}`;
+    case PROTO_AVTP:
+      return `${p}:${sm}:${ty}`;
     default:
       return `${p}:${addr}`;
   }
@@ -584,6 +959,179 @@ function classDisplay(
         name: `runt · ${len} bytes`,
         type: "",
       };
+    case PROTO_ICMPV6: {
+      const kind = icmpv6TypeName(ty);
+      return {
+        protocol,
+        serviceMethod: "--",
+        name: kind,
+        type: String(se),
+      };
+    }
+    case PROTO_IGMP: {
+      const kind = igmpTypeName(ty);
+      return { protocol, serviceMethod: "--", name: kind, type: kind };
+    }
+    case PROTO_DHCP: {
+      const kind = dhcpKindName(ty);
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name: kind,
+        type: "--",
+      };
+    }
+    case PROTO_DNS: {
+      const { flavor, response } = dnsFlavor(ty);
+      const secondary = response ? dnsRcodeName(se) : dnsQtypeName(se);
+      const kind = response ? "response" : "query";
+      // Unknown DNS_TY_* still renders a stable label with the raw ty.
+      const known =
+        ty === DNS_TY_QUERY ||
+        ty === DNS_TY_RESPONSE ||
+        ty === DNS_TY_MDNS_QUERY ||
+        ty === DNS_TY_MDNS_RESPONSE ||
+        ty === DNS_TY_LLMNR_QUERY ||
+        ty === DNS_TY_LLMNR_RESPONSE;
+      const name = known
+        ? `${flavor} ${kind} · ${secondary}`
+        : `DNS Type ${ty} · ${secondary}`;
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name,
+        type: secondary,
+      };
+    }
+    case PROTO_NTP: {
+      const mode = ntpModeName(ty);
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name: `NTP ${mode} · stratum ${se}`,
+        type: `stratum ${se}`,
+      };
+    }
+    case PROTO_SSDP: {
+      const kind = ssdpKindName(ty);
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name: `SSDP ${kind}`,
+        type: kind,
+      };
+    }
+    case PROTO_PTP: {
+      const ptpTy = gptpTypeLabel(ty);
+      return {
+        protocol,
+        serviceMethod: "--",
+        name: `PTP ${ptpTy} · domain ${sv}`,
+        type: `domain ${sv}`,
+      };
+    }
+    case PROTO_LLDP:
+      return { protocol, serviceMethod: "--", name: "LLDP", type: "--" };
+    case PROTO_AVTP: {
+      const subtype = avtpSubtypeName(ty);
+      return {
+        protocol,
+        serviceMethod: "--",
+        name: `AVTP ${subtype}`,
+        type: subtype,
+      };
+    }
+    case PROTO_MACSEC: {
+      const name = `MACsec · AN ${ty}`;
+      return { protocol, serviceMethod: "--", name, type: `AN ${ty}` };
+    }
+    case PROTO_EAPOL: {
+      const kind = eapolTypeName(ty);
+      return {
+        protocol,
+        serviceMethod: "--",
+        name: `EAPOL ${kind}`,
+        type: kind,
+      };
+    }
+    case PROTO_HTTP: {
+      if (ty === HTTP_TY_REQUEST) {
+        const method = httpMethodName(se);
+        return {
+          protocol,
+          serviceMethod: appPorts(sv, m),
+          name: `HTTP ${method}`,
+          type: method,
+        };
+      }
+      if (ty === HTTP_TY_RESPONSE) {
+        const status = se < 0 ? String(se) : String(se);
+        return {
+          protocol,
+          serviceMethod: appPorts(sv, m),
+          name: `HTTP ${status}`,
+          type: status,
+        };
+      }
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name: `HTTP Type ${ty}`,
+        type: String(ty),
+      };
+    }
+    case PROTO_TLS: {
+      // Prefer handshake-type name when present (ClientHello, Certificate…).
+      const name =
+        ty === 22 && se >= 0
+          ? `TLS ${tlsHandshakeTypeName(se)}`
+          : `TLS ${tlsContentTypeName(ty)}`;
+      const typeLabel =
+        ty === 22 && se >= 0 ? tlsHandshakeTypeName(se) : tlsContentTypeName(ty);
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name,
+        type: typeLabel,
+      };
+    }
+    case PROTO_SSH: {
+      const kind =
+        ty === SSH_TY_BANNER ? "banner" : ty === SSH_TY_PACKET ? "packet" : `Type ${ty}`;
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name: `SSH ${kind}`,
+        type: kind,
+      };
+    }
+    case PROTO_SCTP: {
+      const chunk = sctpChunkName(ty);
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name: `SCTP ${chunk}`,
+        type: chunk,
+      };
+    }
+    case PROTO_TFTP: {
+      const opcode = tftpOpcodeName(ty);
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name: `TFTP ${opcode}`,
+        type: opcode,
+      };
+    }
+    case PROTO_SNMP: {
+      const pdu = snmpPduName(ty);
+      return {
+        protocol,
+        serviceMethod: appPorts(sv, m),
+        name: `SNMP ${pdu}`,
+        type: pdu,
+      };
+    }
     default:
       return { protocol, serviceMethod: "--", name: "", type: "" };
   }
@@ -639,8 +1187,8 @@ export function projectRow(
     serviceMethod,
     name,
     type,
-    // DoIP reuses `se` for the UDS SID; Session stays blank for that class.
-    session: proto === PROTO_DOIP || se < 0 ? "--" : String(se),
+    // DoIP / §7 classes reuse `se` for a secondary id; Session stays blank.
+    session: sessionIsSecondary(proto) || se < 0 ? "--" : String(se),
     length: String(len),
     payload: payloadPreview(batch.pb[k], len, po),
     deltaGlobal: prevT === null ? "--" : (t - prevT).toFixed(4),
@@ -652,6 +1200,7 @@ export function projectRow(
     m,
     srcEp,
     ty,
+    se,
     sa,
     da,
     sm,
