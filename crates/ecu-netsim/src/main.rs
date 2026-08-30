@@ -5,6 +5,7 @@
 //! supplied seed; monitor clients use bounded, independent writer queues.
 
 mod diagnostic;
+mod standard_traffic;
 
 use radeau_catalog::{BaseType, Catalog, Signal};
 use radeau_proto::{
@@ -252,6 +253,7 @@ where
     let mut arp_node = 0usize;
     let mut frames = 0u64;
     let mut diagnostic = diagnostic::DiagnosticSession::default();
+    let mut standard = standard_traffic::StandardTraffic::default();
     let mut send = |record: Record| -> io::Result<()> {
         emit(record)?;
         frames += 1;
@@ -263,6 +265,13 @@ where
     for time_ms in 0..=duration_ms {
         let time = time_ms.saturating_mul(1_000_000);
         for scheduled in diagnostic.frames_at(time_ms, &mut ident) {
+            send(Record {
+                time,
+                port: scheduled.port,
+                frame: scheduled.frame,
+            })?;
+        }
+        for scheduled in standard.frames_at(time_ms, &mut ident) {
             send(Record {
                 time,
                 port: scheduled.port,
@@ -498,6 +507,7 @@ fn run(
     let mut rng = seed;
     let mut ident = 1;
     let mut diagnostic = diagnostic::DiagnosticSession::default();
+    let mut standard = standard_traffic::StandardTraffic::default();
     let mut diagnostic_ms = 0u64;
     while running.load(Ordering::Relaxed) {
         accept(&listener, &mut clients);
@@ -505,6 +515,17 @@ fn run(
         let elapsed_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
         while diagnostic_ms <= elapsed_ms {
             for scheduled in diagnostic.frames_at(diagnostic_ms, &mut ident) {
+                emit(
+                    &mut clients,
+                    &mut udp,
+                    Record {
+                        time: diagnostic_ms.saturating_mul(1_000_000),
+                        port: scheduled.port,
+                        frame: scheduled.frame,
+                    },
+                );
+            }
+            for scheduled in standard.frames_at(diagnostic_ms, &mut ident) {
                 emit(
                     &mut clients,
                     &mut udp,
@@ -1060,7 +1081,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(count, 2_071);
+        assert_eq!(count, 12_113);
         assert_eq!(records.len() as u64, count);
         assert!(records.windows(2).all(|pair| pair[0].time <= pair[1].time));
         assert_eq!(records.first().unwrap().time, 0);
@@ -1071,6 +1092,17 @@ mod tests {
         let mut saw_vlan_lidar = false;
         let mut saw_icmpv6 = false;
         let mut saw_runt = false;
+        let mut avtp = 0;
+        let mut lldp = 0;
+        let mut ndp = [0; 4];
+        let mut dhcp6 = 0;
+        let mut mdns = 0;
+        let mut dhcp4 = 0;
+        let mut ntp = 0;
+        let mut ptp_sync = 0;
+        let mut ptp_announce = 0;
+        let mut http = 0;
+        let mut tls = 0;
         for record in records {
             ports[usize::from(record.port - 1)] = true;
             if record.frame.len() < 14 {
@@ -1082,9 +1114,77 @@ mod tests {
             saw_vlan_lidar |=
                 record.port == 3 && ethernet.vlan.map(|tag| (tag.vid, tag.pcp)) == Some((10, 5));
             saw_icmpv6 |= ethernet.ethertype == radeau_proto::ethernet::ETHERTYPE_IPV6;
+            match ethernet.ethertype {
+                radeau_proto::avtp::ETHERTYPE => {
+                    radeau_proto::avtp::parse(ethernet.payload).unwrap();
+                    avtp += 1;
+                }
+                radeau_proto::lldp::ETHERTYPE => {
+                    radeau_proto::lldp::parse(ethernet.payload).unwrap();
+                    lldp += 1;
+                }
+                radeau_proto::ethernet::ETHERTYPE_IPV6 => {
+                    let ip = Ipv6Packet::parse(ethernet.payload).unwrap();
+                    match ip.next_header {
+                        58 => {
+                            assert!(radeau_proto::icmpv6::checksum_ok(
+                                &ip.src, &ip.dst, ip.payload
+                            ));
+                            match ip.payload[0] {
+                                kind @ 133..=136 => ndp[usize::from(kind - 133)] += 1,
+                                other => panic!("unexpected ICMPv6 type {other}"),
+                            }
+                        }
+                        17 => {
+                            let udp = UdpDatagram::parse(ip.payload).unwrap();
+                            assert_eq!((udp.src_port, udp.dst_port), (546, 547));
+                            dhcp6 += 1;
+                        }
+                        other => panic!("unexpected IPv6 next header {other}"),
+                    }
+                }
+                radeau_proto::ethernet::ETHERTYPE_IPV4 => {
+                    let ip = Ipv4Packet::parse(ethernet.payload).unwrap();
+                    match ip.protocol {
+                        ipv4::PROTOCOL_UDP => {
+                            let udp = UdpDatagram::parse(ip.payload).unwrap();
+                            match (udp.src_port, udp.dst_port) {
+                                (5353, 5353) => mdns += 1,
+                                (67, 68) | (68, 67) => dhcp4 += 1,
+                                (123, 49123) | (49123, 123) => ntp += 1,
+                                (319, 319) => ptp_sync += 1,
+                                (320, 320) => ptp_announce += 1,
+                                _ => {}
+                            }
+                        }
+                        ipv4::PROTOCOL_TCP => {
+                            let tcp = radeau_proto::tcp::TcpSegment::parse(ip.payload).unwrap();
+                            match (tcp.src_port, tcp.dst_port) {
+                                (80, _) | (_, 80) => http += 1,
+                                (443, _) | (_, 443) => tls += 1,
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
         }
         assert!(ports.into_iter().all(|seen| seen));
         assert!(saw_arp && saw_vlan_lidar && saw_icmpv6 && saw_runt);
+        assert_eq!(avtp, 10_001);
+        assert_eq!(lldp, 1);
+        // Three RS frames: startup plus the legacy 5 s cadence; one each RA/NS/NA.
+        assert_eq!(ndp, [3, 1, 1, 1]);
+        assert_eq!(dhcp6, 1);
+        assert_eq!(mdns, 2);
+        assert_eq!(dhcp4, 4);
+        assert_eq!(ntp, 2);
+        assert_eq!(ptp_sync, 11);
+        assert_eq!(ptp_announce, 6);
+        assert_eq!(http, 5);
+        assert_eq!(tls, 5);
     }
 
     #[test]
@@ -1139,15 +1239,39 @@ mod tests {
             assert!((1..=6).contains(&u16::from_be_bytes([body[8], body[9]])));
             assert_eq!(body[10], 0);
 
+            if body[11..].len() < 14 {
+                assert_eq!(&body[11..], runt_frame());
+                continue;
+            }
             let ethernet = EthernetFrame::parse(&body[11..]).unwrap();
             match ethernet.ethertype {
                 radeau_proto::ethernet::ETHERTYPE_IPV4 => {
                     let ip = Ipv4Packet::parse(ethernet.payload).unwrap();
-                    assert_eq!(ip.protocol, ipv4::PROTOCOL_UDP);
                     assert_eq!(
                         radeau_proto::internet_checksum(&[&ethernet.payload[..20]]),
                         0
                     );
+                    if ip.protocol == ipv4::PROTOCOL_TCP {
+                        let length = (ip.payload.len() as u16).to_be_bytes();
+                        let pseudo = [
+                            ip.src[0],
+                            ip.src[1],
+                            ip.src[2],
+                            ip.src[3],
+                            ip.dst[0],
+                            ip.dst[1],
+                            ip.dst[2],
+                            ip.dst[3],
+                            0,
+                            ipv4::PROTOCOL_TCP,
+                            length[0],
+                            length[1],
+                        ];
+                        assert_eq!(radeau_proto::internet_checksum(&[&pseudo, ip.payload]), 0);
+                        radeau_proto::tcp::TcpSegment::parse(ip.payload).unwrap();
+                        continue;
+                    }
+                    assert_eq!(ip.protocol, ipv4::PROTOCOL_UDP);
                     let pseudo = [
                         ip.src[0],
                         ip.src[1],
@@ -1171,6 +1295,18 @@ mod tests {
                         assert_eq!(&udp.payload[..4], &[0x02, 0xfd, 0x00, 0x04]);
                         continue;
                     }
+                    if matches!(
+                        (udp.src_port, udp.dst_port),
+                        (5353, 5353)
+                            | (67, 68)
+                            | (68, 67)
+                            | (123, 49123)
+                            | (49123, 123)
+                            | (319, 319)
+                            | (320, 320)
+                    ) {
+                        continue;
+                    }
                     let (someip, payload) = someip::parse(udp.payload).unwrap();
                     if someip.service_id == someip::SD_SERVICE_ID {
                         assert_eq!((udp.src_port, udp.dst_port), (30490, 30490));
@@ -1189,11 +1325,33 @@ mod tests {
                         saw_event = true;
                     }
                 }
+                radeau_proto::ethernet::ETHERTYPE_IPV6 => {
+                    let ip = Ipv6Packet::parse(ethernet.payload).unwrap();
+                    match ip.next_header {
+                        58 => assert!(radeau_proto::icmpv6::checksum_ok(
+                            &ip.src, &ip.dst, ip.payload
+                        )),
+                        17 => {
+                            let udp = UdpDatagram::parse(ip.payload).unwrap();
+                            assert_eq!((udp.src_port, udp.dst_port), (546, 547));
+                        }
+                        other => panic!("unexpected IPv6 next header {other}"),
+                    }
+                }
                 gptp::ETHERTYPE_GPTP => match gptp::parse(ethernet.payload).unwrap().msg_type {
                     gptp::MSG_SYNC => saw_sync = true,
                     gptp::MSG_FOLLOW_UP => saw_follow_up = true,
                     other => panic!("unexpected gPTP message type {other}"),
                 },
+                radeau_proto::avtp::ETHERTYPE => {
+                    radeau_proto::avtp::parse(ethernet.payload).unwrap();
+                }
+                radeau_proto::lldp::ETHERTYPE => {
+                    radeau_proto::lldp::parse(ethernet.payload).unwrap();
+                }
+                radeau_proto::ethernet::ETHERTYPE_ARP => {
+                    ArpPacket::parse(ethernet.payload).unwrap();
+                }
                 other => panic!("unexpected EtherType {other:#06x}"),
             }
             if saw_event && saw_offer && saw_sync && saw_follow_up {
