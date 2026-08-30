@@ -17,6 +17,7 @@ use crate::frame::{GenFrame, SNAP_LEN};
 use radeau_proto::ethernet::{self, EthernetFrame};
 use radeau_proto::ipv4::{self, Ipv4Packet};
 use radeau_proto::udp::{self, UdpDatagram};
+use radeau_proto::{gptp, sd, someip};
 
 const UDP_PORT_SOMEIP: u16 = 30490;
 const IP_IDENT_MASK: u16 = 0xffff;
@@ -213,14 +214,33 @@ impl DevGen {
         let src_ip = endpoint_ip(s.src_ep);
         let dst_ip = endpoint_ip(4); // events flow toward the fusion ECU
 
-        let payload: Vec<u8> = (0..payload_len)
+        self.sessions[k] = self.sessions[k].wrapping_add(1);
+        let body: Vec<u8> = (0..payload_len)
             .map(|_| (self.rng.next() & 0xff) as u8)
             .collect();
+        // A real SOME/IP header in front of the random body so the frame
+        // classifies by plausibility like live traffic does.
+        let mut payload = Vec::with_capacity(someip::HEADER_LEN + payload_len);
+        someip::build(
+            &someip::SomeIpHeader {
+                service_id: s.svc,
+                method_id: s.method,
+                length: 0,
+                client_id: 1,
+                session_id: (self.sessions[k] & 0xffff) as u16,
+                protocol_version: 1,
+                interface_version: 1,
+                message_type: someip::MSG_NOTIFICATION,
+                return_code: 0,
+            },
+            &body,
+            &mut payload,
+        );
         // UDP datagram, then IPv4 packet around it, then Ethernet II around
         // that — one clean inside-out pass, exactly how the live path builds.
         wire.clear();
         let mut l3 = Vec::with_capacity(ipv4::Ipv4Packet::encoded_len(
-            udp::UdpDatagram::encoded_len(payload_len),
+            udp::UdpDatagram::encoded_len(payload.len()),
         ));
         UdpDatagram::build(
             src_ip,
@@ -251,7 +271,6 @@ impl DevGen {
         *wire = full;
         self.ip_ident = (self.ip_ident.wrapping_add(7)) & IP_IDENT_MASK | 1;
 
-        self.sessions[k] = self.sessions[k].wrapping_add(1);
         let parsed = project_from_wire(wire);
         GenFrame {
             idx,
@@ -278,10 +297,39 @@ impl DevGen {
         self.sd_cycle = self.sd_cycle.wrapping_add(1);
         let src_ep = s.src_ep;
         let src_ip = endpoint_ip(src_ep);
-        let payload_len = 36;
-        let payload: Vec<u8> = (0..payload_len)
-            .map(|_| (self.rng.next() & 0xff) as u8)
-            .collect();
+        // A real SD OfferService message (SOME/IP 0xFFFF/0x8100 + one
+        // entry) so the frame classifies as SD like live traffic does.
+        let mut sd_payload = Vec::with_capacity(32);
+        sd::build(
+            &sd::SdMessage {
+                flags: 0xc0,
+                entries: vec![sd::SdEntry {
+                    entry_type: sd::ENTRY_OFFER_SERVICE,
+                    service_id: s.svc,
+                    instance_id: 1,
+                    major_version: 1,
+                    ttl: 3,
+                    minor_version: 0,
+                }],
+            },
+            &mut sd_payload,
+        );
+        let mut payload = Vec::with_capacity(someip::HEADER_LEN + sd_payload.len());
+        someip::build(
+            &someip::SomeIpHeader {
+                service_id: someip::SD_SERVICE_ID,
+                method_id: someip::SD_METHOD_ID,
+                length: 0,
+                client_id: 0,
+                session_id: (self.sd_cycle & 0xffff) as u16,
+                protocol_version: 1,
+                interface_version: 1,
+                message_type: someip::MSG_NOTIFICATION,
+                return_code: 0,
+            },
+            &sd_payload,
+            &mut payload,
+        );
         let mut l3 = Vec::with_capacity(64);
         UdpDatagram::build(
             src_ip,
@@ -333,12 +381,20 @@ impl DevGen {
     }
 
     fn gen_gptp_sync(&mut self, idx: u64, t_s: f64, wire: &mut Vec<u8>) -> GenFrame {
-        // gPTP rides directly on Ethernet (EtherType 0x88F7), no IP/UDP.
+        // gPTP rides directly on Ethernet (EtherType 0x88F7), no IP/UDP. A
+        // real Sync header so the frame parses like live traffic does.
         let gm_ep = 0;
-        let payload_len = 30;
-        let payload: Vec<u8> = (0..payload_len)
-            .map(|_| (self.rng.next() & 0xff) as u8)
-            .collect();
+        let mut payload = Vec::with_capacity(gptp::HEADER_LEN + 10);
+        gptp::build(
+            &gptp::GptpMessage {
+                msg_type: gptp::MSG_SYNC,
+                domain: 0,
+                sequence_id: (idx & 0xffff) as u16,
+                correction_ns: 0,
+                origin_timestamp_ns: Some((t_s * 1e9) as u128),
+            },
+            &mut payload,
+        );
         wire.clear();
         EthernetFrame::build(
             SWITCH_MAC,

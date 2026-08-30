@@ -494,7 +494,7 @@ fn classify_udp(
             };
         }
     } else if ports_match(src, dst, &[319, 320]) {
-        if let Ok(p) = gptp::parse(payload) {
+        if let Ok(p) = gptp::parse_any_transport(payload) {
             base.proto = PROTO_PTP;
             base.msg_type = gptp_ty(p.msg_type);
         }
@@ -1009,5 +1009,91 @@ mod tests {
                 "TCP port {port}"
             );
         }
+    }
+
+    /// The dev generator's wire frames must classify as what it says they
+    /// are (SOME/IP, SD, gPTP) — the debug demo path.
+    #[test]
+    fn devgen_wire_frames_classify_as_generated() {
+        let mut gen = crate::devgen::DevGen::new(7);
+        let mut generated = Vec::new();
+        gen.gen_frames_with_wire(200, 500.0, &mut generated);
+        let mut endpoints = EndpointTable::default();
+        for (expected, wire) in &generated {
+            let actual = classify_frame(wire, 0, 0.0, DIR_RX, &mut endpoints);
+            assert_eq!(
+                actual.proto,
+                expected.proto,
+                "devgen frame {:?} reclassified as {:?}",
+                (expected.proto, expected.svc, expected.method),
+                (actual.proto, actual.svc, actual.method)
+            );
+            // gPTP identity columns are domain / sequence id, which the
+            // generator does not project; SOME/IP and SD must match exactly.
+            if expected.proto != PROTO_GPTP {
+                assert_eq!((actual.svc, actual.method), (expected.svc, expected.method));
+            } else {
+                assert_eq!(
+                    actual.msg_type, GPTP_TY_SYNC,
+                    "devgen gPTP must parse as Sync"
+                );
+            }
+        }
+    }
+
+    /// The checked-in simulator fixture must classify into every class the
+    /// demo and the E2E rely on — a regression net for the whole dispatch.
+    #[test]
+    fn fixture_covers_the_demo_classes() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../fixtures/pcap/sensor-fusion-5s.pcap"
+        ))
+        .expect("fixture present");
+        // The reader's input buffer is bounded (SRS_capture §2): feed the
+        // file the way the pcap source does, one bounded chunk at a time.
+        let mut reader = radeau_pcap::PcapReader::new();
+        let mut endpoints = EndpointTable::default();
+        let mut by_class = [0u64; PROTO_CLASS_COUNT];
+        let mut idx = 0;
+        let mut drain = |reader: &mut radeau_pcap::PcapReader| {
+            while let Ok(Some(record)) = reader.next() {
+                let frame = classify_frame(&record.wire, idx, 0.0, DIR_RX, &mut endpoints);
+                by_class[frame.proto as usize] += 1;
+                idx += 1;
+            }
+        };
+        for chunk in bytes.chunks(64 * 1024) {
+            reader.push(chunk);
+            drain(&mut reader);
+        }
+        reader.finish();
+        drain(&mut reader);
+        assert!(idx > 1_000, "fixture frames: {idx}");
+        for (class, name) in [
+            (PROTO_SOMEIP, "SOME/IP"),
+            (PROTO_SD, "SD"),
+            (PROTO_GPTP, "gPTP"),
+            (PROTO_ARP, "ARP"),
+            (PROTO_DOIP, "DoIP"),
+            (PROTO_ICMPV6, "ICMPv6"),
+            (PROTO_DHCP, "DHCP"),
+            (PROTO_DNS, "DNS"),
+            (PROTO_NTP, "NTP"),
+            (PROTO_LLDP, "LLDP"),
+            (PROTO_AVTP, "AVTP"),
+            (PROTO_PTP, "PTP"),
+            (PROTO_HTTP, "HTTP"),
+            (PROTO_TLS, "TLS"),
+        ] {
+            assert!(
+                by_class[class as usize] > 0,
+                "fixture has no {name} frames; by_class = {by_class:?}"
+            );
+        }
+        assert_eq!(
+            by_class[PROTO_UDP as usize], 0,
+            "unclassified UDP in the fixture: {by_class:?}"
+        );
     }
 }

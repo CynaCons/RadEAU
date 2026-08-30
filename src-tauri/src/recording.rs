@@ -418,16 +418,21 @@ fn set_error_opt(slot: &Mutex<Option<String>>, value: Option<String>) {
 
 fn count_frames(path: &std::path::Path) -> Option<u64> {
     let bytes = fs::read(path).ok()?;
+    // The reader's input buffer is bounded — feed it in chunks and drain
+    // between pushes, exactly as the pcap source does.
     let mut reader = radeau_pcap::PcapReader::new();
-    reader.push(&bytes);
-    reader.finish();
     let mut count = 0;
-    loop {
-        match reader.next() {
-            Ok(Some(_)) => count += 1,
-            _ => break,
+    let mut drain = |reader: &mut radeau_pcap::PcapReader| {
+        while let Ok(Some(_)) = reader.next() {
+            count += 1;
         }
+    };
+    for chunk in bytes.chunks(64 * 1024) {
+        reader.push(chunk);
+        drain(&mut reader);
     }
+    reader.finish();
+    drain(&mut reader);
     Some(count)
 }
 

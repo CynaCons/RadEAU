@@ -45,7 +45,18 @@ pub struct GptpMessage {
 /// specific / version nibble.
 pub fn parse(l2_payload: &[u8]) -> Result<GptpMessage, ParseError> {
     let header = l2_payload.get(..HEADER_LEN).ok_or(ParseError::Truncated)?;
-    if header[0] >> 4 != 1 || header[1] & 0x0f != 2 {
+    if header[0] >> 4 != 1 {
+        return Err(ParseError::Malformed);
+    }
+    parse_any_transport(l2_payload)
+}
+
+/// Parse a PTP message regardless of the transportSpecific / majorSdoId
+/// nibble: IEEE 1588 over UDP (ports 319/320) carries 0 where gPTP over
+/// Ethernet carries 1. Only versionPTP == 2 is required.
+pub fn parse_any_transport(l2_payload: &[u8]) -> Result<GptpMessage, ParseError> {
+    let header = l2_payload.get(..HEADER_LEN).ok_or(ParseError::Truncated)?;
+    if header[1] & 0x0f != 2 {
         return Err(ParseError::Malformed);
     }
     let msg_type = header[0] & 0x0f;

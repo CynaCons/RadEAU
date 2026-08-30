@@ -48,35 +48,40 @@ impl StandardTraffic {
     pub fn frames_at(&mut self, ms: u64, ident: &mut u16) -> Vec<ScheduledFrame> {
         let mut frames = Vec::new();
         match ms {
-            0 => frames.push(frame(CAMERA_PORT, ndp_rs())),
-            50 => frames.push(frame(FUSION_PORT, ndp_ra())),
-            100 => {
+            // Router discovery every 5 s, neighbour resolution and the mDNS
+            // announcement/query every 15 s (SRS_ecu_netsim §6).
+            x if x % 5_000 == 0 => frames.push(frame(CAMERA_PORT, ndp_rs())),
+            x if x % 5_000 == 50 => frames.push(frame(FUSION_PORT, ndp_ra())),
+            x if x % 15_000 == 100 => {
                 frames.push(frame(CAMERA_PORT, ndp_ns()));
                 frames.push(frame(CAMERA_PORT, mdns_announcement(ident)));
             }
-            150 => {
+            x if x % 15_000 == 150 => {
                 frames.push(frame(FUSION_PORT, ndp_na()));
                 frames.push(frame(TESTER_PORT, mdns_query(ident)));
             }
-            200 => frames.push(frame(CAMERA_PORT, dhcp4(1, ident))),
-            225 => frames.push(frame(CAMERA_PORT, dhcp6_solicit())),
-            250 => frames.push(frame(FUSION_PORT, dhcp4(2, ident))),
-            300 => frames.push(frame(CAMERA_PORT, dhcp4(3, ident))),
-            350 => frames.push(frame(FUSION_PORT, dhcp4(5, ident))),
-            3_000 => frames.push(frame(TESTER_PORT, http_tcp(0, ident))),
-            3_010 => frames.push(frame(FUSION_PORT, http_tcp(1, ident))),
-            3_020 => {
+            // One-shot exchanges repeat on long periods so a capture that
+            // attaches late still sees them (DHCP renews every 60 s, the
+            // HTTP and TLS sessions every 20 s / 25 s).
+            x if x % 30_000 == 200 => frames.push(frame(CAMERA_PORT, dhcp4(1, ident))),
+            x if x % 30_000 == 225 => frames.push(frame(CAMERA_PORT, dhcp6_solicit())),
+            x if x % 30_000 == 250 => frames.push(frame(FUSION_PORT, dhcp4(2, ident))),
+            x if x % 30_000 == 300 => frames.push(frame(CAMERA_PORT, dhcp4(3, ident))),
+            x if x % 30_000 == 350 => frames.push(frame(FUSION_PORT, dhcp4(5, ident))),
+            x if x % 20_000 == 3_000 => frames.push(frame(TESTER_PORT, http_tcp(0, ident))),
+            x if x % 20_000 == 3_010 => frames.push(frame(FUSION_PORT, http_tcp(1, ident))),
+            x if x % 20_000 == 3_020 => {
                 frames.push(frame(TESTER_PORT, http_tcp(2, ident)));
                 frames.push(frame(TESTER_PORT, http_tcp(3, ident)));
             }
-            3_030 => frames.push(frame(FUSION_PORT, http_tcp(4, ident))),
-            4_000 => frames.push(frame(TESTER_PORT, tls_tcp(0, ident))),
-            4_010 => frames.push(frame(FUSION_PORT, tls_tcp(1, ident))),
-            4_020 => {
+            x if x % 20_000 == 3_030 => frames.push(frame(FUSION_PORT, http_tcp(4, ident))),
+            x if x % 25_000 == 4_000 => frames.push(frame(TESTER_PORT, tls_tcp(0, ident))),
+            x if x % 25_000 == 4_010 => frames.push(frame(FUSION_PORT, tls_tcp(1, ident))),
+            x if x % 25_000 == 4_020 => {
                 frames.push(frame(TESTER_PORT, tls_tcp(2, ident)));
                 frames.push(frame(TESTER_PORT, tls_tcp(3, ident)));
             }
-            4_030 => frames.push(frame(FUSION_PORT, tls_tcp(4, ident))),
+            x if x % 25_000 == 4_030 => frames.push(frame(FUSION_PORT, tls_tcp(4, ident))),
             _ => {}
         }
 
@@ -93,11 +98,14 @@ impl StandardTraffic {
         if ms % 1_000 == 0 {
             frames.push(frame(FUSION_PORT, ptp_udp(false, ms, ident)));
         }
-        // A 48-byte audio payload keeps a five-second capture well below 2 MiB,
-        // so the requested 1 kHz cadence is retained.
-        let seq = self.avtp_sequence;
-        self.avtp_sequence = self.avtp_sequence.wrapping_add(1);
-        frames.push(frame(CAMERA_PORT, avtp_frame(seq, ms)));
+        // 100 Hz AAF stream: enough to read as a continuous stream in the
+        // trace without the 1 kHz rate saturating the UI's Fixed-mode
+        // projection (the incremental collapse is a backlog item).
+        if ms % 10 == 0 {
+            let seq = self.avtp_sequence;
+            self.avtp_sequence = self.avtp_sequence.wrapping_add(1);
+            frames.push(frame(CAMERA_PORT, avtp_frame(seq, ms)));
+        }
         frames
     }
 }
@@ -640,7 +648,8 @@ mod tests {
             .map(|ms| (ms, traffic.frames_at(ms, &mut ident).len()))
             .collect::<Vec<_>>();
         assert!(counts[0].1 >= 6);
-        assert_eq!(counts[1].1, 1); // AVTP at 1 kHz
+        assert_eq!(counts[1].1, 0); // AVTP at 100 Hz: nothing between ticks
+        assert_eq!(counts[10].1, 1); // AVTP tick
         assert!(counts[2_000].1 >= 3); // AVTP + PTP Sync + Announce
         assert!(counts[20_000].1 >= 4); // AVTP + PTP + NTP pair
         assert!(counts[30_000].1 >= 3); // AVTP + PTP + LLDP

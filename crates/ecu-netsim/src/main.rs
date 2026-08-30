@@ -1081,7 +1081,9 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(count, 12_113);
+        // 10 s at seed 7 with the periodic discovery exchanges (RS/RA every
+        // 5 s land at 0, 5 and 10 s; NS/NA + mDNS at 0.1 s; DHCP at 0.2 s).
+        assert_eq!(count, 12_116 - 9_000);
         assert_eq!(records.len() as u64, count);
         assert!(records.windows(2).all(|pair| pair[0].time <= pair[1].time));
         assert_eq!(records.first().unwrap().time, 0);
@@ -1173,10 +1175,12 @@ mod tests {
         }
         assert!(ports.into_iter().all(|seen| seen));
         assert!(saw_arp && saw_vlan_lidar && saw_icmpv6 && saw_runt);
-        assert_eq!(avtp, 10_001);
+        assert_eq!(avtp, 1_001);
         assert_eq!(lldp, 1);
-        // Three RS frames: startup plus the legacy 5 s cadence; one each RA/NS/NA.
-        assert_eq!(ndp, [3, 1, 1, 1]);
+        // RS: the legacy 5 s cadence (5, 10 s) plus the discovery exchange
+        // every 5 s (0, 5, 10 s); RA answers at 0.05 and 5.05 s (10.05 s is
+        // past the window); NS/NA once at 0.1 s (15 s period).
+        assert_eq!(ndp, [5, 2, 1, 1]);
         assert_eq!(dhcp6, 1);
         assert_eq!(mdns, 2);
         assert_eq!(dhcp4, 4);
