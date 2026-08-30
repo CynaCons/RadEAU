@@ -3,7 +3,10 @@
 
 use std::collections::VecDeque;
 
-use radeau_proto::{arp, doip, ethernet, gptp, icmp, ipv4, ipv6, sd, someip, tcp, udp, ParseError};
+use radeau_proto::{
+    arp, avtp, dhcp, dns, doip, eapol, ethernet, gptp, http, icmp, icmpv6, igmp, ipv4, ipv6, lldp,
+    macsec, ntp, sctp, sd, snmp, someip, ssdp, ssh, tcp, tftp, tls, udp, ParseError,
+};
 use serde::Serialize;
 use tauri::State;
 
@@ -262,6 +265,13 @@ pub fn dissect_with_catalog(
         }
         return detail(idx, t_s, wire, l3_offset, layers);
     }
+    if matches!(
+        eth.ethertype,
+        lldp::ETHERTYPE | avtp::ETHERTYPE | macsec::ETHERTYPE | eapol::ETHERTYPE
+    ) {
+        add_l2_standard(&mut layers, eth.ethertype, eth.payload, l3_offset);
+        return detail(idx, t_s, wire, l3_offset, layers);
+    }
     if eth.ethertype == ethernet::ETHERTYPE_IPV6 {
         match ipv6::Ipv6Packet::parse(eth.payload) {
             Ok(p) => {
@@ -278,9 +288,28 @@ pub fn dissect_with_catalog(
                     ],
                 });
                 payload_offset = l3_offset + ipv6::HEADER_LEN;
-                if p.next_header == 58 {
-                    add_icmp(&mut layers, p.payload, payload_offset, "ICMPv6");
-                    payload_offset += icmp::HEADER_LEN.min(p.payload.len());
+                match ipv6::walk_extensions(p.next_header, p.payload) {
+                    Ok(walk) => {
+                        for ext in &walk.headers {
+                            add_ipv6_ext(&mut layers, ext, p.payload, payload_offset);
+                        }
+                        let l4 = payload_offset + walk.payload_offset;
+                        if walk
+                            .headers
+                            .iter()
+                            .any(|h| h.fragment.is_some_and(|f| f.offset > 0))
+                        {
+                            payload_offset = l4;
+                        } else {
+                            payload_offset = dissect_ip_transport(
+                                &mut layers,
+                                walk.final_next_header,
+                                walk.payload,
+                                l4,
+                            );
+                        }
+                    }
+                    Err(e) => layers.push(malformed("IPv6 extension header", e)),
                 }
             }
             Err(e) => layers.push(malformed("IPv6", e)),
@@ -353,6 +382,16 @@ pub fn dissect_with_catalog(
                 payload_offset = l4_offset + s.data_offset as usize * 4;
                 if s.src_port == doip::DOIP_PORT || s.dst_port == doip::DOIP_PORT {
                     payload_offset = dissect_doip_tcp(&mut layers, s.payload, payload_offset);
+                } else if !s.payload.is_empty() {
+                    if !add_tcp_application(
+                        &mut layers,
+                        s.src_port,
+                        s.dst_port,
+                        s.payload,
+                        payload_offset,
+                    ) {
+                        data_layer(&mut layers, s.payload.len());
+                    }
                 }
             }
             Err(e) => layers.push(malformed("TCP", e)),
@@ -366,6 +405,20 @@ pub fn dissect_with_catalog(
             t_s,
             wire,
             (l4_offset + icmp::HEADER_LEN).min(wire.len()),
+            layers,
+        );
+    }
+    if ip_packet.protocol == 2 {
+        add_igmp(&mut layers, ip_packet.payload, l4_offset);
+        return detail(idx, t_s, wire, l4_offset, layers);
+    }
+    if ip_packet.protocol == 132 {
+        add_sctp(&mut layers, ip_packet.payload, l4_offset);
+        return detail(
+            idx,
+            t_s,
+            wire,
+            l4_offset + sctp::HEADER_LEN.min(ip_packet.payload.len()),
             layers,
         );
     }
@@ -458,6 +511,15 @@ pub fn dissect_with_catalog(
         return detail(idx, t_s, wire, payload_offset, layers);
     }
     if !crate::classify::someip_plausible(datagram.payload) {
+        if add_udp_application(
+            &mut layers,
+            datagram.src_port,
+            datagram.dst_port,
+            datagram.payload,
+            someip_offset,
+        ) {
+            return detail(idx, t_s, wire, someip_offset, layers);
+        }
         layers.push(FrameLayer {
             protocol: "Data".into(),
             summary: format!("{} bytes", datagram.payload.len()),
@@ -955,6 +1017,1083 @@ fn add_icmp(layers: &mut Vec<FrameLayer>, bytes: &[u8], offset: usize, name: &st
     }
 }
 
+fn data_layer(layers: &mut Vec<FrameLayer>, len: usize) {
+    layers.push(FrameLayer {
+        protocol: "Data".into(),
+        summary: format!("{len} bytes"),
+        fields: vec![],
+    });
+}
+
+fn add_ipv6_ext(layers: &mut Vec<FrameLayer>, ext: &ipv6::Ipv6Ext, bytes: &[u8], base: usize) {
+    let title = match ext.kind {
+        0 => "IPv6 Hop-by-Hop Options",
+        43 => "IPv6 Routing",
+        44 => "IPv6 Fragment",
+        60 => "IPv6 Destination Options",
+        51 => "IPv6 AH",
+        50 => "IPv6 ESP",
+        _ => "IPv6 Extension",
+    };
+    let mut fields = vec![field(
+        "Next header",
+        bytes.get(ext.offset).copied().unwrap_or(0).to_string(),
+        base + ext.offset,
+        1,
+    )];
+    let summary = if let Some(f) = ext.fragment {
+        fields.push(field(
+            "Fragment offset",
+            f.offset.to_string(),
+            base + ext.offset + 2,
+            2,
+        ));
+        fields.push(field(
+            "More fragments",
+            f.more.to_string(),
+            base + ext.offset + 2,
+            2,
+        ));
+        fields.push(field(
+            "Identification",
+            format!("0x{:08X}", f.id),
+            base + ext.offset + 4,
+            4,
+        ));
+        format!("offset {} · more {}", f.offset, f.more)
+    } else {
+        format!("{} bytes", ext.len)
+    };
+    layers.push(FrameLayer {
+        protocol: title.into(),
+        summary,
+        fields,
+    });
+}
+
+fn dissect_ip_transport(
+    layers: &mut Vec<FrameLayer>,
+    protocol: u8,
+    bytes: &[u8],
+    offset: usize,
+) -> usize {
+    match protocol {
+        58 => {
+            add_icmpv6(layers, bytes, offset);
+            offset + icmpv6::HEADER_LEN.min(bytes.len())
+        }
+        2 => {
+            add_igmp(layers, bytes, offset);
+            offset
+        }
+        132 => {
+            add_sctp(layers, bytes, offset);
+            offset + sctp::HEADER_LEN.min(bytes.len())
+        }
+        51 => {
+            let fields = if bytes.len() >= 2 {
+                vec![
+                    field(
+                        "Next header",
+                        ipv6::next_header_name(bytes[0]).into(),
+                        offset,
+                        1,
+                    ),
+                    field("Payload length", bytes[1].to_string(), offset + 1, 1),
+                ]
+            } else {
+                vec![]
+            };
+            layers.push(FrameLayer {
+                protocol: "IPv6 Authentication Header".into(),
+                summary: format!("AH · {} bytes", bytes.len()),
+                fields,
+            });
+            offset
+        }
+        50 => {
+            layers.push(FrameLayer {
+                protocol: "IPv6 ESP".into(),
+                summary: format!("encrypted · {} bytes", bytes.len()),
+                fields: vec![],
+            });
+            offset
+        }
+        17 => match udp::UdpDatagram::parse(bytes) {
+            Ok(u) => {
+                layers.push(FrameLayer {
+                    protocol: "UDP".into(),
+                    summary: format!("{} → {} · length {}", u.src_port, u.dst_port, bytes.len()),
+                    fields: vec![
+                        field("Source port", u.src_port.to_string(), offset, 2),
+                        field("Destination port", u.dst_port.to_string(), offset + 2, 2),
+                        field("Length", (u.payload.len() + 8).to_string(), offset + 4, 2),
+                    ],
+                });
+                let app = offset + udp::HEADER_LEN;
+                if u.src_port == doip::DOIP_PORT || u.dst_port == doip::DOIP_PORT {
+                    if let Ok((h, b)) = doip::parse_header(u.payload) {
+                        add_doip_message(layers, h, b, app, 1);
+                        return app + doip::HEADER_LEN;
+                    }
+                }
+                if crate::classify::someip_plausible(u.payload) {
+                    let (h, p) = someip::parse(u.payload).expect("plausible");
+                    add_someip_layer(layers, &h, app, 1);
+                    if h.service_id == someip::SD_SERVICE_ID && h.method_id == someip::SD_METHOD_ID
+                    {
+                        if let Ok(m) = sd::parse(p) {
+                            layers.push(FrameLayer {
+                                protocol: "SOME/IP-SD".into(),
+                                summary: format!("{} service entries", m.entries.len()),
+                                fields: vec![],
+                            });
+                        }
+                    }
+                    return app + someip::HEADER_LEN;
+                }
+                if !add_udp_application(layers, u.src_port, u.dst_port, u.payload, app) {
+                    data_layer(layers, u.payload.len());
+                }
+                app
+            }
+            Err(e) => {
+                layers.push(malformed("UDP", e));
+                offset
+            }
+        },
+        6 => match tcp::TcpSegment::parse(bytes) {
+            Ok(t) => {
+                let app = offset + t.data_offset as usize * 4;
+                layers.push(FrameLayer {
+                    protocol: "TCP".into(),
+                    summary: format!("{} → {}", t.src_port, t.dst_port),
+                    fields: vec![
+                        field("Source port", t.src_port.to_string(), offset, 2),
+                        field("Destination port", t.dst_port.to_string(), offset + 2, 2),
+                        field("Payload length", t.payload.len().to_string(), app, 0),
+                    ],
+                });
+                if t.src_port == doip::DOIP_PORT || t.dst_port == doip::DOIP_PORT {
+                    dissect_doip_tcp(layers, t.payload, app)
+                } else {
+                    if !t.payload.is_empty()
+                        && !add_tcp_application(layers, t.src_port, t.dst_port, t.payload, app)
+                    {
+                        data_layer(layers, t.payload.len());
+                    }
+                    app
+                }
+            }
+            Err(e) => {
+                layers.push(malformed("TCP", e));
+                offset
+            }
+        },
+        _ => {
+            if !bytes.is_empty() {
+                data_layer(layers, bytes.len());
+            }
+            offset
+        }
+    }
+}
+
+fn add_icmpv6(layers: &mut Vec<FrameLayer>, bytes: &[u8], offset: usize) {
+    let Ok(p) = icmpv6::Icmpv6Message::parse(bytes) else {
+        layers.push(malformed("ICMPv6", ParseError::Truncated));
+        return;
+    };
+    let mut fields = vec![
+        field(
+            "Type",
+            format!("{} · {}", p.msg_type, icmpv6::type_name(p.msg_type)),
+            offset,
+            1,
+        ),
+        field("Code", p.code.to_string(), offset + 1, 1),
+        field("Checksum", format!("0x{:04X}", p.checksum), offset + 2, 2),
+    ];
+    let body = offset + 4;
+    let mut opts: Vec<icmpv6::NdpOption<'_>> = vec![];
+    let mut options_offset = body;
+    match p.msg_type {
+        128 | 129 => {
+            if let Ok(v) = icmpv6::Echo::parse(p.body) {
+                fields.push(field("Identifier", v.identifier.to_string(), body, 2));
+                fields.push(field("Sequence", v.sequence.to_string(), body + 2, 2));
+            }
+        }
+        133 => {
+            if let Ok(v) = icmpv6::RouterSolicitation::parse(p.body) {
+                opts = v.options;
+                options_offset = body + 4;
+            }
+        }
+        134 => {
+            if let Ok(v) = icmpv6::RouterAdvertisement::parse(p.body) {
+                fields.push(field(
+                    "Current hop limit",
+                    v.cur_hop_limit.to_string(),
+                    body,
+                    1,
+                ));
+                fields.push(field(
+                    "Flags",
+                    format!("M={} O={}", v.managed, v.other),
+                    body + 1,
+                    1,
+                ));
+                fields.push(field(
+                    "Router lifetime",
+                    v.router_lifetime.to_string(),
+                    body + 2,
+                    2,
+                ));
+                opts = v.options;
+                options_offset = body + 12;
+            }
+        }
+        135 => {
+            if let Ok(v) = icmpv6::NeighborSolicitation::parse(p.body) {
+                fields.push(field(
+                    "Target",
+                    std::net::Ipv6Addr::from(v.target).to_string(),
+                    body + 4,
+                    16,
+                ));
+                opts = v.options;
+                options_offset = body + 20;
+            }
+        }
+        136 => {
+            if let Ok(v) = icmpv6::NeighborAdvertisement::parse(p.body) {
+                fields.push(field(
+                    "Flags",
+                    format!("R={} S={} O={}", v.router, v.solicited, v.override_flag),
+                    body,
+                    4,
+                ));
+                fields.push(field(
+                    "Target",
+                    std::net::Ipv6Addr::from(v.target).to_string(),
+                    body + 4,
+                    16,
+                ));
+                opts = v.options;
+                options_offset = body + 20;
+            }
+        }
+        137 => {
+            if let Ok(v) = icmpv6::Redirect::parse(p.body) {
+                fields.push(field(
+                    "Target",
+                    std::net::Ipv6Addr::from(v.target).to_string(),
+                    body + 4,
+                    16,
+                ));
+                fields.push(field(
+                    "Destination",
+                    std::net::Ipv6Addr::from(v.destination).to_string(),
+                    body + 20,
+                    16,
+                ));
+                opts = v.options;
+                options_offset = body + 36;
+            }
+        }
+        130 => {
+            if let Ok(v) = icmpv6::MldQuery::parse(p.body) {
+                fields.push(field(
+                    "Maximum response delay",
+                    v.max_response_delay.to_string(),
+                    body,
+                    2,
+                ));
+                fields.push(field(
+                    "Multicast address",
+                    std::net::Ipv6Addr::from(v.multicast_address).to_string(),
+                    body + 4,
+                    16,
+                ));
+            }
+        }
+        131 | 132 => {
+            if let Ok(v) = icmpv6::MldReport::parse(p.body) {
+                fields.push(field(
+                    "Multicast address",
+                    std::net::Ipv6Addr::from(v.multicast_address).to_string(),
+                    body + 4,
+                    16,
+                ));
+            }
+        }
+        _ => {}
+    }
+    for (n, o) in opts.iter().enumerate() {
+        let decoded = match o.kind {
+            1 | 2 if o.data.len() >= 6 => mac(&o.data[..6]),
+            3 if o.data.len() >= 30 => format!(
+                "{}/{} · valid {} s · preferred {} s",
+                std::net::Ipv6Addr::from(<[u8; 16]>::try_from(&o.data[14..30]).expect("exact")),
+                o.data[0],
+                u32::from_be_bytes(o.data[2..6].try_into().expect("exact")),
+                u32::from_be_bytes(o.data[6..10].try_into().expect("exact"))
+            ),
+            5 if o.data.len() >= 6 => {
+                u32::from_be_bytes(o.data[2..6].try_into().expect("exact")).to_string()
+            }
+            _ => hex(o.data),
+        };
+        fields.push(field(
+            &format!("Option {}", n + 1),
+            format!("{} · {decoded}", icmpv6::ndp_option_name(o.kind)),
+            options_offset + o.offset,
+            o.len,
+        ));
+    }
+    layers.push(FrameLayer {
+        protocol: "ICMPv6".into(),
+        summary: format!("{} · code {}", icmpv6::type_name(p.msg_type), p.code),
+        fields,
+    });
+}
+
+fn add_igmp(layers: &mut Vec<FrameLayer>, bytes: &[u8], offset: usize) {
+    match igmp::IgmpMessage::parse(bytes) {
+        Ok(p) => {
+            let mut f = vec![
+                field(
+                    "Type",
+                    format!("0x{:02X} · {}", p.msg_type, igmp::type_name(p.msg_type)),
+                    offset,
+                    1,
+                ),
+                field(
+                    "Maximum response time",
+                    p.max_response_code.to_string(),
+                    offset + 1,
+                    1,
+                ),
+                field("Group address", ip(&p.group_address), offset + 4, 4),
+            ];
+            for (n, r) in p.records.iter().enumerate() {
+                f.push(field(
+                    &format!("Group record {}", n + 1),
+                    format!(
+                        "type {} · {} · {} sources",
+                        r.record_type,
+                        ip(&r.multicast_address),
+                        r.sources.len()
+                    ),
+                    offset + 8,
+                    8,
+                ));
+            }
+            layers.push(FrameLayer {
+                protocol: "IGMP".into(),
+                summary: igmp::type_name(p.msg_type).into(),
+                fields: f,
+            })
+        }
+        Err(e) => layers.push(malformed("IGMP", e)),
+    }
+}
+fn add_sctp(layers: &mut Vec<FrameLayer>, bytes: &[u8], offset: usize) {
+    match sctp::SctpPacket::parse(bytes) {
+        Ok(p) => {
+            let mut f = vec![
+                field("Source port", p.source_port.to_string(), offset, 2),
+                field(
+                    "Destination port",
+                    p.destination_port.to_string(),
+                    offset + 2,
+                    2,
+                ),
+                field(
+                    "Verification tag",
+                    format!("0x{:08X}", p.verification_tag),
+                    offset + 4,
+                    4,
+                ),
+                field("Checksum", format!("0x{:08X}", p.checksum), offset + 8, 4),
+            ];
+            for (n, c) in p.chunks.iter().enumerate() {
+                let mut v = format!(
+                    "{} · flags 0x{:02X} · length {}",
+                    sctp::chunk_name(c.chunk_type),
+                    c.flags,
+                    c.length
+                );
+                if let Some(d) = c.data {
+                    v.push_str(&format!(
+                        " · TSN {} stream {} PPID {}",
+                        d.tsn, d.stream_identifier, d.payload_protocol_identifier
+                    ));
+                }
+                f.push(field(
+                    &format!("Chunk {}", n + 1),
+                    v,
+                    offset + c.offset,
+                    c.length as usize,
+                ));
+            }
+            layers.push(FrameLayer {
+                protocol: "SCTP".into(),
+                summary: p
+                    .chunks
+                    .first()
+                    .map_or("no chunks", |c| sctp::chunk_name(c.chunk_type))
+                    .into(),
+                fields: f,
+            })
+        }
+        Err(e) => layers.push(malformed("SCTP", e)),
+    }
+}
+
+fn port(src: u16, dst: u16, p: u16) -> bool {
+    src == p || dst == p
+}
+fn add_udp_application(
+    layers: &mut Vec<FrameLayer>,
+    src: u16,
+    dst: u16,
+    b: &[u8],
+    o: usize,
+) -> bool {
+    if port(src, dst, 67) || port(src, dst, 68) {
+        if let Ok(p) = dhcp::parse(b) {
+            let mut f = vec![
+                field("Op", p.op.to_string(), o, 1),
+                field("Transaction ID", format!("0x{:08X}", p.xid), o + 4, 4),
+                field(
+                    "Client MAC",
+                    mac(&p.chaddr[..p.hlen.min(16) as usize]),
+                    o + 28,
+                    p.hlen as usize,
+                ),
+                field("Your address", ip(&p.yiaddr), o + 16, 4),
+                field("Server address", ip(&p.siaddr), o + 20, 4),
+            ];
+            for x in p.options {
+                f.push(field(
+                    &dhcp::option_name(x.code),
+                    hex(&x.data),
+                    o + x.offset,
+                    x.data.len() + 2,
+                ));
+            }
+            layers.push(FrameLayer {
+                protocol: "DHCP".into(),
+                summary: format!(
+                    "DHCP {}",
+                    dhcp::message_type_name(p.message_type.unwrap_or(0))
+                ),
+                fields: f,
+            });
+            return true;
+        }
+    }
+    if port(src, dst, 546) || port(src, dst, 547) {
+        if let Ok(p) = dhcp::parse_v6(b) {
+            if !(1..=11).contains(&p.msg_type) {
+                return false;
+            }
+            let mut f = vec![
+                field(
+                    "Message type",
+                    dhcp::v6_message_type_name(p.msg_type).into(),
+                    o,
+                    1,
+                ),
+                field(
+                    "Transaction ID",
+                    format!("0x{:06X}", p.transaction_id),
+                    o + 1,
+                    3,
+                ),
+            ];
+            for x in p.options {
+                f.push(field(
+                    &dhcp::v6_option_name(x.code),
+                    hex(x.data),
+                    o + x.offset,
+                    x.data.len() + 4,
+                ));
+            }
+            layers.push(FrameLayer {
+                protocol: "DHCPv6".into(),
+                summary: format!("DHCPv6 {}", dhcp::v6_message_type_name(p.msg_type)),
+                fields: f,
+            });
+            return true;
+        }
+    }
+    if [53, 5353, 5355].iter().any(|p| port(src, dst, *p)) {
+        if let Ok(p) = dns::parse(b) {
+            let mut f = vec![
+                field("Transaction ID", format!("0x{:04X}", p.id), o, 2),
+                field(
+                    "Flags",
+                    format!(
+                        "QR={} opcode={} AA={} TC={} RD={} RA={} rcode={}",
+                        p.is_response,
+                        p.opcode,
+                        p.authoritative,
+                        p.truncated,
+                        p.recursion_desired,
+                        p.recursion_available,
+                        p.rcode
+                    ),
+                    o + 2,
+                    2,
+                ),
+                field(
+                    "Counts",
+                    format!(
+                        "questions {} answers {} authority {} additional {}",
+                        p.questions.len(),
+                        p.answers.len(),
+                        p.authority_count,
+                        p.additional_count
+                    ),
+                    o + 4,
+                    8,
+                ),
+            ];
+            for q in &p.questions {
+                f.push(field(
+                    "Question",
+                    format!(
+                        "{} · {} · class {}",
+                        q.name,
+                        dns::qtype_name(q.qtype),
+                        q.qclass
+                    ),
+                    o + 12,
+                    0,
+                ));
+            }
+            for a in &p.answers {
+                f.push(field(
+                    "Answer",
+                    format!(
+                        "{} · {} · TTL {} · {}",
+                        a.name,
+                        dns::qtype_name(a.rr_type),
+                        a.ttl,
+                        rdata(&a.rdata)
+                    ),
+                    o + 12,
+                    0,
+                ));
+            }
+            let flavor = if port(src, dst, 5353) {
+                "mDNS"
+            } else if port(src, dst, 5355) {
+                "LLMNR"
+            } else {
+                "DNS"
+            };
+            layers.push(FrameLayer {
+                protocol: flavor.into(),
+                summary: format!(
+                    "{} {}",
+                    if p.is_response { "response" } else { "query" },
+                    if p.is_response {
+                        dns::rcode_name(p.rcode)
+                    } else {
+                        p.questions.first().map_or("", |q| dns::qtype_name(q.qtype))
+                    }
+                ),
+                fields: f,
+            });
+            return true;
+        }
+    }
+    if port(src, dst, 123) {
+        if let Ok(p) = ntp::parse(b) {
+            let ts = |v| ntp_time(v);
+            layers.push(FrameLayer {
+                protocol: "NTP".into(),
+                summary: format!("{} · stratum {}", ntp::mode_name(p.mode), p.stratum),
+                fields: vec![
+                    field("LI", p.li.to_string(), o, 1),
+                    field("Version", p.version.to_string(), o, 1),
+                    field(
+                        "Mode",
+                        format!("{} · {}", p.mode, ntp::mode_name(p.mode)),
+                        o,
+                        1,
+                    ),
+                    field("Stratum", p.stratum.to_string(), o + 1, 1),
+                    field("Poll", p.poll.to_string(), o + 2, 1),
+                    field("Precision", p.precision.to_string(), o + 3, 1),
+                    field("Root delay", p.root_delay.to_string(), o + 4, 4),
+                    field("Root dispersion", p.root_dispersion.to_string(), o + 8, 4),
+                    field("Reference ID", hex(&p.reference_id), o + 12, 4),
+                    field("Reference timestamp", ts(p.reference_ts), o + 16, 8),
+                    field("Origin timestamp", ts(p.origin_ts), o + 24, 8),
+                    field("Receive timestamp", ts(p.receive_ts), o + 32, 8),
+                    field("Transmit timestamp", ts(p.transmit_ts), o + 40, 8),
+                ],
+            });
+            return true;
+        }
+    }
+    if port(src, dst, 1900) {
+        if let Ok(p) = ssdp::parse(b) {
+            let mut f = vec![field(
+                "Start line",
+                p.start_line.clone(),
+                o,
+                p.start_line.len(),
+            )];
+            for (n, v) in p.headers {
+                f.push(field(&n, v, o, 0));
+            }
+            layers.push(FrameLayer {
+                protocol: "SSDP".into(),
+                summary: p.start_line,
+                fields: f,
+            });
+            return true;
+        }
+    }
+    if port(src, dst, 319) || port(src, dst, 320) {
+        if let Ok(p) = gptp::parse(b) {
+            layers.push(gptp_layer("PTP", p, b, o));
+            return true;
+        }
+    }
+    if port(src, dst, 69) {
+        if let Ok(p) = tftp::parse(b) {
+            let (op, sum, extra) = match p {
+                tftp::TftpPacket::ReadRequest { filename, mode } => {
+                    (1, format!("RRQ {filename}"), format!("{filename} · {mode}"))
+                }
+                tftp::TftpPacket::WriteRequest { filename, mode } => {
+                    (2, format!("WRQ {filename}"), format!("{filename} · {mode}"))
+                }
+                tftp::TftpPacket::Data { block, data } => (
+                    3,
+                    format!("DATA block {block}"),
+                    format!("block {block} · {} bytes", data.len()),
+                ),
+                tftp::TftpPacket::Ack { block } => {
+                    (4, format!("ACK block {block}"), format!("block {block}"))
+                }
+                tftp::TftpPacket::Error { code, message } => (5, format!("ERROR {code}"), message),
+            };
+            layers.push(FrameLayer {
+                protocol: "TFTP".into(),
+                summary: sum,
+                fields: vec![
+                    field(
+                        "Opcode",
+                        format!("{} · {}", op, tftp::opcode_name(op)),
+                        o,
+                        2,
+                    ),
+                    field("Details", extra, o + 2, b.len().saturating_sub(2)),
+                ],
+            });
+            return true;
+        }
+    }
+    if port(src, dst, 161) || port(src, dst, 162) {
+        if let Ok(p) = snmp::parse(b) {
+            let mut f = vec![
+                field("Version", p.version.to_string(), o, 0),
+                field(
+                    "Community",
+                    String::from_utf8_lossy(&p.community).into(),
+                    o,
+                    0,
+                ),
+                field(
+                    "PDU type",
+                    format!("0x{:02X} · {}", p.pdu_type, snmp::pdu_type_name(p.pdu_type)),
+                    o,
+                    0,
+                ),
+                field("Request ID", p.request_id.to_string(), o, 0),
+                field("Error status", p.error_status.to_string(), o, 0),
+                field("Error index", p.error_index.to_string(), o, 0),
+            ];
+            for v in p.bindings {
+                f.push(field(
+                    "Variable binding",
+                    format!(
+                        "{} · {:?}",
+                        v.oid
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join("."),
+                        v.value
+                    ),
+                    o,
+                    0,
+                ));
+            }
+            layers.push(FrameLayer {
+                protocol: "SNMP".into(),
+                summary: snmp::pdu_type_name(p.pdu_type).into(),
+                fields: f,
+            });
+            return true;
+        }
+    }
+    false
+}
+
+fn add_tcp_application(
+    layers: &mut Vec<FrameLayer>,
+    src: u16,
+    dst: u16,
+    b: &[u8],
+    o: usize,
+) -> bool {
+    if [80, 8080, 8000].iter().any(|p| port(src, dst, *p)) || http::looks_like_http(b) {
+        if let Ok(p) = http::parse(b) {
+            let (start, headers, body) = match p {
+                http::HttpMessage::Request {
+                    method,
+                    target,
+                    version,
+                    headers,
+                    body_len,
+                } => (format!("{method} {target} {version}"), headers, body_len),
+                http::HttpMessage::Response {
+                    version,
+                    status,
+                    reason,
+                    headers,
+                    body_len,
+                } => (format!("{version} {status} {reason}"), headers, body_len),
+            };
+            let mut f = vec![field("Start line", start.clone(), o, start.len())];
+            for (n, v) in headers {
+                f.push(field(&n, v, o, 0));
+            }
+            f.push(field(
+                "Body length",
+                body.to_string(),
+                o + b.len() - body,
+                body,
+            ));
+            layers.push(FrameLayer {
+                protocol: "HTTP".into(),
+                summary: start,
+                fields: f,
+            });
+            return true;
+        }
+    }
+    if port(src, dst, 443) || port(src, dst, 8443) || tls::looks_like_tls(b) {
+        if let Ok(p) = tls::parse(b) {
+            let mut f = vec![
+                field(
+                    "Content type",
+                    format!(
+                        "{} · {}",
+                        p.content_type,
+                        tls::content_type_name(p.content_type)
+                    ),
+                    o,
+                    1,
+                ),
+                field("Version", format!("0x{:04X}", p.version), o + 1, 2),
+                field("Record length", p.length.to_string(), o + 3, 2),
+            ];
+            let summary = match p.handshake {
+                Some(tls::Handshake::ClientHello {
+                    version,
+                    cipher_suite_count,
+                    sni,
+                    alpn,
+                    ..
+                }) => {
+                    f.push(field("Handshake type", "ClientHello".into(), o + 5, 1));
+                    f.push(field(
+                        "Client version",
+                        format!("0x{version:04X}"),
+                        o + 9,
+                        2,
+                    ));
+                    f.push(field(
+                        "Cipher-suite count",
+                        cipher_suite_count.to_string(),
+                        o,
+                        0,
+                    ));
+                    if let Some(s) = &sni {
+                        f.push(field("SNI", s.clone(), o, 0));
+                    }
+                    if !alpn.is_empty() {
+                        f.push(field("ALPN", alpn.join(", "), o, 0));
+                    }
+                    format!(
+                        "ClientHello{}",
+                        sni.map_or(String::new(), |s| format!(" · {s}"))
+                    )
+                }
+                Some(tls::Handshake::ServerHello {
+                    version,
+                    cipher_suite,
+                }) => {
+                    f.push(field("Handshake type", "ServerHello".into(), o + 5, 1));
+                    f.push(field(
+                        "Server version",
+                        format!("0x{version:04X}"),
+                        o + 9,
+                        2,
+                    ));
+                    f.push(field("Cipher suite", format!("0x{cipher_suite:04X}"), o, 2));
+                    "ServerHello".into()
+                }
+                Some(tls::Handshake::Other { handshake_type }) => {
+                    tls::handshake_type_name(handshake_type)
+                }
+                None => tls::content_type_name(p.content_type),
+            };
+            layers.push(FrameLayer {
+                protocol: "TLS".into(),
+                summary,
+                fields: f,
+            });
+            return true;
+        }
+    }
+    if port(src, dst, 22) {
+        if let Ok(p) = ssh::parse(b) {
+            let (summary, fields) = match p {
+                ssh::SshMessage::Banner {
+                    protocol_version,
+                    software_version,
+                    comments,
+                } => (
+                    format!(
+                        "SSH-{protocol_version}-{software_version}{}",
+                        comments.map_or(String::new(), |c| format!(" {c}"))
+                    ),
+                    vec![field(
+                        "Banner",
+                        String::from_utf8_lossy(b).trim().into(),
+                        o,
+                        b.len(),
+                    )],
+                ),
+                ssh::SshMessage::Packet {
+                    packet_length,
+                    padding_length,
+                    message_type,
+                    ..
+                } => (
+                    format!("packet · message {message_type}"),
+                    vec![
+                        field("Packet length", packet_length.to_string(), o, 4),
+                        field("Padding length", padding_length.to_string(), o + 4, 1),
+                        field("Message type", message_type.to_string(), o + 5, 1),
+                    ],
+                ),
+            };
+            layers.push(FrameLayer {
+                protocol: "SSH".into(),
+                summary,
+                fields,
+            });
+            return true;
+        }
+    }
+    false
+}
+
+fn add_l2_standard(layers: &mut Vec<FrameLayer>, ty: u16, b: &[u8], o: usize) {
+    match ty {
+        lldp::ETHERTYPE => match lldp::parse(b) {
+            Ok(p) => {
+                let fields = p
+                    .tlvs
+                    .iter()
+                    .enumerate()
+                    .map(|(n, t)| {
+                        field(
+                            &format!("TLV {}", n + 1),
+                            format!("{} · {}", lldp::tlv_name(t.tlv_type), hex(t.data)),
+                            o + t.offset,
+                            t.len + 2,
+                        )
+                    })
+                    .collect();
+                layers.push(FrameLayer {
+                    protocol: "LLDP".into(),
+                    summary: p.chassis_id.unwrap_or_else(|| "unknown chassis".into()),
+                    fields,
+                })
+            }
+            Err(e) => layers.push(malformed("LLDP", e)),
+        },
+        avtp::ETHERTYPE => match avtp::parse(b) {
+            Ok(p) => {
+                let mut f = vec![
+                    field(
+                        "Subtype",
+                        format!("{} · {}", p.subtype, avtp::subtype_name(p.subtype)),
+                        o,
+                        1,
+                    ),
+                    field("Stream ID valid", p.stream_id_valid.to_string(), o + 1, 1),
+                    field("Version", p.version.to_string(), o + 1, 1),
+                    field("Sequence number", p.sequence_num.to_string(), o + 2, 1),
+                    field("Timestamp valid", p.timestamp_valid.to_string(), o + 1, 1),
+                    field("AVTP timestamp", p.avtp_timestamp.to_string(), o + 12, 4),
+                    field("Stream ID", format!("0x{:016X}", p.stream_id), o + 4, 8),
+                    field(
+                        "Stream data length",
+                        p.stream_data_length.to_string(),
+                        o + 20,
+                        2,
+                    ),
+                ];
+                if let Some(a) = p.format {
+                    f.push(field(
+                        "AAF format",
+                        format!(
+                            "format {} · NSR {} · {} channels · {} bit",
+                            a.format, a.nsr, a.channels_per_frame, a.bit_depth
+                        ),
+                        o + 16,
+                        4,
+                    ));
+                }
+                layers.push(FrameLayer {
+                    protocol: "AVTP".into(),
+                    summary: format!(
+                        "{} · stream 0x{:016X}",
+                        avtp::subtype_name(p.subtype),
+                        p.stream_id
+                    ),
+                    fields: f,
+                })
+            }
+            Err(e) => layers.push(malformed("AVTP", e)),
+        },
+        macsec::ETHERTYPE => match macsec::parse(b) {
+            Ok(p) => layers.push(FrameLayer {
+                protocol: "MACsec".into(),
+                summary: format!("AN {}", p.association_number),
+                fields: vec![
+                    field(
+                        "TCI/AN flags",
+                        format!(
+                            "V={} ES={} SC={} SCB={} E={} C={} AN={}",
+                            p.version_bit,
+                            p.es,
+                            p.sc,
+                            p.scb,
+                            p.encrypted,
+                            p.changed_text,
+                            p.association_number
+                        ),
+                        o,
+                        1,
+                    ),
+                    field("Short length", p.short_length.to_string(), o + 1, 1),
+                    field("Packet number", p.packet_number.to_string(), o + 2, 4),
+                    field(
+                        "SCI",
+                        p.sci.map_or("absent".into(), |x| format!("0x{x:016X}")),
+                        o + 6,
+                        usize::from(p.sci.is_some()) * 8,
+                    ),
+                    field(
+                        "Payload",
+                        format!("encrypted · {} bytes", b.len().saturating_sub(p.header_len)),
+                        o + p.header_len,
+                        b.len().saturating_sub(p.header_len),
+                    ),
+                ],
+            }),
+            Err(e) => layers.push(malformed("MACsec", e)),
+        },
+        eapol::ETHERTYPE => match eapol::parse(b) {
+            Ok(p) => {
+                let mut f = vec![
+                    field("Version", p.version.to_string(), o, 1),
+                    field(
+                        "Packet type",
+                        format!(
+                            "{} · {}",
+                            p.packet_type,
+                            eapol::packet_type_name(p.packet_type)
+                        ),
+                        o + 1,
+                        1,
+                    ),
+                    field("Body length", p.body_len.to_string(), o + 2, 2),
+                ];
+                if let Some(k) = p.key {
+                    f.push(field(
+                        "Key descriptor type",
+                        k.descriptor_type.to_string(),
+                        o + 4,
+                        1,
+                    ));
+                    f.push(field(
+                        "Key info flags",
+                        format!("0x{:04X}", k.key_info),
+                        o + 5,
+                        2,
+                    ));
+                    f.push(field("Key length", k.key_length.to_string(), o + 7, 2));
+                    f.push(field(
+                        "Replay counter",
+                        k.replay_counter.to_string(),
+                        o + 9,
+                        8,
+                    ));
+                }
+                layers.push(FrameLayer {
+                    protocol: "EAPOL".into(),
+                    summary: eapol::packet_type_name(p.packet_type),
+                    fields: f,
+                })
+            }
+            Err(e) => layers.push(malformed("EAPOL", e)),
+        },
+        _ => {}
+    }
+}
+
+fn rdata(v: &dns::Rdata) -> String {
+    match v {
+        dns::Rdata::A(a) => ip(a),
+        dns::Rdata::Aaaa(a) => std::net::Ipv6Addr::from(*a).to_string(),
+        dns::Rdata::Ptr(s) | dns::Rdata::Cname(s) | dns::Rdata::Ns(s) => s.clone(),
+        dns::Rdata::Srv {
+            priority,
+            weight,
+            port,
+            target,
+        } => format!("{priority} {weight} {port} {target}"),
+        dns::Rdata::Txt(v) => v.join(" "),
+        dns::Rdata::Mx {
+            preference,
+            exchange,
+        } => format!("{preference} {exchange}"),
+        dns::Rdata::Other { data, .. } => hex(data),
+    }
+}
+fn ntp_time(v: u64) -> String {
+    ntp::ntp_to_unix_ms(v)
+        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms as i64))
+        .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .unwrap_or_else(|| "unspecified".into())
+}
+
 fn dissect_gptp(
     idx: u64,
     t_s: f64,
@@ -972,35 +2111,7 @@ fn dissect_gptp(
                 } else {
                     0
                 };
-            layers.push(FrameLayer {
-                protocol: "gPTP".into(),
-                summary: format!(
-                    "{} · sequence {}",
-                    gptp_name(message.msg_type),
-                    message.sequence_id
-                ),
-                fields: vec![
-                    field(
-                        "Message type",
-                        gptp_name(message.msg_type).into(),
-                        l2_len,
-                        1,
-                    ),
-                    field("Domain", message.domain.to_string(), l2_len + 4, 1),
-                    field(
-                        "Sequence ID",
-                        message.sequence_id.to_string(),
-                        l2_len + 30,
-                        2,
-                    ),
-                    field(
-                        "Correction",
-                        message.correction_ns.to_string(),
-                        l2_len + 8,
-                        8,
-                    ),
-                ],
-            });
+            layers.push(gptp_layer("gPTP", message, payload, l2_len));
             detail(idx, t_s, wire, payload_offset.min(wire.len()), layers)
         }
         Err(error) => {
@@ -1010,13 +2121,82 @@ fn dissect_gptp(
     }
 }
 
+fn gptp_layer(
+    protocol: &str,
+    message: gptp::GptpMessage,
+    bytes: &[u8],
+    offset: usize,
+) -> FrameLayer {
+    let mut fields = vec![
+        field(
+            "Message type",
+            gptp_name(message.msg_type).into(),
+            offset,
+            1,
+        ),
+        field("Domain", message.domain.to_string(), offset + 4, 1),
+        field(
+            "Flags",
+            bytes
+                .get(6..8)
+                .map_or_else(|| "unavailable".into(), |v| format!("0x{}", hex(v))),
+            offset + 6,
+            2,
+        ),
+        field(
+            "Correction",
+            message.correction_ns.to_string(),
+            offset + 8,
+            8,
+        ),
+        field(
+            "Source port identity",
+            bytes.get(20..30).map_or_else(
+                || "unavailable".into(),
+                |v| format!("{}:0x{}", hex(&v[..8]), hex(&v[8..])),
+            ),
+            offset + 20,
+            10,
+        ),
+        field(
+            "Sequence ID",
+            message.sequence_id.to_string(),
+            offset + 30,
+            2,
+        ),
+    ];
+    if let Some(ns) = message.origin_timestamp_ns {
+        let rendered = i64::try_from(ns / 1_000_000)
+            .ok()
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .map(|v| v.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true))
+            .unwrap_or_else(|| format!("{ns} ns"));
+        fields.push(field("Origin timestamp", rendered, offset + 34, 10));
+    }
+    FrameLayer {
+        protocol: protocol.into(),
+        summary: format!(
+            "{} · domain {} · sequence {}",
+            gptp_name(message.msg_type),
+            message.domain,
+            message.sequence_id
+        ),
+        fields,
+    }
+}
+
 fn gptp_name(kind: u8) -> &'static str {
     match kind {
         gptp::MSG_SYNC => "Sync",
+        0x1 => "Delay_Req",
         gptp::MSG_FOLLOW_UP => "FollowUp",
         gptp::MSG_PDELAY_REQ => "PdelayReq",
         gptp::MSG_PDELAY_RESP => "PdelayResp",
+        0x9 => "Delay_Resp",
+        0xa => "PdelayRespFollowUp",
         gptp::MSG_ANNOUNCE => "Announce",
+        0xc => "Signaling",
+        0xd => "Management",
         _ => "Other",
     }
 }
@@ -1064,13 +2244,18 @@ pub fn frame_detail(
 mod tests {
     use super::*;
     use radeau_proto::{
-        doip,
+        avtp, dhcp, dns, doip, eapol,
         ethernet::EthernetFrame,
         gptp::GptpMessage,
+        igmp,
         ipv4::Ipv4Packet,
+        ipv6::Ipv6Packet,
+        lldp, macsec, ntp, sctp,
         sd::{SdEntry, SdMessage},
         someip::SomeIpHeader,
+        ssdp,
         tcp::TcpSegment,
+        tls,
         udp::UdpDatagram,
     };
 
@@ -1123,6 +2308,55 @@ mod tests {
             &mut segment,
         );
         ipv4_wire(ipv4::PROTOCOL_TCP, &segment)
+    }
+
+    fn udp_wire(src_port: u16, dst_port: u16, payload: &[u8]) -> Vec<u8> {
+        let mut datagram = Vec::new();
+        UdpDatagram::build(
+            [10, 42, 0, 99],
+            [10, 42, 0, 20],
+            src_port,
+            dst_port,
+            payload,
+            &mut datagram,
+        );
+        ipv4_wire(ipv4::PROTOCOL_UDP, &datagram)
+    }
+
+    fn tcp_wire(src_port: u16, dst_port: u16, payload: &[u8]) -> Vec<u8> {
+        let mut segment = Vec::new();
+        TcpSegment::build(src_port, dst_port, 1, 0, 0x18, 4096, payload, &mut segment);
+        ipv4_wire(ipv4::PROTOCOL_TCP, &segment)
+    }
+
+    fn ipv6_wire(next_header: u8, payload: &[u8]) -> Vec<u8> {
+        let mut packet = Vec::new();
+        Ipv6Packet::build([1; 16], [2; 16], next_header, 64, payload, &mut packet);
+        l2_wire(ethernet::ETHERTYPE_IPV6, &packet)
+    }
+
+    fn l2_wire(ethertype: u16, payload: &[u8]) -> Vec<u8> {
+        let mut wire = Vec::new();
+        EthernetFrame::build([1; 6], [2; 6], ethertype, payload, &mut wire);
+        wire
+    }
+
+    fn titles(detail: &FrameDetail) -> Vec<&str> {
+        detail
+            .layers
+            .iter()
+            .map(|layer| layer.protocol.as_str())
+            .collect()
+    }
+
+    fn value<'a>(layer: &'a FrameLayer, name: &str) -> &'a str {
+        layer
+            .fields
+            .iter()
+            .find(|field| field.name == name)
+            .unwrap_or_else(|| panic!("missing {name} field in {}", layer.protocol))
+            .value
+            .as_str()
     }
 
     fn someip_wire(payload: &[u8], service_id: u16, method_id: u16) -> Vec<u8> {
@@ -1379,6 +2613,222 @@ mod tests {
     }
 
     #[test]
+    fn dissects_icmpv6() {
+        let detail = dissect(0, 0.0, &ipv6_wire(58, &[128, 0, 0x12, 0x34, 0, 1, 0, 2]));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv6", "ICMPv6"]);
+        let layer = &detail.layers[2];
+        assert_eq!(value(layer, "Type"), "128 · Echo Request");
+        assert_eq!(value(layer, "Identifier"), "1");
+        assert_eq!(value(layer, "Sequence"), "2");
+    }
+
+    #[test]
+    fn dissects_igmp() {
+        let mut payload = Vec::new();
+        igmp::build(0x16, 10, [239, 1, 2, 3], &mut payload);
+        let detail = dissect(0, 0.0, &ipv4_wire(2, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "IGMP"]);
+        let layer = &detail.layers[2];
+        assert_eq!(value(layer, "Type"), "0x16 · Version 2 Membership Report");
+        assert_eq!(value(layer, "Group address"), "239.1.2.3");
+    }
+
+    #[test]
+    fn dissects_dhcp() {
+        let mut payload = Vec::new();
+        dhcp::build_discover(0x1234_5678, [0, 1, 2, 3, 4, 5], &mut payload);
+        let detail = dissect(0, 0.0, &udp_wire(68, 67, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "UDP", "DHCP"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Transaction ID"), "0x12345678");
+        assert_eq!(value(layer, "Client MAC"), "00:01:02:03:04:05");
+    }
+
+    #[test]
+    fn dissects_dns() {
+        let mut payload = Vec::new();
+        dns::build_query(7, "example.test", 1, &mut payload).unwrap();
+        let detail = dissect(0, 0.0, &udp_wire(50_000, 53, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "UDP", "DNS"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Transaction ID"), "0x0007");
+        assert_eq!(value(layer, "Question"), "example.test · A · class 1");
+    }
+
+    #[test]
+    fn dissects_ntp() {
+        let mut payload = Vec::new();
+        ntp::build(
+            &ntp::NtpPacket {
+                li: 0,
+                version: 4,
+                mode: 4,
+                stratum: 2,
+                poll: 6,
+                precision: 0xec,
+                root_delay: 0,
+                root_dispersion: 0,
+                reference_id: *b"GPS\0",
+                reference_ts: 0,
+                origin_ts: 0,
+                receive_ts: 0,
+                transmit_ts: 0x83aa_7e80_8000_0000,
+            },
+            &mut payload,
+        );
+        let detail = dissect(0, 0.0, &udp_wire(50_000, 123, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "UDP", "NTP"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Mode"), "4 · server");
+        assert_eq!(value(layer, "Stratum"), "2");
+        assert_eq!(value(layer, "Reference ID"), "47 50 53 00");
+    }
+
+    #[test]
+    fn dissects_ssdp() {
+        let mut payload = Vec::new();
+        ssdp::build_notify(&[("NT", "upnp:rootdevice")], &mut payload);
+        let detail = dissect(0, 0.0, &udp_wire(50_000, 1900, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "UDP", "SSDP"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Start line"), "NOTIFY * HTTP/1.1");
+        assert_eq!(value(layer, "NT"), "upnp:rootdevice");
+    }
+
+    #[test]
+    fn dissects_ptp_over_udp() {
+        let mut payload = Vec::new();
+        gptp::build(
+            &GptpMessage {
+                msg_type: gptp::MSG_SYNC,
+                domain: 3,
+                sequence_id: 9,
+                correction_ns: 4,
+                origin_timestamp_ns: Some(1),
+            },
+            &mut payload,
+        );
+        let detail = dissect(0, 0.0, &udp_wire(319, 320, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "UDP", "PTP"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Domain"), "3");
+        assert_eq!(value(layer, "Sequence ID"), "9");
+        assert_eq!(value(layer, "Correction"), "4");
+    }
+
+    #[test]
+    fn dissects_lldp() {
+        let payload = lldp::build([0, 1, 2, 3, 4, 5], "eth0", 120, "ecu");
+        let detail = dissect(0, 0.0, &l2_wire(lldp::ETHERTYPE, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "LLDP"]);
+        let layer = &detail.layers[1];
+        assert_eq!(layer.summary, "00:01:02:03:04:05");
+        assert!(value(layer, "TLV 3").starts_with("TTL · 00 78"));
+    }
+
+    #[test]
+    fn dissects_avtp() {
+        let payload = avtp::build_aaf(7, 2, 3, 4, 5, 2, 24, &[1, 2]);
+        let detail = dissect(0, 0.0, &l2_wire(avtp::ETHERTYPE, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "AVTP"]);
+        let layer = &detail.layers[1];
+        assert_eq!(value(layer, "Subtype"), "2 · AAF");
+        assert_eq!(value(layer, "Stream ID"), "0x0000000000000007");
+        assert_eq!(value(layer, "Stream data length"), "2");
+    }
+
+    #[test]
+    fn dissects_macsec() {
+        let payload = [0x2e, 0x12, 0, 0, 0, 7, 1, 2, 3, 4, 5, 6, 0, 9];
+        let detail = dissect(0, 0.0, &l2_wire(macsec::ETHERTYPE, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "MACsec"]);
+        let layer = &detail.layers[1];
+        assert_eq!(value(layer, "Packet number"), "7");
+        assert_eq!(value(layer, "SCI"), "0x0102030405060009");
+    }
+
+    #[test]
+    fn dissects_eapol() {
+        let payload = [2, 3, 0, 13, 2, 0x13, 0xca, 0, 16, 0, 0, 0, 0, 0, 0, 0, 42];
+        let detail = dissect(0, 0.0, &l2_wire(eapol::ETHERTYPE, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "EAPOL"]);
+        let layer = &detail.layers[1];
+        assert_eq!(value(layer, "Packet type"), "3 · EAPOL-Key");
+        assert_eq!(value(layer, "Replay counter"), "42");
+    }
+
+    #[test]
+    fn dissects_http() {
+        let detail = dissect(
+            0,
+            0.0,
+            &tcp_wire(50_000, 80, b"GET /status HTTP/1.1\r\nHost: ecu\r\n\r\n"),
+        );
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "TCP", "HTTP"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Start line"), "GET /status HTTP/1.1");
+        assert_eq!(value(layer, "Host"), "ecu");
+    }
+
+    #[test]
+    fn dissects_tls() {
+        let payload = tls::build_client_hello("ecu.test", &["h2"]);
+        let detail = dissect(0, 0.0, &tcp_wire(50_000, 443, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "TCP", "TLS"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Handshake type"), "ClientHello");
+        assert_eq!(value(layer, "SNI"), "ecu.test");
+        assert_eq!(value(layer, "ALPN"), "h2");
+    }
+
+    #[test]
+    fn dissects_ssh() {
+        let detail = dissect(0, 0.0, &tcp_wire(50_000, 22, b"SSH-2.0-RadEAU\r\n"));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "TCP", "SSH"]);
+        let layer = &detail.layers[3];
+        assert_eq!(layer.summary, "SSH-2.0-RadEAU");
+        assert_eq!(value(layer, "Banner"), "SSH-2.0-RadEAU");
+    }
+
+    #[test]
+    fn dissects_sctp() {
+        let mut chunks = Vec::new();
+        sctp::build_data_chunk(7, 1, 2, 3, 4, &[5], &mut chunks);
+        let mut payload = Vec::new();
+        sctp::build(5000, 5001, 9, 10, &chunks, &mut payload);
+        let detail = dissect(0, 0.0, &ipv4_wire(132, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "SCTP"]);
+        let layer = &detail.layers[2];
+        assert_eq!(value(layer, "Source port"), "5000");
+        assert_eq!(value(layer, "Destination port"), "5001");
+        assert!(value(layer, "Chunk 1").contains("TSN 1 stream 2 PPID 4"));
+    }
+
+    #[test]
+    fn dissects_tftp() {
+        let detail = dissect(0, 0.0, &udp_wire(50_000, 69, b"\0\x01boot.bin\0octet\0"));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "UDP", "TFTP"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Opcode"), "1 · RRQ");
+        assert_eq!(value(layer, "Details"), "boot.bin · octet");
+    }
+
+    #[test]
+    fn dissects_snmp() {
+        let payload = [
+            0x30, 0x26, 0x02, 0x01, 0x01, 0x04, 0x06, b'p', b'u', b'b', b'l', b'i', b'c', 0xa0,
+            0x19, 0x02, 0x01, 0x7b, 0x02, 0x01, 0, 0x02, 0x01, 0, 0x30, 0x0e, 0x30, 0x0c, 0x06,
+            0x08, 0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0, 0x05, 0,
+        ];
+        let detail = dissect(0, 0.0, &udp_wire(50_000, 161, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "UDP", "SNMP"]);
+        let layer = &detail.layers[3];
+        assert_eq!(value(layer, "Community"), "public");
+        assert_eq!(value(layer, "Request ID"), "123");
+        assert_eq!(value(layer, "PDU type"), "0xA0 · GetRequest");
+    }
+
+    #[test]
     fn dissects_gptp_sync() {
         let mut payload = Vec::new();
         gptp::build(
@@ -1400,8 +2850,16 @@ mod tests {
             &mut wire,
         );
         let detail = dissect(0, 0.0, &wire);
-        assert_eq!(detail.layers[1].summary, "Sync · sequence 4660");
-        assert_eq!(detail.layers[1].fields[2].offset, 44);
+        assert_eq!(detail.layers[1].summary, "Sync · domain 0 · sequence 4660");
+        assert_eq!(
+            detail.layers[1]
+                .fields
+                .iter()
+                .find(|field| field.name == "Sequence ID")
+                .expect("sequence field")
+                .offset,
+            44
+        );
         assert_eq!(detail.payload_offset, wire.len());
     }
 
