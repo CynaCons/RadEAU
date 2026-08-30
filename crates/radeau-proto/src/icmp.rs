@@ -35,6 +35,53 @@ impl<'a> IcmpPacket<'a> {
         out.extend_from_slice(payload)
     }
 }
+
+pub fn type_name(t: u8) -> &'static str {
+    match t {
+        0 => "Echo Reply",
+        3 => "Destination Unreachable",
+        4 => "Source Quench",
+        5 => "Redirect",
+        8 => "Echo Request",
+        9 => "Router Advertisement",
+        10 => "Router Solicitation",
+        11 => "Time Exceeded",
+        12 => "Parameter Problem",
+        13 => "Timestamp",
+        14 => "Timestamp Reply",
+        _ => "type n",
+    }
+}
+
+pub fn code_name(t: u8, code: u8) -> Option<&'static str> {
+    match (t, code) {
+        (3, 0) => Some("Net Unreachable"),
+        (3, 1) => Some("Host Unreachable"),
+        (3, 2) => Some("Protocol Unreachable"),
+        (3, 3) => Some("Port Unreachable"),
+        (3, 4) => Some("Fragmentation Needed"),
+        (3, 5) => Some("Source Route Failed"),
+        (3, 6) => Some("Destination Network Unknown"),
+        (3, 7) => Some("Destination Host Unknown"),
+        (3, 9) => Some("Network Administratively Prohibited"),
+        (3, 10) => Some("Host Administratively Prohibited"),
+        (3, 11) => Some("Network Unreachable for ToS"),
+        (3, 12) => Some("Host Unreachable for ToS"),
+        (3, 13) => Some("Communication Administratively Prohibited"),
+        (3, 14) => Some("Host Precedence Violation"),
+        (3, 15) => Some("Precedence Cutoff"),
+        (5, 0) => Some("Redirect Datagram for Network"),
+        (5, 1) => Some("Redirect Datagram for Host"),
+        (5, 2) => Some("Redirect Datagram for ToS and Network"),
+        (5, 3) => Some("Redirect Datagram for ToS and Host"),
+        (11, 0) => Some("TTL Exceeded"),
+        (11, 1) => Some("Fragment Reassembly Time Exceeded"),
+        (12, 0) => Some("Pointer Indicates Error"),
+        (12, 1) => Some("Missing Required Option"),
+        (12, 2) => Some("Bad Length"),
+        _ => None,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,6 +93,28 @@ mod tests {
         assert_eq!(p.payload, &[5]);
         for n in 0..8 {
             assert_eq!(IcmpPacket::parse(&w[..n]), Err(ParseError::Truncated));
+        }
+    }
+
+    #[test]
+    fn names_known_types_and_codes() {
+        assert_eq!(type_name(8), "Echo Request");
+        assert_eq!(type_name(255), "type n");
+        assert_eq!(code_name(3, 4), Some("Fragmentation Needed"));
+        assert_eq!(code_name(3, 2), Some("Protocol Unreachable"));
+        assert_eq!(code_name(3, 99), None);
+    }
+
+    #[test]
+    fn random_prefixes_never_panic() {
+        let mut seed = 0x1020_3040u32;
+        for len in 0..128 {
+            let mut bytes = vec![0; len];
+            for byte in &mut bytes {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *byte = seed as u8;
+            }
+            let _ = IcmpPacket::parse(&bytes);
         }
     }
 }

@@ -15,6 +15,7 @@ pub mod doip;
 pub mod ethernet;
 pub mod gptp;
 pub mod icmp;
+pub mod igmp;
 pub mod ipv4;
 pub mod ipv6;
 pub mod sd;
@@ -89,4 +90,19 @@ mod tests {
         assert_eq!(super::CRATE_NAME, "radeau-proto");
     }
 }
+pub mod avtp;
+pub mod dhcp;
+pub mod dns;
+pub mod eapol;
+pub mod http;
+pub mod icmpv6;
+pub mod lldp;
+pub mod macsec;
+pub mod ntp;
+pub mod sctp;
+pub mod snmp;
+pub mod ssdp;
+pub mod ssh;
 pub mod tcp;
+pub mod tftp;
+pub mod tls;
