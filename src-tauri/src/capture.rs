@@ -44,6 +44,14 @@ const EVENT_CAPTURE_EXPORT: &str = "capture:export";
 // PF-005: the perf gate drives the devgen stress profile through this same
 // native batch/credit pipeline before checking renderer budgets.
 
+#[cfg(not(test))]
+fn capture_log(level: crate::log::Level, area: &str, msg: &str, extra: serde_json::Value) {
+    crate::log::log(level, area, msg, extra);
+}
+
+#[cfg(test)]
+fn capture_log(_level: crate::log::Level, _area: &str, _msg: &str, _extra: serde_json::Value) {}
+
 /// Pure deadline cadence: due when a full `interval_ms` has passed since the
 /// last emit. Testable without a network.
 pub fn deadline_due(elapsed_ms: u64, interval_ms: u64, last_emit_ms: u64) -> bool {
@@ -202,30 +210,90 @@ struct CaptureLinkEvent {
     detail: Option<String>,
 }
 
-fn emit_link(app: &AppHandle, state: &'static str, detail: Option<String>) {
-    let _ = app.emit(EVENT_CAPTURE_LINK, &CaptureLinkEvent { state, detail });
+trait CaptureEvents {
+    fn recording_counters(&self) -> (u64, u64, u64) {
+        (0, 0, 0)
+    }
+
+    fn emit_batch(&self, batch: &FrameBatch);
+    fn emit_stats(&self, stats: CaptureStatsEvent);
+    fn emit_session(&self, session: CaptureSessionEvent);
+    fn emit_link(&self, link: CaptureLinkEvent);
+    fn emit_export(&self, progress: ExportProgress);
+}
+
+trait CaptureRecording {
+    fn is_active(&self) -> bool;
+    fn handle(&self) -> Option<crate::recording::RecordingHandle>;
+    fn end(&self);
+    fn tick(&self);
+}
+
+impl CaptureEvents for AppHandle {
+    fn recording_counters(&self) -> (u64, u64, u64) {
+        self.state::<crate::recording::RecordingState>().counters()
+    }
+
+    fn emit_batch(&self, batch: &FrameBatch) {
+        let _ = self.emit(EVENT_FRAMES_BATCH, batch);
+    }
+
+    fn emit_stats(&self, stats: CaptureStatsEvent) {
+        let _ = self.emit(EVENT_CAPTURE_STATS, stats);
+    }
+
+    fn emit_session(&self, session: CaptureSessionEvent) {
+        let _ = self.emit(EVENT_CAPTURE_SESSION, &session);
+    }
+
+    fn emit_link(&self, link: CaptureLinkEvent) {
+        let _ = self.emit(EVENT_CAPTURE_LINK, &link);
+    }
+
+    fn emit_export(&self, progress: ExportProgress) {
+        let _ = self.emit(EVENT_CAPTURE_EXPORT, progress);
+    }
+}
+
+impl CaptureRecording for AppHandle {
+    fn is_active(&self) -> bool {
+        self.state::<crate::recording::RecordingState>().is_active()
+    }
+
+    fn handle(&self) -> Option<crate::recording::RecordingHandle> {
+        self.state::<crate::recording::RecordingState>().handle()
+    }
+
+    fn end(&self) {
+        self.state::<crate::recording::RecordingState>().end(self);
+    }
+
+    fn tick(&self) {
+        self.state::<crate::recording::RecordingState>().tick(self);
+    }
+}
+
+fn emit_link(events: &impl CaptureEvents, state: &'static str, detail: Option<String>) {
+    events.emit_link(CaptureLinkEvent { state, detail });
 }
 
 fn emit_session(
-    app: &AppHandle,
+    events: &impl CaptureEvents,
     source_kind: &'static str,
     scenario: Option<String>,
     endpoints: Vec<EndpointDto>,
     session_epoch_ns: Option<u64>,
     caps: Capabilities,
 ) {
-    let _ = app.emit(
-        EVENT_CAPTURE_SESSION,
-        &CaptureSessionEvent {
-            source_kind,
-            scenario,
-            endpoints,
-            session_epoch_ms: session_epoch_ns.map(|ns| ns as f64 / 1_000_000.0),
-            timestamp_source: caps.timestamp_source,
-            direction_known: caps.direction,
-            transmit: caps.transmit,
-        },
-    );
+    events.emit_session(CaptureSessionEvent {
+        source_kind,
+        scenario,
+        endpoints,
+        session_epoch_ms: session_epoch_ns.map(|ns| ns as f64 / 1_000_000.0),
+        timestamp_source: caps.timestamp_source,
+        direction_known: caps.direction,
+        transmit: caps.transmit,
+    });
 }
 
 #[derive(Debug)]
@@ -298,14 +366,14 @@ impl CaptureStats {
         }
     }
 }
-fn emit_stats(app: &AppHandle, stats: &CaptureStats, start: Instant, seq: &mut u64) {
+fn emit_stats(events: &impl CaptureEvents, stats: &CaptureStats, start: Instant, seq: &mut u64) {
     let mut event = stats.event(*seq, start.elapsed().as_secs_f64());
-    let (frames, bytes, dropped) = app.state::<crate::recording::RecordingState>().counters();
+    let (frames, bytes, dropped) = events.recording_counters();
     event.recording_frames = frames;
     event.recording_bytes = bytes;
     event.recording_dropped = dropped;
     *seq += 1;
-    let _ = app.emit(EVENT_CAPTURE_STATS, event);
+    events.emit_stats(event);
 }
 
 fn push_frame(acc: &Arc<Mutex<FrameAccumulator>>, f: GenFrame, stats: &CaptureStats) {
@@ -317,7 +385,7 @@ fn push_frame(acc: &Arc<Mutex<FrameAccumulator>>, f: GenFrame, stats: &CaptureSt
 }
 
 fn emit_pending_batch(
-    app: &AppHandle,
+    events: &impl CaptureEvents,
     accumulator: &Arc<Mutex<FrameAccumulator>>,
     seq: &mut u64,
     stats: &CaptureStats,
@@ -339,7 +407,7 @@ fn emit_pending_batch(
         .fetch_add(batch.i.len() as u64, Ordering::Relaxed);
     batch.seq = *seq;
     *seq += 1;
-    let _ = app.emit(EVENT_FRAMES_BATCH, &batch);
+    events.emit_batch(&batch);
 
     if let Ok(mut accumulator) = accumulator.lock() {
         accumulator.recycle(std::mem::take(&mut frames));
@@ -349,7 +417,7 @@ fn emit_pending_batch(
 
 #[allow(clippy::too_many_arguments)]
 fn try_emit_batch(
-    app: &AppHandle,
+    events: &impl CaptureEvents,
     credits: &Arc<AtomicU32>,
     accumulator: &Arc<Mutex<FrameAccumulator>>,
     start: Instant,
@@ -363,12 +431,13 @@ fn try_emit_batch(
     }
     let elapsed_ms = Instant::now().duration_since(start).as_millis() as u64;
     let pending = accumulator.lock().map(|a| a.len() != 0).unwrap_or(false);
-    if pending
-        && deadline_due(elapsed_ms, BATCH_INTERVAL_MS, *last_emit_ms)
-        && take_credit(credits)
-        && emit_pending_batch(app, accumulator, seq, stats)
+    if pending && deadline_due(elapsed_ms, BATCH_INTERVAL_MS, *last_emit_ms) && take_credit(credits)
     {
-        *last_emit_ms = elapsed_ms;
+        if emit_pending_batch(events, accumulator, seq, stats) {
+            *last_emit_ms = elapsed_ms;
+        } else {
+            return_credit(credits);
+        }
     }
 }
 
@@ -376,28 +445,36 @@ fn try_emit_batch(
 /// batch deadline, waiting briefly for a credit so a file that replays in
 /// milliseconds does not end its session with the frames unsent.
 fn flush_remaining(
-    app: &AppHandle,
+    events: &impl CaptureEvents,
     credits: &Arc<AtomicU32>,
     accumulator: &Arc<Mutex<FrameAccumulator>>,
     seq: &mut u64,
     stats: &CaptureStats,
+    stop: &AtomicBool,
 ) {
     const CREDIT_WAIT: Duration = Duration::from_millis(10);
-    const CREDIT_ATTEMPTS: u32 = 100;
+    const CREDIT_ATTEMPTS: u32 = 10;
     loop {
         let pending = accumulator.lock().map(|a| a.len() != 0).unwrap_or(false);
-        if !pending {
+        if !pending || stop.load(Ordering::Relaxed) {
             return;
         }
         let mut attempts = 0;
         while !take_credit(credits) {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
             attempts += 1;
             if attempts >= CREDIT_ATTEMPTS {
+                let _ = emit_pending_batch(events, accumulator, seq, stats);
                 return;
             }
             std::thread::sleep(CREDIT_WAIT);
         }
-        emit_pending_batch(app, accumulator, seq, stats);
+        if !emit_pending_batch(events, accumulator, seq, stats) {
+            return_credit(credits);
+            return;
+        }
     }
 }
 
@@ -477,9 +554,20 @@ fn take_credit(credits: &Arc<AtomicU32>) -> bool {
         .is_ok()
 }
 
+fn return_credit(credits: &Arc<AtomicU32>) {
+    let _ = credits.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
+        if c < MAX_CREDITS {
+            Some(c + 1)
+        } else {
+            None
+        }
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
-fn reader_loop(
-    app: AppHandle,
+fn reader_loop_core(
+    events: &impl CaptureEvents,
+    recording: &impl CaptureRecording,
     mut source: Source,
     stop: Arc<AtomicBool>,
     credits: Arc<AtomicU32>,
@@ -503,18 +591,17 @@ fn reader_loop(
     let mut last_stats = Instant::now();
     let source_kind = source.source_kind();
     let caps = source.capabilities();
-    let recording = app.state::<crate::recording::RecordingState>();
     let mut recording_handle: Option<crate::recording::RecordingHandle> = None;
 
     while !stop.load(Ordering::Relaxed) {
         let status = source.status();
         if previous_status.as_ref() != Some(&status) {
             match &status {
-                ChannelStatus::Up => emit_link(&app, "connected", None),
+                ChannelStatus::Up => emit_link(events, "connected", None),
                 ChannelStatus::Connecting | ChannelStatus::Reconnecting => {
-                    emit_link(&app, "reconnecting", None)
+                    emit_link(events, "reconnecting", None)
                 }
-                ChannelStatus::Down(detail) => emit_link(&app, "error", Some(detail.clone())),
+                ChannelStatus::Down(detail) => emit_link(events, "error", Some(detail.clone())),
                 ChannelStatus::Ended => {}
             }
             previous_status = Some(status);
@@ -532,7 +619,7 @@ fn reader_loop(
                 ring.set_session_epoch_ns(epoch);
             }
             emit_session(
-                &app,
+                events,
                 source_kind,
                 source.scenario(),
                 endpoints.to_dtos(),
@@ -545,7 +632,7 @@ fn reader_loop(
         if source.fast_replay() && accumulator.lock().map(|a| a.len() > 3_000).unwrap_or(false) {
             // CP-004: fast pcap replay waits at the high-water mark instead of evicting.
             try_emit_batch(
-                &app,
+                events,
                 &credits,
                 &accumulator,
                 start,
@@ -570,6 +657,9 @@ fn reader_loop(
                         recording_handle = recording.handle();
                     }
                     if let Some(handle) = &recording_handle {
+                        // One copy, only while recording: the ring takes the
+                        // frame by move (review R4a-4: an Arc for every frame
+                        // would copy on the common, non-recording path).
                         handle.push(ts_ns, wire.clone());
                     }
                 } else if recording_handle.is_some() {
@@ -581,7 +671,7 @@ fn reader_loop(
                 if session_emitted && grown > endpoint_count {
                     endpoint_count = grown;
                     emit_session(
-                        &app,
+                        events,
                         source_kind,
                         source.scenario(),
                         endpoints.to_dtos(),
@@ -595,7 +685,7 @@ fn reader_loop(
                 stats
                     .gap_dropped
                     .fetch_add(dropped as u64, Ordering::Relaxed);
-                crate::log::log(
+                capture_log(
                     crate::log::Level::Warn,
                     "link",
                     "gap record",
@@ -608,21 +698,28 @@ fn reader_loop(
                 while !ui_ready(&attached, start) && !stop.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                flush_remaining(&app, &credits, &accumulator, &mut batch_seq, &stats);
-                recording.end(&app);
-                emit_stats(&app, &stats, start, &mut stats_seq);
-                crate::log::log(
+                flush_remaining(
+                    events,
+                    &credits,
+                    &accumulator,
+                    &mut batch_seq,
+                    &stats,
+                    &stop,
+                );
+                recording.end();
+                emit_stats(events, &stats, start, &mut stats_seq);
+                capture_log(
                     crate::log::Level::Info,
                     "link",
                     "source ended",
                     serde_json::json!({ "detail": detail }),
                 );
-                emit_link(&app, "closed", Some(detail));
+                emit_link(events, "closed", Some(detail));
                 return;
             }
         }
         try_emit_batch(
-            &app,
+            events,
             &credits,
             &accumulator,
             start,
@@ -635,24 +732,48 @@ fn reader_loop(
             if let Some(dropped) = source.kernel_drops() {
                 stats.kernel_dropped.store(dropped, Ordering::Relaxed);
             }
-            recording.tick(&app);
-            emit_stats(&app, &stats, start, &mut stats_seq);
+            recording.tick();
+            emit_stats(events, &stats, start, &mut stats_seq);
             last_stats = Instant::now();
         }
     }
     if let Some(dropped) = source.kernel_drops() {
         stats.kernel_dropped.store(dropped, Ordering::Relaxed);
     }
-    recording.end(&app);
-    emit_stats(&app, &stats, start, &mut stats_seq);
-    crate::log::log(
+    recording.end();
+    emit_stats(events, &stats, start, &mut stats_seq);
+    capture_log(
         crate::log::Level::Info,
         "stats",
         "session final stats",
         serde_json::to_value(stats.event(stats_seq, start.elapsed().as_secs_f64()))
             .unwrap_or(serde_json::Value::Null),
     );
-    emit_link(&app, "closed", None);
+    emit_link(events, "closed", None);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reader_loop(
+    app: AppHandle,
+    source: Source,
+    stop: Arc<AtomicBool>,
+    credits: Arc<AtomicU32>,
+    accumulator: Arc<Mutex<FrameAccumulator>>,
+    frame_ring: Arc<Mutex<FrameRing>>,
+    stats: Arc<CaptureStats>,
+    attached: Arc<AtomicBool>,
+) {
+    reader_loop_core(
+        &app,
+        &app,
+        source,
+        stop,
+        credits,
+        accumulator,
+        frame_ring,
+        stats,
+        attached,
+    );
 }
 
 fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Result<(), String> {
@@ -662,7 +783,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     let source = match Source::open(&source) {
         Ok(source) => source,
         Err(error) => {
-            crate::log::log(
+            capture_log(
                 crate::log::Level::Error,
                 "link",
                 "capture source open failed",
@@ -688,7 +809,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
         .state::<crate::recording::RecordingState>()
         .begin(&app, std::time::SystemTime::now())
     {
-        crate::log::log(
+        capture_log(
             crate::log::Level::Error,
             "recording",
             "recording could not start",
@@ -765,13 +886,13 @@ pub fn capture_start(
     let spec = serde_json::to_value(&source).unwrap_or(serde_json::Value::Null);
     let result = start_session(&state, app, source);
     match &result {
-        Ok(()) => crate::log::log(
+        Ok(()) => capture_log(
             crate::log::Level::Info,
             "session",
             "capture started",
             serde_json::json!({ "source": spec }),
         ),
-        Err(error) => crate::log::log(
+        Err(error) => capture_log(
             crate::log::Level::Error,
             "session",
             "capture start rejected",
@@ -784,7 +905,7 @@ pub fn capture_start(
 #[tauri::command]
 pub fn capture_stop(state: State<CaptureState>) -> Result<(), String> {
     let result = stop_session(&state);
-    crate::log::log(
+    capture_log(
         crate::log::Level::Info,
         "session",
         "capture stopped",
@@ -900,7 +1021,7 @@ pub fn export_ring(
                 for frame in &chunk {
                     let relative_ns = (frame.t_s.max(0.0) * 1_000_000_000.0) as u64;
                     writer
-                        .write_record(epoch.saturating_add(relative_ns), &frame.wire)
+                        .write_record(epoch.saturating_add(relative_ns), frame.wire.as_ref())
                         .map_err(|error| format!("write pcap record: {error}"))?;
                     if done == 0 {
                         first_ts_ms = frame.t_s * 1_000.0;
@@ -909,7 +1030,7 @@ pub fn export_ring(
                     bytes += frame.wire.len();
                     done += 1;
                 }
-                let _ = app.emit(EVENT_CAPTURE_EXPORT, ExportProgress { done, total });
+                app.emit_export(ExportProgress { done, total });
             }
             writer
                 .flush()
@@ -934,6 +1055,129 @@ mod tests {
     use crate::simlink::{
         encode_frame_record, validate_handshake_line, FrameMapper, MonitorRecord, RecordDeframer,
     };
+
+    #[derive(Default)]
+    struct RecordedEvents {
+        batches: Mutex<Vec<(u64, usize)>>,
+        batch_indexes: Mutex<Vec<Vec<u64>>>,
+        stats: Mutex<Vec<CaptureStatsEvent>>,
+        sessions: Mutex<Vec<&'static str>>,
+        links: Mutex<Vec<(&'static str, Option<String>)>>,
+    }
+
+    impl CaptureEvents for Arc<RecordedEvents> {
+        fn emit_batch(&self, batch: &FrameBatch) {
+            self.batches
+                .lock()
+                .unwrap()
+                .push((batch.seq, batch.i.len()));
+            self.batch_indexes.lock().unwrap().push(batch.i.clone());
+        }
+
+        fn emit_stats(&self, stats: CaptureStatsEvent) {
+            self.stats.lock().unwrap().push(stats);
+        }
+
+        fn emit_session(&self, session: CaptureSessionEvent) {
+            self.sessions.lock().unwrap().push(session.source_kind);
+        }
+
+        fn emit_link(&self, link: CaptureLinkEvent) {
+            self.links.lock().unwrap().push((link.state, link.detail));
+        }
+
+        fn emit_export(&self, _progress: ExportProgress) {}
+    }
+
+    struct NoopRecording;
+
+    impl CaptureRecording for NoopRecording {
+        fn is_active(&self) -> bool {
+            false
+        }
+
+        fn handle(&self) -> Option<crate::recording::RecordingHandle> {
+            None
+        }
+
+        fn end(&self) {}
+
+        fn tick(&self) {}
+    }
+
+    fn run_source_to_end(source: Source, credits: u32) -> (Arc<RecordedEvents>, Arc<CaptureStats>) {
+        let events = Arc::new(RecordedEvents::default());
+        let recording = NoopRecording;
+        let stop = Arc::new(AtomicBool::new(false));
+        let credits = Arc::new(AtomicU32::new(credits));
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let frame_ring = Arc::new(Mutex::new(FrameRing::default()));
+        let stats = Arc::new(CaptureStats::default());
+        let attached = Arc::new(AtomicBool::new(true));
+
+        reader_loop_core(
+            &events,
+            &recording,
+            source,
+            stop,
+            credits,
+            accumulator,
+            frame_ring,
+            Arc::clone(&stats),
+            attached,
+        );
+
+        (events, stats)
+    }
+
+    fn test_frame(idx: u64) -> GenFrame {
+        GenFrame {
+            idx,
+            t_s: idx as f64,
+            dir: crate::codes::DIR_RX,
+            src_ep: 0,
+            proto: crate::codes::PROTO_GPTP,
+            svc: 0,
+            method: 0,
+            msg_type: crate::codes::GPTP_TY_OTHER,
+            session: -1,
+            wire_len: 60,
+            snap: [0; SNAP_LEN],
+            src_ip: 0,
+            dst_ip: 0,
+            src_mac: 0,
+            vlan: -1,
+            payload_off: 14,
+        }
+    }
+
+    fn pcap_bytes(count: usize) -> Vec<u8> {
+        let mut writer = radeau_pcap::PcapWriter::new(Vec::new()).unwrap();
+        for n in 0..count {
+            let mut wire = vec![0u8; 60];
+            wire[0..6].copy_from_slice(&[0x01, 0x80, 0xc2, 0x00, 0x00, 0x0e]);
+            wire[6..12].copy_from_slice(&[0x02, 0x00, 0x42, 0x00, 0x00, n as u8]);
+            wire[12..14].copy_from_slice(&radeau_proto::ethernet::ETHERTYPE_GPTP.to_be_bytes());
+            writer
+                .write_record(1_000_000_000 + n as u64, &wire)
+                .unwrap();
+        }
+        writer.into_inner()
+    }
+
+    fn temp_pcap(name: &str, count: usize) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "radeau-capture-{name}-{}-{}.pcap",
+            std::process::id(),
+            unique
+        ));
+        std::fs::write(&path, pcap_bytes(count)).unwrap();
+        path
+    }
 
     #[test]
     #[ignore = "manual release-mode pipeline throughput benchmark"]
@@ -1121,6 +1365,279 @@ mod tests {
         // PF-004: bounded accumulator evicts oldest at the cap.
         assert_eq!(acc.len(), ACCUMULATOR_CAP);
         assert_eq!(acc.pending.front().unwrap().idx as usize, 500); // oldest 500 dropped
+    }
+
+    #[test]
+    fn accumulator_drop_count_is_reported_when_no_credits() {
+        // PF-004: a backed-up accumulator drops oldest frames and increments stats.
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let stats = CaptureStats::default();
+        for idx in 0..=ACCUMULATOR_CAP as u64 {
+            push_frame(&accumulator, test_frame(idx), &stats);
+        }
+        assert_eq!(
+            stats.accumulator_dropped.load(Ordering::Relaxed),
+            1,
+            "one frame beyond the cap is dropped"
+        );
+        assert_eq!(accumulator.lock().unwrap().pending.front().unwrap().idx, 1);
+    }
+
+    #[test]
+    fn no_batch_emits_without_a_credit() {
+        // PF-003: credits gate frames:batch emission even when cadence is due.
+        let events = Arc::new(RecordedEvents::default());
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let stats = CaptureStats::default();
+        push_frame(&accumulator, test_frame(0), &stats);
+        let credits = Arc::new(AtomicU32::new(0));
+        let attached = AtomicBool::new(true);
+        let mut last_emit_ms = 0;
+        let mut seq = 0;
+
+        try_emit_batch(
+            &events,
+            &credits,
+            &accumulator,
+            Instant::now() - Duration::from_millis(BATCH_INTERVAL_MS),
+            &mut last_emit_ms,
+            &mut seq,
+            &stats,
+            &attached,
+        );
+
+        assert!(events.batches.lock().unwrap().is_empty());
+        assert_eq!(accumulator.lock().unwrap().len(), 1);
+        assert_eq!(stats.emitted.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn eof_flush_emits_remaining_after_credit_wait_timeout() {
+        // CP-004: file replay never drops a frame at EOF, even if UI credits do not return.
+        let events = Arc::new(RecordedEvents::default());
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let stats = CaptureStats::default();
+        for idx in 0..3 {
+            push_frame(&accumulator, test_frame(idx), &stats);
+        }
+        let credits = Arc::new(AtomicU32::new(0));
+        let stop = AtomicBool::new(false);
+        let mut seq = 0;
+
+        let started = Instant::now();
+        flush_remaining(&events, &credits, &accumulator, &mut seq, &stats, &stop);
+
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "EOF flush should not wait the old one-second timeout"
+        );
+        assert_eq!(*events.batches.lock().unwrap(), vec![(0, 3)]);
+        assert_eq!(*events.batch_indexes.lock().unwrap(), vec![vec![0, 1, 2]]);
+        assert_eq!(seq, 1);
+        assert_eq!(stats.emitted.load(Ordering::Relaxed), 3);
+        assert_eq!(accumulator.lock().unwrap().len(), 0);
+        assert_eq!(
+            credits.load(Ordering::Relaxed),
+            0,
+            "timeout fallback emits without consuming a missing credit"
+        );
+    }
+
+    #[test]
+    fn eof_flush_exits_immediately_when_stop_is_set() {
+        // CP-004: stopping a session does not stall for the EOF credit wait.
+        let events = Arc::new(RecordedEvents::default());
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let stats = CaptureStats::default();
+        push_frame(&accumulator, test_frame(0), &stats);
+        let credits = Arc::new(AtomicU32::new(0));
+        let stop = AtomicBool::new(true);
+        let mut seq = 0;
+
+        let started = Instant::now();
+        flush_remaining(&events, &credits, &accumulator, &mut seq, &stats, &stop);
+
+        assert!(started.elapsed() < Duration::from_millis(50));
+        assert!(events.batches.lock().unwrap().is_empty());
+        assert_eq!(seq, 0);
+        assert_eq!(stats.emitted.load(Ordering::Relaxed), 0);
+        assert_eq!(accumulator.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn eof_flush_consumes_credit_only_when_batch_emits() {
+        // PF-003: credits account for emitted batches only, not empty flush attempts.
+        let events = Arc::new(RecordedEvents::default());
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let stats = CaptureStats::default();
+        let credits = Arc::new(AtomicU32::new(1));
+        let stop = AtomicBool::new(false);
+        let mut seq = 0;
+
+        flush_remaining(&events, &credits, &accumulator, &mut seq, &stats, &stop);
+        assert_eq!(credits.load(Ordering::Relaxed), 1);
+
+        push_frame(&accumulator, test_frame(7), &stats);
+        flush_remaining(&events, &credits, &accumulator, &mut seq, &stats, &stop);
+
+        assert_eq!(*events.batches.lock().unwrap(), vec![(0, 1)]);
+        assert_eq!(credits.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.emitted.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn stop_session_resets_credits_and_clears_pending() {
+        // PF-003/PF-004: stop clears queued frames and restores credits for the next start.
+        let state = CaptureState::default();
+        let credits = Arc::new(AtomicU32::new(0));
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        push_frame(&accumulator, test_frame(0), &CaptureStats::default());
+        *state.session.lock().unwrap() = Some(Session {
+            id: 1,
+            stop: Arc::new(AtomicBool::new(false)),
+            credits: Arc::clone(&credits),
+            accumulator: Arc::clone(&accumulator),
+            attached: Arc::new(AtomicBool::new(true)),
+            thread: None,
+        });
+
+        stop_session(&state).unwrap();
+
+        assert_eq!(credits.load(Ordering::Relaxed), MAX_CREDITS);
+        assert_eq!(accumulator.lock().unwrap().len(), 0);
+        assert!(!state.is_running());
+    }
+
+    #[test]
+    fn stats_sequence_is_monotonic() {
+        // PF-003: stats events preserve their sequence order under the event seam.
+        let events = Arc::new(RecordedEvents::default());
+        let stats = CaptureStats::default();
+        let started = Instant::now();
+        let mut seq = 0;
+
+        emit_stats(&events, &stats, started, &mut seq);
+        emit_stats(&events, &stats, started, &mut seq);
+
+        let stats = events.stats.lock().unwrap();
+        assert_eq!(stats.iter().map(|s| s.seq).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn pcap_session_loop_flushes_every_record_at_eof() {
+        // CP-005/PF-003: end-of-source flush drains accumulated pcap records through credits.
+        let records = 24usize;
+        let path = temp_pcap("eof-flush", records);
+        let source = Source::open(&SourceSpec::Pcap {
+            path: path.display().to_string(),
+            pace: "fast".into(),
+        })
+        .unwrap();
+        let (events, stats) = run_source_to_end(source, MAX_CREDITS);
+
+        let emitted: usize = events.batches.lock().unwrap().iter().map(|(_, n)| *n).sum();
+        assert_eq!(emitted, records);
+        assert_eq!(stats.received.load(Ordering::Relaxed), records as u64);
+        assert_eq!(stats.emitted.load(Ordering::Relaxed), records as u64);
+        assert_eq!(events.sessions.lock().unwrap().first(), Some(&"pcap"));
+        let links = events.links.lock().unwrap();
+        assert_eq!(links.first().map(|(state, _)| *state), Some("connected"));
+        assert_eq!(links.last().map(|(state, _)| *state), Some("closed"));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn devgen_session_loop_emits_batches_with_replenished_credits() {
+        // PF-002/PF-003: devgen uses the real reader loop and emits batches while credits are granted.
+        let source = Source::open(&SourceSpec::Devgen {
+            profile: "stress".into(),
+        })
+        .unwrap();
+        let events = Arc::new(RecordedEvents::default());
+        let recording = NoopRecording;
+        let stop = Arc::new(AtomicBool::new(false));
+        let credits = Arc::new(AtomicU32::new(MAX_CREDITS));
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let frame_ring = Arc::new(Mutex::new(FrameRing::default()));
+        let stats = Arc::new(CaptureStats::default());
+        let attached = Arc::new(AtomicBool::new(true));
+        let thread_events = Arc::clone(&events);
+        let thread_stop = Arc::clone(&stop);
+        let thread_credits = Arc::clone(&credits);
+        let thread_stats = Arc::clone(&stats);
+
+        let handle = std::thread::spawn(move || {
+            reader_loop_core(
+                &thread_events,
+                &recording,
+                source,
+                thread_stop,
+                thread_credits,
+                accumulator,
+                frame_ring,
+                thread_stats,
+                attached,
+            );
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while events.batches.lock().unwrap().len() < 2 && Instant::now() < deadline {
+            credits.store(MAX_CREDITS, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+
+        let emitted: usize = events.batches.lock().unwrap().iter().map(|(_, n)| *n).sum();
+        assert!(emitted > 0, "devgen should emit at least one batch");
+        assert!(stats.received.load(Ordering::Relaxed) >= stats.emitted.load(Ordering::Relaxed));
+        assert_eq!(events.sessions.lock().unwrap().first(), Some(&"devgen"));
+        let links = events.links.lock().unwrap();
+        assert_eq!(links.last().map(|(state, _)| *state), Some("closed"));
+    }
+
+    #[test]
+    fn stop_mid_session_ends_cleanly_and_stats_are_monotonic() {
+        // CP-005/PF-003: stopping an active reader exits the loop and emits final stats.
+        let source = Source::open(&SourceSpec::Devgen {
+            profile: "normal".into(),
+        })
+        .unwrap();
+        let events = Arc::new(RecordedEvents::default());
+        let recording = NoopRecording;
+        let stop = Arc::new(AtomicBool::new(false));
+        let credits = Arc::new(AtomicU32::new(MAX_CREDITS));
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let frame_ring = Arc::new(Mutex::new(FrameRing::default()));
+        let stats = Arc::new(CaptureStats::default());
+        let attached = Arc::new(AtomicBool::new(true));
+        let thread_events = Arc::clone(&events);
+        let thread_stop = Arc::clone(&stop);
+
+        let handle = std::thread::spawn(move || {
+            reader_loop_core(
+                &thread_events,
+                &recording,
+                source,
+                thread_stop,
+                credits,
+                accumulator,
+                frame_ring,
+                stats,
+                attached,
+            );
+        });
+
+        std::thread::sleep(Duration::from_millis(50));
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+
+        let stats = events.stats.lock().unwrap();
+        assert!(!stats.is_empty());
+        assert!(stats.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+        let links = events.links.lock().unwrap();
+        assert_eq!(links.last().map(|(state, _)| *state), Some("closed"));
     }
 
     #[test]
