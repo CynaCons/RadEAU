@@ -14,8 +14,12 @@ import {
   dependencyProbe,
   diagnosticsReport,
   exportRing,
+  exportJsonl,
   isDesktop,
   listInterfaces,
+  onReplayPosition,
+  onReplayPrepare,
+  onReplaySeek,
   logPath,
   onRecordingState,
   pickArxmlFile,
@@ -27,6 +31,12 @@ import {
   recordingDirSet,
   recordingList,
   recordingState,
+  replayOpen,
+  replayPause,
+  replayPlay,
+  replaySeek,
+  replaySetSpeed,
+  replayStep,
 } from "./desktop";
 
 describe("desktop browser fallbacks (v0.1.6)", () => {
@@ -67,8 +77,29 @@ describe("desktop browser fallbacks (v0.1.6)", () => {
     await expect(exportRing("out.pcap")).rejects.toThrow(/desktop app only/i);
   });
 
+  it("exportJsonl rejects honestly", async () => {
+    await expect(exportJsonl("out.jsonl", { kind: "ring" })).rejects.toThrow(/desktop app only/i);
+  });
+
   it("pickPcapFile returns null (editable path field stays usable)", async () => {
     expect(await pickPcapFile()).toBeNull();
+  });
+
+  describe("desktop browser fallbacks (replay CP-020..022)", () => {
+    it("replay commands reject with the pinned desktop-only message", async () => {
+      await expect(replayOpen("in.pcap")).rejects.toThrow(/replay is desktop-app only/i);
+      await expect(replayPlay()).rejects.toThrow(/replay is desktop-app only/i);
+      await expect(replayPause()).rejects.toThrow(/replay is desktop-app only/i);
+      await expect(replayStep()).rejects.toThrow(/replay is desktop-app only/i);
+      await expect(replaySeek(1)).rejects.toThrow(/replay is desktop-app only/i);
+      await expect(replaySetSpeed(null)).rejects.toThrow(/replay is desktop-app only/i);
+    });
+
+    it("replay event listeners are browser no-ops", () => {
+      expect(onReplayPosition(() => {})()).toBeUndefined();
+      expect(onReplaySeek(() => {})()).toBeUndefined();
+      expect(onReplayPrepare(() => {})()).toBeUndefined();
+    });
   });
 
   it("pickSavePath rejects honestly", async () => {
@@ -139,4 +170,3 @@ describe("desktop browser fallbacks (recording CP-014..016)", () => {
     expect(seen).toEqual([true, false]);
   });
 });
-

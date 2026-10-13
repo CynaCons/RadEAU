@@ -615,6 +615,10 @@ export function onCatalogState(cb: (state: CatalogStateEvent) => void): () => vo
 // ---------------------------------------------------------------------------
 
 const EXPORT_EVENT = "capture:export";
+const EXPORT_JSONL_EVENT = "export:jsonl";
+const REPLAY_POSITION_EVENT = "replay:position";
+const REPLAY_SEEK_EVENT = "replay:seek";
+const REPLAY_PREPARE_EVENT = "replay:prepare";
 
 export interface ExportRingResult {
   frames: number;
@@ -626,6 +630,49 @@ export interface ExportRingResult {
 export interface CaptureExportProgress {
   done: number;
   total: number;
+}
+
+// CP-020: replay prepare/open result from replay_open (camelCase).
+export interface ReplayInfo {
+  path: string;
+  frames: number;
+  firstTsNs: number;
+  lastTsNs: number;
+  durationNs: number;
+  interfaces: string[];
+  comment: string | null;
+  cut: boolean;
+}
+
+// CP-021/VU-028: replay:position payload driving the transport bar.
+export interface ReplayPosition {
+  state: "playing" | "paused" | "ended";
+  tNs: number;
+  frame: number;
+  frames: number;
+  durationNs: number;
+  speed: number | null;
+}
+
+// CP-022: replay:seek payload; the UI clears its trace ring on receipt.
+export interface ReplaySeek {
+  tNs: number;
+  frame: number;
+}
+
+export interface ReplayPrepareProgress {
+  done: number;
+  total: number;
+}
+
+export type ReplaySpeed = 0.1 | 0.25 | 0.5 | 1 | 2 | 5 | 10 | null;
+
+export type ExportJsonlFrom = { kind: "ring" } | { kind: "file"; path: string };
+
+export interface ExportJsonlResult {
+  frames: number;
+  bytes: number;
+  path: string;
 }
 
 const BROWSER_DIAG_REPORT = [
@@ -679,6 +726,81 @@ export function onCaptureExport(
   return listenEvent<CaptureExportProgress>(EXPORT_EVENT, cb);
 }
 
+/** Writes decoded frames as JSONL (CP-024). Browser mode rejects. */
+export function exportJsonl(
+  path: string,
+  from: ExportJsonlFrom = { kind: "ring" },
+): Promise<ExportJsonlResult> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("desktop app only"));
+  }
+  return invoke<ExportJsonlResult>("export_jsonl", { path, from });
+}
+
+/** Progress while export_jsonl runs; no-op-safe in browser mode. */
+export function onExportJsonl(
+  cb: (progress: CaptureExportProgress) => void,
+): () => void {
+  return listenEvent<CaptureExportProgress>(EXPORT_JSONL_EVENT, cb);
+}
+
+/** Opens/prepares a replay file (CP-020). Browser mode rejects honestly. */
+export function replayOpen(path: string): Promise<ReplayInfo> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("replay is desktop-app only"));
+  }
+  return invoke<ReplayInfo>("replay_open", { path });
+}
+
+export function replayPlay(): Promise<void> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("replay is desktop-app only"));
+  }
+  return invoke<void>("replay_play");
+}
+
+export function replayPause(): Promise<void> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("replay is desktop-app only"));
+  }
+  return invoke<void>("replay_pause");
+}
+
+export function replayStep(): Promise<void> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("replay is desktop-app only"));
+  }
+  return invoke<void>("replay_step");
+}
+
+export function replaySeek(tNs: number): Promise<void> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("replay is desktop-app only"));
+  }
+  return invoke<void>("replay_seek", { tNs });
+}
+
+export function replaySetSpeed(speed: ReplaySpeed): Promise<void> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("replay is desktop-app only"));
+  }
+  return invoke<void>("replay_set_speed", { speed });
+}
+
+export function onReplayPosition(cb: (position: ReplayPosition) => void): () => void {
+  return listenEvent<ReplayPosition>(REPLAY_POSITION_EVENT, cb);
+}
+
+export function onReplaySeek(cb: (seek: ReplaySeek) => void): () => void {
+  return listenEvent<ReplaySeek>(REPLAY_SEEK_EVENT, cb);
+}
+
+export function onReplayPrepare(
+  cb: (progress: ReplayPrepareProgress) => void,
+): () => void {
+  return listenEvent<ReplayPrepareProgress>(REPLAY_PREPARE_EVENT, cb);
+}
+
 /**
  * Opens a URL in the system browser via `open_url`, falling back to
  * `window.open` when the command is unavailable.
@@ -724,9 +846,10 @@ export async function pickSavePath(defaultName: string): Promise<string | null> 
   }
   try {
     const { save } = await import("@tauri-apps/plugin-dialog");
+    const ext = defaultName.toLowerCase().endsWith(".jsonl") ? "jsonl" : "pcap";
     const selected = await save({
       defaultPath: defaultName,
-      filters: [{ name: "pcap", extensions: ["pcap"] }],
+      filters: [{ name: ext, extensions: [ext] }],
     });
     return typeof selected === "string" ? selected : null;
   } catch (err) {

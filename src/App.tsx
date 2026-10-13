@@ -5,6 +5,7 @@ import { AppTopBar } from "./shell/AppTopBar";
 import { NavRail } from "./shell/NavRail";
 import { ViewHost } from "./shell/ViewHost";
 import { AboutDialog } from "./shell/AboutDialog";
+import { ReplayTimeBar } from "./shell/ReplayTimeBar";
 import { DEFAULT_VIEW_ID } from "./shell/viewRegistry";
 import { PerfZone } from "./runtime/perfProbe";
 
@@ -30,7 +31,7 @@ export function App() {
             />
           </PerfZone>
           <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-            {/* Replay time bar mounts here when a replay source is configured (SRS_visual_ui.md §5.9). */}
+            <ReplayTimeBar />
             <ViewHost activeViewId={activeViewId} />
           </Box>
         </Box>

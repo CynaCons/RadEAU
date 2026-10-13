@@ -22,7 +22,7 @@ import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
 import { useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { RaisedPanel } from "../components/RaisedPanel";
-import { pickDirectory, pickPcapFile } from "../runtime/desktop";
+import { exportJsonl, pickDirectory, pickPcapFile, pickSavePath } from "../runtime/desktop";
 import {
   RECORDER_DIR_CAPTION,
   RECORDER_EMPTY,
@@ -33,6 +33,7 @@ import {
   recordingPanelActive,
 } from "../runtime/recorderDisplay";
 import { recordingStore } from "../runtime/recordingStore";
+import { replayStore } from "../runtime/replayStore";
 import { runExportRing } from "../runtime/ringExport";
 import { sessionStore } from "../runtime/sessionStore";
 import { traceStore } from "../runtime/traceStore";
@@ -43,6 +44,29 @@ const MONO = {
   fontFamily: "var(--font-mono)",
   fontSize: 13,
 } as const;
+
+function defaultExportJsonlName(now: Date = new Date()): string {
+  const y = now.getFullYear();
+  const mo = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const h = String(now.getHours()).padStart(2, "0");
+  const mi = String(now.getMinutes()).padStart(2, "0");
+  const s = String(now.getSeconds()).padStart(2, "0");
+  return `radeau-${y}${mo}${d}-${h}${mi}${s}.jsonl`;
+}
+
+function formatReplayDuration(ns: number): string {
+  return `${(ns / 1_000_000_000).toLocaleString("en-US", {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  })}s`;
+}
+
+function exportErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return String(err);
+}
 
 function ActiveRecordingStats(props: { active: boolean }) {
   const stats = useStoreSelector(
@@ -95,10 +119,69 @@ function ExportBufferedFrames(props: { active: boolean }) {
   );
 }
 
+function ExportDecodedJsonl() {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  const onExport = async () => {
+    if (busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const path = await pickSavePath(defaultExportJsonlName());
+      if (!path) return;
+      const result = await exportJsonl(path, { kind: "ring" });
+      setError(false);
+      setMessage(
+        `Exported ${result.frames.toLocaleString("en-US")} decoded frames · ${Math.round(
+          result.bytes / 1024,
+        ).toLocaleString("en-US")} KB`,
+      );
+    } catch (err) {
+      setError(true);
+      setMessage(exportErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Stack direction="row" spacing={1} alignItems="center">
+      <Button
+        variant="outlined"
+        size="small"
+        startIcon={<DownloadIcon />}
+        disabled={busy}
+        onClick={() => {
+          void onExport();
+        }}
+        data-testid="recorder-export-jsonl-btn"
+      >
+        Export decoded JSONL
+      </Button>
+      {message ? (
+        <Typography
+          sx={{ fontSize: 12, color: error ? "var(--error)" : "text.secondary" }}
+          data-testid="recorder-export-jsonl-result"
+        >
+          {message}
+        </Typography>
+      ) : null}
+    </Stack>
+  );
+}
+
 export function RecorderView() {
   useViewLifecycle("recorder", {});
   const active = useViewActive("recorder");
   const session = useStoreSelector(sessionStore, ({ running, sourceKind, pcapPath }) => ({ running, sourceKind, pcapPath }), shallowEqual, active);
+  const replay = useStoreSelector(
+    replayStore,
+    ({ info, opening, error }) => ({ info, opening, error }),
+    shallowEqual,
+    active,
+  );
   const recording = useStoreSelector(
     recordingStore,
     ({ armed, active, path, error, dir, list, dirError }) => ({ armed, active, path, error, dir, list, dirError }),
@@ -142,12 +225,12 @@ export function RecorderView() {
     if (session.running) return;
     const path = await pickPcapFile();
     if (!path) return;
-    sessionStore.setPcapSource(path);
+    await replayStore.open(path);
   };
 
   const onReplayItem = (path: string) => {
     if (session.running) return;
-    sessionStore.setPcapSource(path);
+    void replayStore.open(path);
   };
 
   const onCopyPath = () => {
@@ -380,7 +463,7 @@ export function RecorderView() {
                   variant="outlined"
                   size="small"
                   startIcon={<FolderOpenIcon />}
-                  disabled={session.running}
+                  disabled={session.running || replay.opening}
                   onClick={() => {
                     void onReplayBrowse();
                   }}
@@ -394,6 +477,25 @@ export function RecorderView() {
           <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
             {RECORDER_REPLAY_CAPTION}
           </Typography>
+          {replay.info ? (
+            <Stack spacing={0.5} data-testid="recorder-replay-info">
+              <Typography sx={{ ...MONO, fontSize: 12, color: "text.secondary" }}>
+                {replay.info.frames.toLocaleString("en-US")} frames ·{" "}
+                {formatReplayDuration(replay.info.durationNs)}
+              </Typography>
+              {replay.info.comment ? (
+                <Typography sx={{ fontSize: 12, color: "text.secondary" }}>
+                  {replay.info.comment}
+                </Typography>
+              ) : null}
+            </Stack>
+          ) : null}
+          {replay.error ? (
+            <Alert severity="error" data-testid="recorder-replay-error">
+              {replay.error}
+            </Alert>
+          ) : null}
+          <ExportDecodedJsonl />
         </Stack>
       </RaisedPanel>
     </Stack>

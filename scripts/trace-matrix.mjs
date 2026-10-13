@@ -93,8 +93,9 @@ for (const abs of files) {
   const text = readFileSync(abs, "utf8");
   const wholeTest =
     /\.test\.tsx?$/.test(rel) || /\/tests\//.test(rel) || /^scripts\/e2e-/.test(rel);
-  // Rust: everything from the first #[cfg(test)] on is test code.
-  const cut = !wholeTest && rel.endsWith(".rs") ? text.indexOf("#[cfg(test)]") : -1;
+  // Rust: the test module (`#[cfg(test)] mod …`) and everything after it is
+  // test code; a lone #[cfg(test)] item (a stub) does not start it.
+  const cut = !wholeTest && rel.endsWith(".rs") ? text.search(/#\[cfg\(test\)\]\s*mod\s/) : -1;
   const parts = wholeTest
     ? [["test", text]]
     : cut >= 0

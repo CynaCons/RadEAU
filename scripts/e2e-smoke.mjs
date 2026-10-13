@@ -1922,34 +1922,89 @@ async function main() {
       }, 10_000, "recorder-list with at least one file");
       console.log("recording list:", JSON.stringify(list));
 
+      // CP-017/CP-018: recordings are pcapng named radeau-<start>.pcapng.
       const files = readdirSync(recordingDir).filter(
-        (n) => n.startsWith("radeau-") && n.endsWith(".pcap"),
+        (n) => n.startsWith("radeau-") && n.endsWith(".pcapng"),
       );
       if (files.length === 0)
-        throw new Error(`no radeau-*.pcap in ${recordingDir}`);
+        throw new Error(`no radeau-*.pcapng in ${recordingDir}`);
       const pcapPath = join(recordingDir, files[0]);
       const buf = readFileSync(pcapPath);
-      if (buf.length < 4)
-        throw new Error(`pcap too small: ${buf.length} bytes`);
-      // ns magic a1b23c4d little-endian → 4d 3c b2 a1
-      if (buf[0] !== 0x4d || buf[1] !== 0x3c || buf[2] !== 0xb2 || buf[3] !== 0xa1) {
-        throw new Error(
-          `pcap magic mismatch: ${[...buf.subarray(0, 4)].map((b) => b.toString(16)).join(" ")}`,
-        );
+      // Section Header Block type 0x0A0D0D0A, then a little-endian block walk.
+      if (buf.length < 28 || buf.readUInt32LE(0) !== 0x0a0d0d0a)
+        throw new Error(`not a pcapng section header: ${[...buf.subarray(0, 4)].map((b) => b.toString(16)).join(" ")}`);
+      let epbs = 0;
+      let idbs = 0;
+      for (let off = 0; off + 12 <= buf.length; ) {
+        const type = buf.readUInt32LE(off);
+        const len = buf.readUInt32LE(off + 4);
+        if (len < 12 || len % 4 !== 0 || off + len > buf.length || buf.readUInt32LE(off + len - 4) !== len)
+          throw new Error(`malformed pcapng block at ${off} (type ${type}, length ${len})`);
+        if (type === 6) epbs += 1;
+        if (type === 1) idbs += 1;
+        off += len;
       }
-      if (buf.length <= 24) {
-        throw new Error(
-          `pcap has header only (${buf.length} bytes) — expected recorded frames`,
-        );
-      }
+      if (idbs < 1 || epbs < 1) throw new Error(`pcapng has ${idbs} IDB / ${epbs} EPB — expected frames`);
+      // CP-017: the section comment describes the session.
+      if (!buf.includes(Buffer.from("source_kind=sim")))
+        throw new Error("pcapng section comment does not name the simulator source");
 
       const framesMatch = (list.text || "").match(/([\d,]+)\s*frames/i);
       const frames = framesMatch
         ? Number(framesMatch[1].replace(/,/g, ""))
         : null;
-      recordingPass = { bytes: buf.length, frames, file: files[0] };
+      recordingPass = { bytes: buf.length, frames, epbs, file: files[0] };
       console.log("recording: PASS", JSON.stringify(recordingPass));
 
+      // Phase (g) — replay the recording with the transport (CP-020..023, VU-028).
+      await session.eval(DISARM_RECORD_SWITCH_PROBE);
+      await sleep(200);
+      const replayPath = pcapPath.replaceAll("\\", "\\\\");
+      // CP-023: every assertion below reads the latest replay:position event.
+      const position = () => session.eval(`window.__radeauReplay.getSnapshot().position`);
+      const opened = await session.eval(`window.__radeauReplay.open("${replayPath}").then((i) => ({ frames: i.frames, durationNs: i.durationNs, comment: i.comment }))`);
+      if (opened.frames !== epbs) throw new Error(`replay_open frames ${opened.frames} != ${epbs} EPBs`);
+      if (!/source_kind=sim/.test(opened.comment || "")) throw new Error(`replay info comment: ${opened.comment}`);
+      await waitFor(() => session.eval(clickProbe("nav-trace")), 5_000, "nav-trace for replay");
+      await waitFor(() => session.eval(`!!document.querySelector('[data-testid="replay-bar"]')`), 5_000, "replay bar (VU-028)");
+      // Play starts the replay session; pause it right away, then step one frame.
+      await session.eval(clickProbe("replay-play-btn"));
+      try {
+        await waitFor(() => session.eval(`window.__radeauSession.getSnapshot().running`), 10_000, "replay session running");
+      } catch (err) {
+        const why = await session.eval(`({ session: window.__radeauSession.getSnapshot().lastError, source: window.__radeauSession.getSnapshot().sourceKind, replay: window.__radeauReplay.getSnapshot().error })`);
+        throw new Error(`${err.message} — ${JSON.stringify(why)}`);
+      }
+      await session.eval(`window.__radeauReplay.pause()`);
+      const paused = await waitFor(async () => {
+        const p = await position();
+        return p && p.state === "paused" ? p : null;
+      }, 5_000, "replay paused");
+      await sleep(300);
+      const held = await position();
+      if (held.frame !== paused.frame) throw new Error(`pause did not hold: ${paused.frame} -> ${held.frame}`);
+      await session.eval(`window.__radeauReplay.step()`);
+      const stepped = await waitFor(async () => {
+        const p = await position();
+        return p && p.frame === held.frame + 1 ? p : null;
+      }, 5_000, "step advances exactly one frame");
+      // Seek to the middle: lands at or after the target, still paused.
+      const target = Math.floor(opened.durationNs / 2);
+      await session.eval(`window.__radeauReplay.seek(${target})`);
+      const sought = await waitFor(async () => {
+        const p = await position();
+        return p && p.tNs >= target && p.frame > stepped.frame && p.state === "paused" ? p : null;
+      }, 5_000, "seek to the middle");
+      // Finish at max speed: the replay reaches the end with every frame.
+      await session.eval(`window.__radeauReplay.setSpeed(null).then(() => window.__radeauReplay.play())`);
+      const ended = await waitFor(async () => {
+        const p = await position();
+        return p && p.state === "ended" ? p : null;
+      }, 20_000, "replay ended");
+      console.log("replay: PASS", JSON.stringify({ frames: opened.frames, paused: held.frame, stepped: stepped.frame, seekFrame: sought.frame, ended: ended.frame }));
+      if (await session.eval(`window.__radeauSession.getSnapshot().running`))
+        await session.eval(clickProbe("appbar-run-btn"));
+      await session.eval(`window.__radeauSession.setSourceKind("devgen")`);
       await session.eval(DISARM_RECORD_SWITCH_PROBE);
       await sleep(200);
     } catch (err) {
