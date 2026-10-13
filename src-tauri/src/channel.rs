@@ -65,6 +65,8 @@ pub struct Capabilities {
     pub transmit: bool,
 }
 
+// Source states own their bounded buffers so capture setup remains allocation-free.
+#[allow(clippy::large_enum_variant)]
 pub enum Source {
     #[cfg(debug_assertions)]
     Devgen(DevgenSource),
@@ -478,7 +480,7 @@ impl PcapSource {
     fn fill(&mut self) -> Result<(), String> {
         let mut bytes = [0; 64 * 1024];
         loop {
-            match self.reader.next() {
+            match self.reader.next_record() {
                 Ok(Some(record)) => {
                     self.first_ts.get_or_insert(record.ts_ns);
                     self.pending = Some(record);
@@ -574,7 +576,7 @@ impl PcapStreamSource {
     }
     fn read(&mut self, _timeout: Duration) -> ChannelRead {
         loop {
-            match self.reader.next() {
+            match self.reader.next_record() {
                 Ok(Some(record)) => {
                     self.first_ts.get_or_insert(record.ts_ns);
                     self.frames += 1;
@@ -691,7 +693,7 @@ impl LiveSource {
         if self.failed {
             return ChannelRead::Idle;
         }
-        match self.capture.next() {
+        match self.capture.next_packet() {
             Ok(Some(packet)) => {
                 let wire = match self.link_type {
                     radeau_livecap::LinkType::Ethernet => packet.data,

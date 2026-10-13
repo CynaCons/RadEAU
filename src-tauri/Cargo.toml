@@ -3,6 +3,7 @@ name = "radeau"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "RadEAU — automotive Ethernet network analysis (SOME/IP, SOME/IP-SD, gPTP)"
 
 [build-dependencies]

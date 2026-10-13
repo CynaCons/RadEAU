@@ -282,7 +282,7 @@ pub fn build_router_advertisement(
 ) {
     let start = begin(134, out);
     out.push(cur_hop_limit);
-    out.push((managed as u8) << 7 | (other as u8) << 6);
+    out.push(u8::from(managed) << 7 | u8::from(other) << 6);
     out.extend_from_slice(&router_lifetime.to_be_bytes());
     out.extend_from_slice(&reachable_time.to_be_bytes());
     out.extend_from_slice(&retrans_timer.to_be_bytes());
@@ -316,7 +316,7 @@ pub fn build_neighbor_advertisement(
     out: &mut Vec<u8>,
 ) {
     let start = begin(136, out);
-    out.push((router as u8) << 7 | (solicited as u8) << 6 | (override_flag as u8) << 5);
+    out.push(u8::from(router) << 7 | u8::from(solicited) << 6 | u8::from(override_flag) << 5);
     out.extend_from_slice(&[0; 3]);
     out.extend_from_slice(&target);
     out.extend_from_slice(options);

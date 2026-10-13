@@ -3,6 +3,7 @@ name = "radeau-livecap"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Runtime-loaded Npcap/libpcap capture for RadEAU"
 
 [dependencies]

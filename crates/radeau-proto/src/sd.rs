@@ -45,7 +45,7 @@ pub fn parse(payload: &[u8]) -> Result<SdMessage, ParseError> {
     const ENTRY_LEN: usize = 16;
     let prefix = payload.get(..PREFIX_LEN).ok_or(ParseError::Truncated)?;
     let entries_len = u32::from_be_bytes(prefix[4..8].try_into().expect("exact slice")) as usize;
-    if entries_len % ENTRY_LEN != 0 {
+    if !entries_len.is_multiple_of(ENTRY_LEN) {
         return Err(ParseError::Malformed);
     }
     let entries_end = PREFIX_LEN

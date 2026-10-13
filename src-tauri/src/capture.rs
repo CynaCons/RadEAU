@@ -344,6 +344,7 @@ fn emit_pending_batch(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_emit_batch(
     app: &AppHandle,
     credits: &Arc<AtomicU32>,
@@ -359,11 +360,12 @@ fn try_emit_batch(
     }
     let elapsed_ms = Instant::now().duration_since(start).as_millis() as u64;
     let pending = accumulator.lock().map(|a| a.len() != 0).unwrap_or(false);
-    if pending && deadline_due(elapsed_ms, BATCH_INTERVAL_MS, *last_emit_ms) && take_credit(credits)
+    if pending
+        && deadline_due(elapsed_ms, BATCH_INTERVAL_MS, *last_emit_ms)
+        && take_credit(credits)
+        && emit_pending_batch(app, accumulator, seq, stats)
     {
-        if emit_pending_batch(app, accumulator, seq, stats) {
-            *last_emit_ms = elapsed_ms;
-        }
+        *last_emit_ms = elapsed_ms;
     }
 }
 
@@ -472,6 +474,7 @@ fn take_credit(credits: &Arc<AtomicU32>) -> bool {
         .is_ok()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reader_loop(
     app: AppHandle,
     mut source: Source,
@@ -940,6 +943,7 @@ mod tests {
         let mut total_bytes = 0usize;
         let mut seq = 0u64;
 
+        #[allow(clippy::explicit_counter_loop)]
         for _ in 0..(FRAME_COUNT / BATCH_FRAMES) {
             generated.clear();
             generator.gen_frames_with_wire(BATCH_FRAMES, 5_000.0, &mut generated);

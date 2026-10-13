@@ -120,12 +120,10 @@ pub fn plausible(buf: &[u8]) -> bool {
 }
 
 fn exact(body: &[u8], len: usize) -> Result<(), ParseError> {
-    if body.len() < len {
-        Err(ParseError::Truncated)
-    } else if body.len() > len {
-        Err(ParseError::Malformed)
-    } else {
-        Ok(())
+    match body.len().cmp(&len) {
+        std::cmp::Ordering::Less => Err(ParseError::Truncated),
+        std::cmp::Ordering::Greater => Err(ParseError::Malformed),
+        std::cmp::Ordering::Equal => Ok(()),
     }
 }
 
@@ -140,10 +138,7 @@ fn optional_u32(body: &[u8], base: usize) -> Result<Option<u32>, ParseError> {
     }
 }
 
-pub fn parse_payload<'a>(
-    header: DoipHeader,
-    body: &'a [u8],
-) -> Result<DoipPayload<'a>, ParseError> {
+pub fn parse_payload(header: DoipHeader, body: &[u8]) -> Result<DoipPayload<'_>, ParseError> {
     if body.len() != header.payload_length as usize {
         return Err(if body.len() < header.payload_length as usize {
             ParseError::Truncated
@@ -444,7 +439,7 @@ mod tests {
             for n in 0..wire.len() {
                 assert!(matches!(
                     parse_header(&wire[..n]),
-                    Err(ParseError::Truncated) | Err(ParseError::Malformed)
+                    Err(ParseError::Truncated | ParseError::Malformed)
                 ));
             }
         }

@@ -61,7 +61,7 @@ pub fn parse(payload: &[u8]) -> Result<SshMessage<'_>, ParseError> {
     let header = payload.get(..5).ok_or(ParseError::Truncated)?;
     let packet_length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
     let packet_len = usize::try_from(packet_length).map_err(|_| ParseError::Malformed)?;
-    if packet_len > MAX_PACKET_LEN || packet_len < 6 {
+    if !(6..=MAX_PACKET_LEN).contains(&packet_len) {
         return Err(ParseError::Malformed);
     }
     let packet = payload

@@ -27,12 +27,16 @@ jobs:
         run: npm run lint:ids
       - name: Unused-dependency check
         run: npm run lint:deps
+      - name: ESLint
+        run: npm run lint
 
   core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -42,3 +46,14 @@ jobs:
         run: cargo check --workspace --locked
       - name: Core unit tests
         run: cargo test --workspace --locked
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo-deny (advisories, licenses, bans, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+      - name: Unused Rust dependencies
+        uses: bnjbvr/cargo-machete@main

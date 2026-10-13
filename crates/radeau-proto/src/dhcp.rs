@@ -209,7 +209,7 @@ fn build_v4(
     out.extend_from_slice(&[0; 64 + 128]);
     out.extend_from_slice(&[0x63, 0x82, 0x53, 0x63]);
     for (code, data) in options {
-        if data.len() <= u8::MAX as usize {
+        if u8::try_from(data.len()).is_ok() {
             out.extend_from_slice(&[*code, data.len() as u8]);
             out.extend_from_slice(data);
         }
@@ -225,7 +225,7 @@ pub fn build_discover(xid: u32, chaddr: [u8; 6], out: &mut Vec<u8>) {
         [0; 4],
         &[(53, &[1]), (55, &[1, 3, 6, 51, 54])],
         out,
-    )
+    );
 }
 pub fn build_offer(
     xid: u32,
@@ -234,7 +234,7 @@ pub fn build_offer(
     server_id: [u8; 4],
     out: &mut Vec<u8>,
 ) {
-    build_v4(2, xid, chaddr, yiaddr, &[(53, &[2]), (54, &server_id)], out)
+    build_v4(2, xid, chaddr, yiaddr, &[(53, &[2]), (54, &server_id)], out);
 }
 pub fn build_solicit(transaction_id: u32, client_id: &[u8], out: &mut Vec<u8>) {
     out.push(1);
@@ -242,7 +242,7 @@ pub fn build_solicit(transaction_id: u32, client_id: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(&id[1..]);
     out.extend_from_slice(&1u16.to_be_bytes());
     out.extend_from_slice(&(client_id.len() as u16).to_be_bytes());
-    out.extend_from_slice(client_id)
+    out.extend_from_slice(client_id);
 }
 
 #[cfg(test)]
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn vectors() {
         let mut d = Vec::new();
-        build_discover(0x12345678, [0, 1, 2, 3, 4, 5], &mut d);
+        build_discover(0x1234_5678, [0, 1, 2, 3, 4, 5], &mut d);
         assert_eq!(
             &d[..12],
             &[1, 1, 6, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0x80, 0]
@@ -263,9 +263,9 @@ mod tests {
         build_offer(1, [1; 6], [10, 0, 0, 2], [10, 0, 0, 1], &mut o);
         assert_eq!(parse(&o).unwrap().yiaddr, [10, 0, 0, 2]);
         let mut s = Vec::new();
-        build_solicit(0x123456, &[0, 1, 2], &mut s);
+        build_solicit(0x0012_3456, &[0, 1, 2], &mut s);
         assert_eq!(s, [1, 0x12, 0x34, 0x56, 0, 1, 0, 3, 0, 1, 2]);
-        assert_eq!(parse_v6(&s).unwrap().transaction_id, 0x123456);
+        assert_eq!(parse_v6(&s).unwrap().transaction_id, 0x0012_3456);
     }
     #[test]
     fn prefixes_and_noise() {
@@ -288,7 +288,7 @@ mod tests {
         }
         let mut x = 9u32;
         for n in 0..1024 {
-            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let v = vec![(x >> 24) as u8; n % 300];
             let _ = parse(&v);
             let _ = parse_v6(&v);

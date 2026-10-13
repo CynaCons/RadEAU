@@ -390,16 +390,16 @@ pub fn dissect_with_catalog(
                 payload_offset = l4_offset + s.data_offset as usize * 4;
                 if s.src_port == doip::DOIP_PORT || s.dst_port == doip::DOIP_PORT {
                     payload_offset = dissect_doip_tcp(&mut layers, s.payload, payload_offset);
-                } else if !s.payload.is_empty() {
-                    if !add_tcp_application(
+                } else if !s.payload.is_empty()
+                    && !add_tcp_application(
                         &mut layers,
                         s.src_port,
                         s.dst_port,
                         s.payload,
                         payload_offset,
-                    ) {
-                        data_layer(&mut layers, s.payload.len());
-                    }
+                    )
+                {
+                    data_layer(&mut layers, s.payload.len());
                 }
             }
             Err(e) => layers.push(malformed("TCP", e)),
@@ -1487,7 +1487,7 @@ fn add_udp_application(
             for x in p.options {
                 f.push(field(
                     &dhcp::option_name(x.code),
-                    hex(&x.data),
+                    hex(x.data),
                     o + x.offset,
                     x.data.len() + 2,
                 ));

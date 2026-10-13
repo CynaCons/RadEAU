@@ -43,8 +43,8 @@ fn main() {
                 diag::log_startup();
             }
             app.state::<recording::RecordingState>()
-                .init_dir(&app.handle());
-            catalog::emit_initial(app.state::<catalog::CatalogState>().inner(), &app.handle());
+                .init_dir(app.handle());
+            catalog::emit_initial(app.state::<catalog::CatalogState>().inner(), app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

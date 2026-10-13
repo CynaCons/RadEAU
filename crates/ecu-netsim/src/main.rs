@@ -1202,7 +1202,7 @@ mod tests {
         reader.push(&bytes);
         reader.finish();
         let timestamps = (0..13)
-            .map(|_| reader.next().unwrap().unwrap().ts_ns)
+            .map(|_| reader.next_record().unwrap().unwrap().ts_ns)
             .collect::<Vec<_>>();
         assert!(timestamps
             .into_iter()

@@ -126,8 +126,59 @@ fn parse_name(buf: &[u8], start: usize) -> Result<(String, usize), ParseError> {
     Ok((labels.join("."), consumed))
 }
 
+fn skip_name(buf: &[u8], start: usize) -> Result<usize, ParseError> {
+    let mut pos = start;
+    let mut consumed = 0usize;
+    let mut jumped = false;
+    let mut hops = 0usize;
+    let mut expanded = 1usize;
+    loop {
+        let len = *buf.get(pos).ok_or(ParseError::Truncated)?;
+        if len & 0xc0 == 0xc0 {
+            let low = *buf.get(pos + 1).ok_or(ParseError::Truncated)?;
+            if !jumped {
+                consumed = pos + 2 - start;
+            }
+            let target = (((len & 0x3f) as usize) << 8) | usize::from(low);
+            if target >= buf.len() {
+                return Err(ParseError::Malformed);
+            }
+            hops += 1;
+            if hops > 64 {
+                return Err(ParseError::Malformed);
+            }
+            pos = target;
+            jumped = true;
+        } else if len & 0xc0 != 0 {
+            return Err(ParseError::Malformed);
+        } else if len == 0 {
+            if !jumped {
+                consumed = pos + 1 - start;
+            }
+            return Ok(consumed);
+        } else {
+            let len = usize::from(len);
+            buf.get(pos + 1..pos + 1 + len)
+                .ok_or(ParseError::Truncated)?;
+            expanded = expanded.checked_add(len + 1).ok_or(ParseError::Malformed)?;
+            if expanded > 255 {
+                return Err(ParseError::Malformed);
+            }
+            pos += len + 1;
+            if !jumped {
+                consumed = pos - start;
+            }
+        }
+    }
+}
+
 fn parse_rr(buf: &[u8], pos: &mut usize, keep: bool) -> Result<Option<DnsAnswer>, ParseError> {
-    let (name, used) = parse_name(buf, *pos)?;
+    let (name, used) = if keep {
+        let (name, used) = parse_name(buf, *pos)?;
+        (Some(name), used)
+    } else {
+        (None, skip_name(buf, *pos)?)
+    };
     *pos += used;
     let head = buf.get(*pos..*pos + 10).ok_or(ParseError::Truncated)?;
     let rr_type = u16::from_be_bytes([head[0], head[1]]);
@@ -187,7 +238,7 @@ fn parse_rr(buf: &[u8], pos: &mut usize, keep: bool) -> Result<Option<DnsAnswer>
         },
     };
     Ok(Some(DnsAnswer {
-        name,
+        name: name.expect("kept record has a parsed owner name"),
         rr_type,
         class,
         ttl,
@@ -400,7 +451,7 @@ mod tests {
         }
         let mut x = 3u32;
         for n in 0..1024 {
-            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let v = vec![(x >> 24) as u8; n % 200];
             let _ = parse(&v);
         }
@@ -409,5 +460,19 @@ mod tests {
     fn compression_loop_is_malformed() {
         let wire = [0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xc0, 0x0c, 0, 1, 0, 1];
         assert_eq!(parse(&wire), Err(ParseError::Malformed));
+    }
+
+    #[test]
+    fn discarded_record_owner_is_skipped_without_utf8_decoding() {
+        let wire = [
+            0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, // header: one authority RR
+            1, 0xff, 0, // structurally valid opaque owner label
+            0, 1, 0, 1, // A, IN
+            0, 0, 0, 0, // TTL
+            0, 4, 192, 0, 2, 1, // RDATA
+        ];
+        let parsed = parse(&wire).unwrap();
+        assert_eq!(parsed.authority_count, 1);
+        assert!(parsed.answers.is_empty());
     }
 }

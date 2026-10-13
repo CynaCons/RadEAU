@@ -312,15 +312,14 @@ pub struct RawCapture {
     handle: *mut Pcap,
 }
 
+type OpenResult = Result<(RawCapture, bool, i32, Vec<String>), (String, Option<i32>)>;
+
 // A pcap handle is owned by exactly one reader thread and never accessed
 // concurrently. Moving that ownership to the capture thread is safe.
 unsafe impl Send for RawCapture {}
 
 impl RawCapture {
-    pub fn open(
-        id: &str,
-        filter: Option<&str>,
-    ) -> Result<(Self, bool, i32, Vec<String>), (String, Option<i32>)> {
+    pub fn open(id: &str, filter: Option<&str>) -> OpenResult {
         let api = api().map_err(|error| (error, None))?;
         let id = CString::new(id).map_err(|_| ("interface id contains NUL".into(), None))?;
         let mut error = [0 as c_char; PCAP_ERRBUF_SIZE];

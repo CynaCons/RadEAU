@@ -14,15 +14,15 @@
 //! - `s: u8`   endpoint index into the session endpoint table (ENDPOINT_OVERFLOW when full)
 //! - `p: u8`   PROTO_*
 //! - `sv: u16`, `m: u16`  identity pair, meaning per class:
-//!     SOME/IP, SD: service id, method id
-//!     gPTP: domain, sequence id
-//!     ARP: opcode, 0
-//!     UDP, TCP: source port, destination port
-//!     ICMP: type, code
-//!     IPv6: next header, 0
-//!     IPv4 (other protocol): protocol number, 0
-//!     Other (non-IP): EtherType, 0
-//!     Malformed: 0, 0
+//!   SOME/IP, SD: service id, method id
+//!   gPTP: domain, sequence id
+//!   ARP: opcode, 0
+//!   UDP, TCP: source port, destination port
+//!   ICMP: type, code
+//!   IPv6: next header, 0
+//!   IPv4 (other protocol): protocol number, 0
+//!   Other (non-IP): EtherType, 0
+//!   Malformed: 0, 0
 //! - `ty: u8`  message type, table per class below (0 for classes without one)
 //! - `se: i32` SOME/IP session id; -1 for every other class
 //! - `l: u32`  full wire length incl. Ethernet header

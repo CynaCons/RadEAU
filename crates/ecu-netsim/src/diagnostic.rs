@@ -44,7 +44,7 @@ impl DiagnosticSession {
     pub fn frames_at(&mut self, time_ms: u64, ident: &mut u16) -> Vec<ScheduledFrame> {
         let mut frames = Vec::new();
 
-        if matches!(time_ms, 0 | 500 | 1000) || (time_ms != 0 && time_ms % 30_000 == 0) {
+        if matches!(time_ms, 0 | 500 | 1000) || (time_ms != 0 && time_ms.is_multiple_of(30_000)) {
             let message = vehicle_announcement();
             frames.push(ScheduledFrame {
                 port: FUSION_PORT,
@@ -69,11 +69,11 @@ impl DiagnosticSession {
                     diagnostic_message(TESTER_ADDRESS, ENTITY_ADDRESS, &[0x3e, 0x80]);
                 frames.push(self.tester_data(&tester_present, ident));
             }
-            _ if time_ms > 2000 && time_ms % 2000 == 0 => {
+            _ if time_ms > 2000 && time_ms.is_multiple_of(2000) => {
                 let tester_present =
                     diagnostic_message(TESTER_ADDRESS, ENTITY_ADDRESS, &[0x3e, 0x80]);
                 frames.push(self.tester_data(&tester_present, ident));
-                if time_ms % 10_000 == 0 {
+                if time_ms.is_multiple_of(10_000) {
                     let read_vin =
                         diagnostic_message(TESTER_ADDRESS, ENTITY_ADDRESS, &[0x22, 0xf1, 0x90]);
                     frames.push(self.tester_data(&read_vin, ident));
@@ -82,19 +82,19 @@ impl DiagnosticSession {
             _ => {}
         }
 
-        if time_ms >= 2005 && (time_ms - 5) % 2000 == 0 {
+        if time_ms >= 2005 && (time_ms - 5).is_multiple_of(2000) {
             let ack = diagnostic_ack(ENTITY_ADDRESS, TESTER_ADDRESS);
             frames.push(self.entity_data(&ack, ident));
         }
-        if time_ms >= 2010 && (time_ms - 10) % 2000 == 0 {
+        if time_ms >= 2010 && (time_ms - 10).is_multiple_of(2000) {
             let response = diagnostic_message(ENTITY_ADDRESS, TESTER_ADDRESS, &[0x7e, 0x80]);
             frames.push(self.entity_data(&response, ident));
         }
-        if time_ms >= 10_005 && (time_ms - 5) % 10_000 == 0 {
+        if time_ms >= 10_005 && (time_ms - 5).is_multiple_of(10_000) {
             let ack = diagnostic_ack(ENTITY_ADDRESS, TESTER_ADDRESS);
             frames.push(self.entity_data(&ack, ident));
         }
-        if time_ms >= 10_010 && (time_ms - 10) % 10_000 == 0 {
+        if time_ms >= 10_010 && (time_ms - 10).is_multiple_of(10_000) {
             let mut uds = vec![0x62, 0xf1, 0x90];
             uds.extend_from_slice(VIN);
             let response = diagnostic_message(ENTITY_ADDRESS, TESTER_ADDRESS, &uds);

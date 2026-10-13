@@ -145,7 +145,7 @@ impl PcapReader {
             Ok(None)
         }
     }
-    pub fn next(&mut self) -> Result<Option<Record>, PcapError> {
+    pub fn next_record(&mut self) -> Result<Option<Record>, PcapError> {
         loop {
             match &self.format {
                 Format::Unknown => {
@@ -208,8 +208,8 @@ impl PcapReader {
                         return self.need();
                     }
                     let h = self.available();
-                    let sec = endian.u32(&h[0..4]) as u64;
-                    let frac = endian.u32(&h[4..8]) as u64;
+                    let sec = u64::from(endian.u32(&h[0..4]));
+                    let frac = u64::from(endian.u32(&h[4..8]));
                     let cap = endian.u32(&h[8..12]) as usize;
                     let orig = endian.u32(&h[12..16]) as usize;
                     if cap > MAX_RECORD_LEN {
@@ -250,15 +250,15 @@ impl PcapReader {
                         };
                     }
                     let kind = if is_shb {
-                        0x0a0d0d0a
+                        0x0a0d_0d0a
                     } else {
                         endian.u32(&b[0..4])
                     };
                     let len = endian.u32(&b[4..8]) as usize;
-                    if len < 12 || len % 4 != 0 {
+                    if len < 12 || !len.is_multiple_of(4) {
                         return Err(PcapError::Invalid(format!("pcapng block length {len}")));
                     }
-                    if !matches!(kind, 0x0a0d0d0a | 1 | 3 | 6) && len > MAX_BUFFER_LEN {
+                    if !matches!(kind, 0x0a0d_0d0a | 1 | 3 | 6) && len > MAX_BUFFER_LEN {
                         let consumed = self.available().len().min(len);
                         self.offset += consumed;
                         self.skip_remaining = len - consumed;
@@ -279,7 +279,7 @@ impl PcapReader {
                     let block = b[..len].to_vec();
                     self.offset += len;
                     match kind {
-                        0x0a0d0d0a => {
+                        0x0a0d_0d0a => {
                             if len < 28 {
                                 return Err(PcapError::Invalid("short section header".into()));
                             }
@@ -306,9 +306,10 @@ impl PcapReader {
                                     9 if !value.is_empty() => {
                                         let r = value[0];
                                         units = if r & 0x80 == 0 {
-                                            10u64.checked_pow(r as u32).unwrap_or(u64::MAX)
+                                            10u64.checked_pow(u32::from(r)).unwrap_or(u64::MAX)
                                         } else {
-                                            1u64.checked_shl((r & 0x7f) as u32).unwrap_or(u64::MAX)
+                                            1u64.checked_shl(u32::from(r & 0x7f))
+                                                .unwrap_or(u64::MAX)
                                         };
                                     }
                                     _ => {}
@@ -332,8 +333,8 @@ impl PcapReader {
                                     "interface id {iface} exceeds u16"
                                 )));
                             }
-                            let ticks = ((endian.u32(&block[12..16]) as u64) << 32)
-                                | endian.u32(&block[16..20]) as u64;
+                            let ticks = (u64::from(endian.u32(&block[12..16])) << 32)
+                                | u64::from(endian.u32(&block[16..20]));
                             let cap = endian.u32(&block[20..24]) as usize;
                             let orig = endian.u32(&block[24..28]) as usize;
                             if cap > MAX_RECORD_LEN {
@@ -362,8 +363,9 @@ impl PcapReader {
                                     };
                                 }
                             }
-                            let ts_ns = ((ticks as u128 * 1_000_000_000u128) / units as u128)
-                                .min(u64::MAX as u128)
+                            let ts_ns = ((u128::from(ticks) * 1_000_000_000u128)
+                                / u128::from(units))
+                            .min(u128::from(u64::MAX))
                                 as u64;
                             let wire = block[28..28 + cap].to_vec();
                             self.last_ts = Some(ts_ns);
@@ -464,8 +466,11 @@ impl<W: Write> PcapWriter<W> {
                 "record exceeds writer snaplen 65535",
             ));
         }
-        self.inner
-            .write_all(&(ts_ns / 1_000_000_000).min(u32::MAX as u64).to_le_bytes()[..4])?;
+        self.inner.write_all(
+            &(ts_ns / 1_000_000_000)
+                .min(u64::from(u32::MAX))
+                .to_le_bytes()[..4],
+        )?;
         self.inner
             .write_all(&((ts_ns % 1_000_000_000) as u32).to_le_bytes())?;
         let len = wire.len() as u32;
@@ -490,13 +495,13 @@ mod tests {
         let mut out = Vec::new();
         for c in data.chunks(chunk) {
             r.push(c);
-            while let Some(x) = r.next()? {
+            while let Some(x) = r.next_record()? {
                 out.push(x);
             }
         }
         r.finish();
         loop {
-            match r.next() {
+            match r.next_record() {
                 Ok(Some(x)) => out.push(x),
                 Err(PcapError::Ended { cut: false }) => break,
                 Err(e) => return Err(e),
@@ -544,14 +549,14 @@ mod tests {
 
     fn shb(endian: Endian) -> Vec<u8> {
         let mut body = Vec::new();
-        put32(&mut body, endian, 0x1a2b3c4d);
+        put32(&mut body, endian, 0x1a2b_3c4d);
         put16(&mut body, endian, 1);
         put16(&mut body, endian, 0);
         match endian {
             Endian::Little => body.extend((-1i64).to_le_bytes()),
             Endian::Big => body.extend((-1i64).to_be_bytes()),
         }
-        block(endian, 0x0a0d0d0a, &body)
+        block(endian, 0x0a0d_0d0a, &body)
     }
 
     fn idb(endian: Endian, snaplen: u32, resolution: u8, name: &str) -> Vec<u8> {
@@ -719,7 +724,7 @@ mod tests {
         let mut prefix = shb(Endian::Little);
         prefix.extend(idb(Endian::Little, 65_535, 9, "eth0"));
         r.push(&prefix);
-        assert_eq!(r.next().unwrap(), None);
+        assert_eq!(r.next_record().unwrap(), None);
 
         let large_len = MAX_BUFFER_LEN + 4096;
         let mut header = Vec::new();
@@ -727,7 +732,7 @@ mod tests {
         put32(&mut header, Endian::Little, large_len as u32);
         header.extend([0; 4]);
         r.push(&header);
-        assert_eq!(r.next().unwrap(), None);
+        assert_eq!(r.next_record().unwrap(), None);
         assert!(r.buf.len() <= MAX_BUFFER_LEN);
         for zeros in vec![0u8; large_len - 12].chunks(8192) {
             r.push(zeros);
@@ -735,9 +740,9 @@ mod tests {
         }
         let packet = epb(Endian::Little, 0, 1, b"after", 5, None);
         r.push(&packet);
-        assert_eq!(r.next().unwrap().unwrap().wire, b"after");
+        assert_eq!(r.next_record().unwrap().unwrap().wire, b"after");
         r.finish();
-        assert_eq!(r.next(), Err(PcapError::Ended { cut: false }));
+        assert_eq!(r.next_record(), Err(PcapError::Ended { cut: false }));
     }
 
     #[test]
@@ -771,10 +776,10 @@ mod tests {
         let d = &d[..d.len() - 3];
         let mut r = PcapReader::new();
         r.push(d);
-        assert_eq!(r.next().unwrap().unwrap().wire, b"complete");
-        assert_eq!(r.next().unwrap(), None);
+        assert_eq!(r.next_record().unwrap().unwrap().wire, b"complete");
+        assert_eq!(r.next_record().unwrap(), None);
         r.finish();
-        assert_eq!(r.next(), Err(PcapError::Ended { cut: true }));
+        assert_eq!(r.next_record(), Err(PcapError::Ended { cut: true }));
     }
 
     #[test]

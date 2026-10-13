@@ -682,6 +682,18 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_arp_layout_keeps_an_honest_arp_row() {
+        let mut payload = vec![0; arp::PACKET_LEN];
+        payload[..8].copy_from_slice(&[0, 1, 8, 0, 8, 4, 0, 1]);
+        let frame = l2_frame(ethernet::ETHERTYPE_ARP, &payload);
+        assert_eq!(frame.proto, PROTO_ARP);
+        assert_eq!(frame.msg_type, ARP_TY_OTHER);
+        assert_eq!(frame.src_ip, 0);
+        assert_eq!(frame.dst_ip, 0);
+        assert_eq!(frame.payload_off, 14);
+    }
+
+    #[test]
     fn udp_doip_discovery_is_classified() {
         let mut message = Vec::new();
         doip::build_message(2, 0x0001, &[], &mut message);
@@ -1057,7 +1069,7 @@ mod tests {
         let mut by_class = [0u64; PROTO_CLASS_COUNT];
         let mut idx = 0;
         let mut drain = |reader: &mut radeau_pcap::PcapReader| {
-            while let Ok(Some(record)) = reader.next() {
+            while let Ok(Some(record)) = reader.next_record() {
                 let frame = classify_frame(&record.wire, idx, 0.0, DIR_RX, &mut endpoints);
                 by_class[frame.proto as usize] += 1;
                 idx += 1;

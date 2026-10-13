@@ -1,6 +1,6 @@
 //! Bounded AUTOSAR communication-extract import and SOME/IP signal decoding.
 
-use quick_xml::{events::Event as XmlEvent, Reader};
+use quick_xml::{events::Event as XmlEvent, Reader, XmlVersion};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -145,12 +145,8 @@ struct Node {
     path: String,
 }
 const MAX_XML_DEPTH: usize = 256;
-fn local(b: &[u8]) -> String {
-    String::from_utf8_lossy(b)
-        .rsplit(':')
-        .next()
-        .unwrap_or("")
-        .to_string()
+fn local(value: &str) -> String {
+    value.rsplit(':').next().unwrap_or("").to_string()
 }
 fn child<'a>(n: &'a Node, name: &str) -> Option<&'a Node> {
     n.children.iter().find(|c| c.name == name)
@@ -222,7 +218,7 @@ fn parse_tree(xml: &str) -> Result<Node, ImportError> {
                     let a = a.map_err(|e| ImportError::new(format!("XML attribute error: {e}")))?;
                     n.attrs.insert(
                         local(a.key.as_ref()),
-                        a.unescape_value()
+                        a.normalized_value(XmlVersion::Implicit1_0)
                             .map_err(|e| ImportError::new(e.to_string()))?
                             .into_owned(),
                     );
@@ -243,7 +239,7 @@ fn parse_tree(xml: &str) -> Result<Node, ImportError> {
                     let a = a.map_err(|e| ImportError::new(format!("XML attribute error: {e}")))?;
                     n.attrs.insert(
                         local(a.key.as_ref()),
-                        a.unescape_value()
+                        a.normalized_value(XmlVersion::Implicit1_0)
                             .map_err(|e| ImportError::new(e.to_string()))?
                             .into_owned(),
                     );
@@ -256,13 +252,12 @@ fn parse_tree(xml: &str) -> Result<Node, ImportError> {
             }
             Ok(XmlEvent::Text(e)) => {
                 if let Some(n) = stack.last_mut() {
-                    n.text
-                        .push_str(&e.unescape().map_err(|e| ImportError::new(e.to_string()))?)
+                    n.text.push_str(&e.xml10_content())
                 }
             }
             Ok(XmlEvent::CData(e)) => {
                 if let Some(n) = stack.last_mut() {
-                    n.text.push_str(&String::from_utf8_lossy(e.as_ref()))
+                    n.text.push_str(e.as_ref())
                 }
             }
             Ok(XmlEvent::End(_)) => {

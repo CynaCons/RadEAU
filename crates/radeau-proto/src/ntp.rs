@@ -121,7 +121,7 @@ mod tests {
         }
         let mut x = 1u32;
         for n in 0..512 {
-            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let v = vec![(x >> 24) as u8; n % 80];
             let _ = parse(&v);
         }

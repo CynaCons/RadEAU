@@ -32,7 +32,7 @@ impl<'a> IcmpPacket<'a> {
         out.push(code);
         out.extend_from_slice(&checksum.to_be_bytes());
         out.extend_from_slice(&rest);
-        out.extend_from_slice(payload)
+        out.extend_from_slice(payload);
     }
 }
 

@@ -85,23 +85,23 @@ impl StandardTraffic {
             _ => {}
         }
 
-        if ms % 20_000 == 0 {
+        if ms.is_multiple_of(20_000) {
             frames.push(frame(CAMERA_PORT, ntp_frame(false, ident)));
             frames.push(frame(FUSION_PORT, ntp_frame(true, ident)));
         }
-        if ms % 30_000 == 0 {
+        if ms.is_multiple_of(30_000) {
             frames.push(frame(FUSION_PORT, lldp_frame()));
         }
-        if ms % 2_000 == 0 {
+        if ms.is_multiple_of(2_000) {
             frames.push(frame(FUSION_PORT, ptp_udp(true, ms, ident)));
         }
-        if ms % 1_000 == 0 {
+        if ms.is_multiple_of(1_000) {
             frames.push(frame(FUSION_PORT, ptp_udp(false, ms, ident)));
         }
         // 100 Hz AAF stream: enough to read as a continuous stream in the
         // trace without the 1 kHz rate saturating the UI's Fixed-mode
         // projection (the incremental collapse is a backlog item).
-        if ms % 10 == 0 {
+        if ms.is_multiple_of(10) {
             let seq = self.avtp_sequence;
             self.avtp_sequence = self.avtp_sequence.wrapping_add(1);
             frames.push(frame(CAMERA_PORT, avtp_frame(seq, ms)));
@@ -210,6 +210,8 @@ fn ndp_na() -> Vec<u8> {
     ipv6_frame(CAMERA_MAC, CLOCK_MAC, CLOCK_V6, CAMERA_V6, 58, &p)
 }
 
+// Packet construction mirrors the complete Ethernet/IPv4/UDP endpoint tuple.
+#[allow(clippy::too_many_arguments)]
 fn udp4(
     src_mac: [u8; 6],
     dst_mac: [u8; 6],

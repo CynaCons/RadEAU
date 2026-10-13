@@ -164,7 +164,7 @@ impl LiveCapture {
         self.raw.datalink()
     }
 
-    pub fn next(&mut self) -> Result<Option<Packet>, String> {
+    pub fn next_packet(&mut self) -> Result<Option<Packet>, String> {
         self.raw.next(self.precision_ns)
     }
 
@@ -313,7 +313,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            match capture.next() {
+            match capture.next_packet() {
                 Ok(Some(packet)) => {
                     let frame = null_loopback_to_ethernet(packet.data);
                     assert!(

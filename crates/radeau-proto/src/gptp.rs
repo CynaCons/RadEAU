@@ -75,7 +75,7 @@ pub fn parse_any_transport(l2_payload: &[u8]) -> Result<GptpMessage, ParseError>
             timestamp[5],
         ]);
         let nanos = u32::from_be_bytes(timestamp[6..10].try_into().expect("exact slice"));
-        Some(seconds as u128 * 1_000_000_000 + nanos as u128)
+        Some(u128::from(seconds) * 1_000_000_000 + u128::from(nanos))
     } else {
         None
     };

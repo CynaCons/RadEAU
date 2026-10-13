@@ -3,6 +3,30 @@ name = "radeau-proto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Shared protocol codecs for RadEAU and ecu-netsim: Ethernet II / IPv4 / UDP, SOME/IP, SOME/IP-SD, gPTP (docs/SRS_protocols.md)"
 
 [dependencies]
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Wire fields intentionally narrow values to protocol-specified widths.
+cast_possible_truncation = "allow"
+# Protocol modules repeat their names in public wire-type names for clarity.
+module_name_repetitions = "allow"
+# Compact codec APIs keep error semantics in the crate-level contract.
+missing_errors_doc = "allow"
+# Parsed wire models are useful only in context, not universally must-use.
+must_use_candidate = "allow"
+# Established codec docs use protocol acronyms as prose.
+doc_markdown = "allow"
+# Bounds checks make fixed-width slice conversions infallible in practice.
+missing_panics_doc = "allow"
+# Protocol dispatchers mirror wire-format variants and are clearer kept together.
+too_many_lines = "allow"
+# Wire builders expose protocol header fields directly.
+too_many_arguments = "allow"
+# Independent wire flags are represented faithfully as booleans.
+struct_excessive_bools = "allow"
+# NTP conversion to display milliseconds intentionally accepts floating-point precision.
+cast_precision_loss = "allow"

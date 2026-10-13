@@ -48,7 +48,7 @@ fn management_address(value: &[u8]) -> Option<String> {
         return None;
     }
     let subtype = value[1];
-    let address = &value[2..1 + address_len];
+    let address = &value[2..=address_len];
     match (subtype, address) {
         (1, [a, b, c, d]) => Some(format!("{a}.{b}.{c}.{d}")),
         (2, bytes) if bytes.len() == 16 => {

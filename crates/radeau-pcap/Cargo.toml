@@ -3,5 +3,18 @@ name = "radeau-pcap"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Bounded streaming classic pcap and pcapng reader/writer for RadEAU"
 
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# On-disk field widths require deliberate narrowing casts after bounds checks.
+cast_possible_truncation = "allow"
+# Format-specific public types retain the pcap prefix for API clarity.
+module_name_repetitions = "allow"
+# Reader errors are documented by the shared PcapError type.
+missing_errors_doc = "allow"
+# Stateful readers and records do not benefit from blanket must-use markers.
+must_use_candidate = "allow"
+# The streaming state machine is clearer as one format-dispatch loop.
+too_many_lines = "allow"

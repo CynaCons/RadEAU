@@ -23,6 +23,9 @@ pub struct ArpPacket {
 impl ArpPacket {
     pub fn parse(buf: &[u8]) -> Result<Self, ParseError> {
         let b = buf.get(..PACKET_LEN).ok_or(ParseError::Truncated)?;
+        if b[4] != 6 || b[5] != 4 {
+            return Err(ParseError::Malformed);
+        }
         Ok(Self {
             hw_type: u16::from_be_bytes([b[0], b[1]]),
             proto_type: u16::from_be_bytes([b[2], b[3]]),
@@ -78,5 +81,16 @@ mod tests {
         for n in 0..PACKET_LEN {
             assert_eq!(ArpPacket::parse(&w[..n]), Err(ParseError::Truncated));
         }
+    }
+
+    #[test]
+    fn rejects_non_ethernet_ipv4_address_lengths() {
+        let mut w = vec![];
+        ArpPacket::build(&sample(), &mut w);
+        w[4] = 8;
+        assert_eq!(ArpPacket::parse(&w), Err(ParseError::Malformed));
+        w[4] = 6;
+        w[5] = 16;
+        assert_eq!(ArpPacket::parse(&w), Err(ParseError::Malformed));
     }
 }

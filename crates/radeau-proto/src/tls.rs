@@ -37,7 +37,7 @@ pub fn looks_like_tls(payload: &[u8]) -> bool {
 }
 
 fn take<'a>(input: &mut &'a [u8], len: usize) -> Result<&'a [u8], ParseError> {
-    let value = input.get(..len).ok_or(ParseError::Malformed)?;
+    let value = input.get(..len).ok_or(ParseError::Truncated)?;
     *input = &input[len..];
     Ok(value)
 }
@@ -65,8 +65,8 @@ fn parse_extensions(mut input: &[u8]) -> Result<(Option<String>, Vec<String>), P
     let mut alpn = Vec::new();
     while !extensions.is_empty() {
         let extension_type = take_u16(&mut extensions)?;
-        let extension_len = usize::from(take_u16(&mut extensions)?);
-        let mut value = take(&mut extensions, extension_len)?;
+        let item_len = usize::from(take_u16(&mut extensions)?);
+        let mut value = take(&mut extensions, item_len)?;
         match extension_type {
             0 => {
                 let list_len = usize::from(take_u16(&mut value)?);
@@ -160,13 +160,13 @@ pub fn parse(payload: &[u8]) -> Result<TlsRecord, ParseError> {
         .get(RECORD_HEADER_LEN..RECORD_HEADER_LEN + usize::from(length))
         .ok_or(ParseError::Truncated)?;
     let handshake = if header[0] == 22 {
-        let handshake_header = body.get(..4).ok_or(ParseError::Malformed)?;
+        let handshake_header = body.get(..4).ok_or(ParseError::Truncated)?;
         let handshake_len = (usize::from(handshake_header[1]) << 16)
             | (usize::from(handshake_header[2]) << 8)
             | usize::from(handshake_header[3]);
         let handshake_body = body
             .get(4..4 + handshake_len)
-            .ok_or(ParseError::Malformed)?;
+            .ok_or(ParseError::Truncated)?;
         Some(match handshake_header[0] {
             1 => parse_client_hello(handshake_body)?,
             2 => parse_server_hello(handshake_body)?,
@@ -307,6 +307,15 @@ mod tests {
                 cipher_suite: 0x1301,
             })
         );
+    }
+
+    #[test]
+    fn short_handshake_inputs_are_truncated() {
+        let short_header = [22, 3, 3, 0, 3, 1, 0, 0];
+        assert_eq!(parse(&short_header), Err(ParseError::Truncated));
+
+        let short_body = [22, 3, 3, 0, 5, 1, 0, 0, 4, 3];
+        assert_eq!(parse(&short_body), Err(ParseError::Truncated));
     }
 
     #[test]

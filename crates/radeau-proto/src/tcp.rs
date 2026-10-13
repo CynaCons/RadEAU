@@ -29,7 +29,7 @@ impl<'a> TcpSegment<'a> {
             seq: u32::from_be_bytes(h[4..8].try_into().expect("exact")),
             ack: u32::from_be_bytes(h[8..12].try_into().expect("exact")),
             data_offset: off,
-            flags: ((h[12] as u16 & 1) << 8) | h[13] as u16,
+            flags: ((u16::from(h[12]) & 1) << 8) | u16::from(h[13]),
             window: u16::from_be_bytes([h[14], h[15]]),
             payload: &buf[len..],
         })
@@ -84,7 +84,7 @@ mod tests {
             assert_eq!(
                 TcpSegment::parse(&w[..n]).unwrap_err(),
                 ParseError::Truncated
-            )
+            );
         }
     }
     #[test]

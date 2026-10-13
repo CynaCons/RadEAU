@@ -135,7 +135,7 @@ impl<'a> Ipv6Packet<'a> {
         payload: &[u8],
         out: &mut Vec<u8>,
     ) {
-        out.extend_from_slice(&0x60000000u32.to_be_bytes());
+        out.extend_from_slice(&0x6000_0000_u32.to_be_bytes());
         out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
         out.push(next_header);
         out.push(hop_limit);
@@ -157,7 +157,7 @@ mod tests {
             assert_eq!(
                 Ipv6Packet::parse(&w[..n]).unwrap_err(),
                 ParseError::Truncated
-            )
+            );
         }
     }
     #[test]
@@ -165,7 +165,7 @@ mod tests {
         let mut w = vec![0; 40];
         assert_eq!(Ipv6Packet::parse(&w), Err(ParseError::Malformed));
         w[0] = 0x60;
-        assert!(Ipv6Packet::parse(&w).is_ok())
+        assert!(Ipv6Packet::parse(&w).is_ok());
     }
 
     #[test]

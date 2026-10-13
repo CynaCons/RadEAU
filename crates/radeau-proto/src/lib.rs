@@ -42,11 +42,11 @@ pub fn internet_checksum(parts: &[&[u8]]) -> u16 {
     for part in parts {
         let mut chunks = part.chunks_exact(2);
         for c in &mut chunks {
-            sum += u16::from_be_bytes([c[0], c[1]]) as u32;
+            sum += u32::from(u16::from_be_bytes([c[0], c[1]]));
         }
         let rem = chunks.remainder();
         if !rem.is_empty() {
-            sum += (rem[0] as u32) << 8;
+            sum += u32::from(rem[0]) << 8;
         }
     }
     while sum > 0xffff {

@@ -422,7 +422,7 @@ fn count_frames(path: &std::path::Path) -> Option<u64> {
     let mut count = 0;
     let mut buffer = [0_u8; 64 * 1024];
     let mut drain = |reader: &mut radeau_pcap::PcapReader| {
-        while let Ok(Some(_)) = reader.next() {
+        while let Ok(Some(_)) = reader.next_record() {
             count += 1;
         }
     };
@@ -593,7 +593,7 @@ mod tests {
         let mut reader = radeau_pcap::PcapReader::new();
         reader.push(&data);
         reader.finish();
-        let first = reader.next().unwrap().unwrap();
+        let first = reader.next_record().unwrap().unwrap();
         assert_eq!(first.ts_ns, 1_700_000_000_000_000_000);
         assert_eq!(first.wire, vec![0u8; 60]);
         let _ = fs::remove_dir_all(dir);

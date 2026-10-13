@@ -144,7 +144,7 @@ mod tests {
         hdr[10..12].copy_from_slice(&[0, 0]);
         assert_eq!(
             internet_checksum(&[&hdr]),
-            wire[10] as u16 * 256 + wire[11] as u16
+            u16::from(wire[10]) * 256 + u16::from(wire[11])
         );
     }
 
