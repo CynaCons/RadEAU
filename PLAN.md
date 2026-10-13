@@ -60,6 +60,52 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Frame dissection, core side (SRS_protocols §3b): bounded raw-frame buffer in the capture reader (both sources), frame_detail command returning the ordered layer tree + full bytes via radeau-proto codecs [delegated: Codex]
 - [x] Trace row expansion = Wireshark-style layer dissection (SRS_visual_ui §5.2): collapsible per-protocol sections with field rows, hex payload with offsets, on-demand fetch, honest evicted/browser states [delegated: Grok]
 
+### v0.1.13 — Clean pipeline + stable base — frontend render discipline, static checks, reviews, tests, ASPICE traceability (current) (ACTIVE)
+**Goal:** Before recording/replay and agent access, make the existing app a fast, clean, stable base. Part 1: one lean backend→frontend pipeline (JSON IPC kept as-is) with no redundant transforms, no re-renders or repaints that aren't needed, proven by measured render/paint budgets. Part 2: static checks, an independent code review sweep, test gaps closed, and ASPICE-style traceability — every SRS requirement maps to code and a test, and the specs describe the software as it is. Replanned 2026-10-12 on user direction: graphing (v0.2) moves after the agent-access ladder v0.1.13–v0.1.16.
+- [ ] Measure first: render/paint baseline under netsim load — per-component render counts per frames batch (React Profiler in the E2E), commit and long-task timings, Chrome DevTools paint-flashing + performance trace per view; numbers committed as the baseline
+- [ ] Pipeline audit end to end (backend batch → emit → listener → store → selector → component): one ingestion point, no double parsing, copying or re-mapping of rows, UI updates coalesced to animation frames; JSON stays the wire format
+- [ ] Re-render discipline: stable selectors and memoized rows, virtualized lists render only visible rows, stats ticks update only their own chip, hidden keep-alive views do zero work, no store-wide subscriptions
+- [ ] Repaint discipline: CSS containment on the trace and panels, no layout thrash (read/write batching), compositor-only animations, no full-surface repaints on a row append
+- [ ] Backend lean pass without format changes: per-frame allocations and copies in classify → dissect → ring, accumulator lock hold time, emit cadence and batch sizing, serialize each batch once
+- [ ] Perf regression gate in the E2E: render-count and flush-time budgets per view asserted against the committed baseline
+- [ ] Static checks: strict TypeScript flags, ESLint with react-hooks + no-floating-promises, clippy (pedantic on the hot crates), cargo-deny/audit, knip + unused deps — all green in CI
+- [ ] Independent code review sweep by area (core capture/classify/dissect, protocol crates, frontend runtime stores, views) with every finding fixed or recorded with a reason
+- [ ] Tests: coverage reports (cargo llvm-cov, vitest coverage) and gaps closed on the hot path and the runtime stores
+- [ ] ASPICE traceability: generated requirement → implementation → test matrix from the SRS docs, a CI check that every requirement has a Status and a test, orphan code and requirements flagged; missing specs written (SRS_trace_view TR-) and SRS rows amended to match the shipped software
+
+### v0.1.14 — Recording + replay — pcapng recordings, paced replay with transport controls
+**Goal:** Recording and replay pulled forward from v0.6.0. Recordings are pcapng written by the Rust core from raw frame bytes (decision D10, amending PRD §6 JSONL frames; JSONL stays the event-log format and an on-demand decoded export). Replay paces against an absolute schedule with seek, speed and step, through the same pipeline as live capture.
+- [ ] Decision D10 recorded (pcapng for frame recordings, JSONL for the event log and decoded export) + PRD §6 and SRS_capture amended
+- [ ] pcapng writer on the existing buffered recorder thread: section/interface blocks per source, ns timestamps, session metadata in comments; start/stop mid-session; size/time rotation; sanitized timestamped names
+- [ ] Replay prepare on the blocking pool: metadata, duration, scrub timestamps, sparse seek index (1 checkpoint / 5,000 frames) for pcap and pcapng
+- [ ] Replay worker: absolute-schedule pacing, 50 ms sleep cap, speeds 0.1×–10× + as-fast-as-possible, pause/resume/single-step; same batched path as live with a replay source label
+- [ ] Seek rebuilds the ring without re-emitting the skipped frames; 10 Hz position events, immediate on seek
+- [ ] Recorder view wired: recordings list, open/replay, transport controls, scrub bar, live recording stats
+- [ ] Decoded JSONL export of a recording or the ring (one frame per line: summary, dissection, payload hex) for agents and grep
+- [ ] Core event log (JSONL): session lifecycle, source transitions, recording start/stop/rotate, drop and gap counters, faults — buffered writer with size-capped rotation
+- [ ] E2E: netsim capture recorded → replayed at 1× and max speed → seek → row-for-row match with the live session; the file opens in Wireshark (tshark check when available)
+- [ ] Network timestamp (ns) carried per frame in the pcapng recording (packet-block option), populated from switch time where the source has it (decision D3, PT-004)
+
+### v0.1.15 — Agent access — automation core + radeau-mcp
+**Goal:** RadEAU becomes AI-first: an agent sees and controls everything — capture, recording, replay, and the full trace — through an MCP server. The running GUI app hosts a loopback automation server (PRD §8.1); a radeau-mcp stdio binary bridges agents (Claude Code, Codex, …) to it, and the UI shows what the agent is doing. Pulled forward from v0.7.1.
+- [ ] Spec first: SRS_automation.md (AU-) — command set, MCP tool catalog, paging/size bounds, error model, security posture
+- [ ] One command layer in the core shared by Tauri commands and the automation server (UI-verb parity: anything the UI can do, an agent can do)
+- [ ] Loopback JSON-RPC automation server (TCP 5555): connection cap, request size limits; external bind rejected at startup unless token + allowlist (PRD §8.1)
+- [ ] radeau-mcp stdio binary bridging MCP to the automation server, shipped in the portable zip and AppImage tarball, with a Claude Code / Codex config snippet in the README
+- [ ] MCP control tools: capture_list_sources, capture_start/stop, capture_status; recording_start/stop, recording_list, recording_export_jsonl; replay_open, replay_play/pause/seek/set_speed, replay_status
+- [ ] MCP trace visibility tools: trace_query (protocol/endpoint/name/time-window filters, paging, compact row summaries), frame_detail (full dissection + hex), trace_stats — bounded, agent-sized responses
+- [ ] Agent mirroring in the UI: agent-connected indicator, actions reflected in session/recorder state, agent commands in the event log
+- [ ] E2E: scripted MCP client captures from netsim, records, replays, seeks and queries; answers checked against the trace
+
+### v0.1.16 — Trace analysis — for agents and the UI
+**Goal:** Give agents answers, not just rows: one-pass analytics over the live ring or a recording file, exposed as MCP tools and in the UI. The signal-array analysis mode for charts (PRD §6) stays with graphing.
+- [ ] One-pass analytics engine over the ring or a recording file (blocking pool, bounded memory): per-protocol and per-endpoint statistics, conversations
+- [ ] SOME/IP service/method summaries, request/response latency, cyclic event period + jitter, gaps and bursts
+- [ ] SD lifecycle summary (offers, subscriptions, TTL expiry, reboots) and PTP sync summary
+- [ ] MCP analysis tools: trace_analyze, service_summary, timing_report — over live or recorded traces
+- [ ] Analysis panel in the UI showing the same reports
+- [ ] E2E: analysis of a netsim recording with known schedules matches the expected periods, latencies and counts
+
 ## v0.2 — Graphing
 
 **Goal:** The chart subsystem per PRD §5 — the product's core — developed against
@@ -180,13 +226,7 @@ traffic wired into the already-built views.
 bulk analysis.
 
 ### v0.6.0 — Recording + replay
-- [ ] JSONL recording with 256 KB / 2 s buffered writer; sanitized timestamped filenames; recording as a sub-state of capture
-- [ ] Network timestamp (ns) as a first-class optional field in format v1, populated from switch time (decision D3, PT-004)
-- [ ] Replay prepare on blocking pool: metadata, scrub timestamps, sparse seek index (1/5,000 frames)
-- [ ] Replay worker: absolute-schedule pacing, 50 ms sleep cap, responsive control channel, same batched path with `replay` label
-- [ ] Seek rebuilds RX snapshot without emitting; 10 Hz position events, immediate on seek
 - [ ] Seeded scenario-recording fixtures via `ecu-netsim` accelerated mode (sine/ramp/step/noise profiles + large-file variant)
-- [ ] Core event log (JSONL): session lifecycle, channel transitions, node attach/detach, drop/gap counters, faults — buffered writer, size-capped rotation (PRD §6)
 
 ### v0.6.1 — Analysis mode
 - [ ] Bulk-analysis command: one blocking-pool pass, per-signal parallel timestamp/value arrays, irregular axes
@@ -203,9 +243,7 @@ bulk analysis.
 - [ ] Transmit-only (inject-only) mode: no reader, recording rejected
 
 ### v0.7.1 — Automation surface
-- [ ] JSON-RPC TCP server (5555, loopback default); UI-verb parity; ghost-user event mirroring
 - [ ] Decoded signal subscriptions: coalesced latest-wins, client min interval, drop counters, zero-subscriber short-circuit
-- [ ] External bind opt-in requiring token + allowlist, rejected at startup otherwise (also governs the simulator control channel)
 - [ ] Hot-path fan-out discipline: preallocated serialization, coalesced writes, bounded queues (PRD §4.6)
 - [ ] Script runner: unbuffered Python spawn, rate-limited output events, clean reaping
 
@@ -352,6 +390,8 @@ release.
 
 > Released 2026-08-30: repository published at https://github.com/CynaCons/RadEAU and v0.1.12 tagged. The tag-driven release workflow (`.github/workflows/release.yml`) built and attached `RadEAU-0.1.12-win64.zip` (portable, release-E2E-verified locally) and the Linux `RadEAU_0.1.12_amd64.AppImage` + `RadEAU-0.1.12-linux-x64.tar.gz` (first Linux compile; CI workspace tests green on ubuntu). Release body extracted from CHANGELOG.md by `scripts/release-notes.mjs`.
 
+> Replanned 2026-10-12 on user direction: RadEAU goes AI-first before graphing. New ladder: v0.1.13 clean pipeline + stable base → v0.1.14 recording + replay (pcapng, D10) → v0.1.15 agent access (automation core + radeau-mcp) → v0.1.16 trace analysis. Absorbed and removed from their old homes: v0.6.0 recording/replay/event-log tasks (→ v0.1.14) and the v0.7.1 JSON-RPC server + external-bind posture (→ v0.1.15). v0.6.0 keeps the netsim recording fixtures; v0.6.1 keeps the signal-array analysis mode for charts. v0.2 Graphing resumes after v0.1.16; v0.1.10 Vector XL stays blocked on the XL header.
+
 ## Backlog
 - [ ] CAN / CAN FD backend behind the channel abstraction + DBC schema pipeline (dual bit-walk decoders, shared vectors)
 - [ ] Npcap/libpcap live-capture backend + capture-privilege diagnostics in Settings
@@ -378,3 +418,4 @@ release.
 - Wireshark/CANoe bootstrap captures: ask for real bench pcapng exports (Wireshark on the VPN adapter; CANoe/CANalyzer Ethernet export) and the target ARXML before v0.1.8 — settles VLAN, port, classic-vs-adaptive questions from the audit
 - ARXML import via window drag-drop (the picker and popover import landed in v0.1.8; drop-target UX pending)
 - Release-bundle E2E smoke phase (launch the built release exe against frontendDist, assert shell + a pcap replay) — release build compiles since v0.1.6, the phase itself is pending
+- Headless mode (`radeau --headless`): agents capture, record and replay through radeau-mcp with no window — for CI and overnight runs (deferred 2026-10-12: v0.1.15 ships the GUI-hosted bridge first)
