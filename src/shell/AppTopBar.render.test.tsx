@@ -10,7 +10,7 @@ import { AppTopBar } from "./AppTopBar";
 describe("AppTopBar", () => {
   let host: HTMLDivElement;
   let root: Root;
-  const q = (id: string) => host.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
+  const q = (id: string) => host.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
   beforeEach(async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
