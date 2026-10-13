@@ -1,7 +1,7 @@
 {
   "name": "radeau",
   "private": true,
-  "version": "0.1.12",
+  "version": "0.1.16",
   "description": "Automotive Ethernet network analyzer — SOME/IP, SOME/IP-SD, gPTP, DoIP and the standard bench protocols",
   "license": "MIT",
   "repository": {

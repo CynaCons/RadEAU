@@ -714,7 +714,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "ecu-netsim"
-version = "0.1.12"
+version = "0.1.16"
 dependencies = [
  "radeau-catalog",
  "radeau-pcap",
@@ -2447,7 +2447,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "radeau"
-version = "0.1.12"
+version = "0.1.16"
 dependencies = [
  "chrono",
  "open",
@@ -2465,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "radeau-catalog"
-version = "0.1.12"
+version = "0.1.16"
 dependencies = [
  "quick-xml 0.42.0",
  "serde",
@@ -2473,14 +2473,14 @@ dependencies = [
 
 [[package]]
 name = "radeau-livecap"
-version = "0.1.12"
+version = "0.1.16"
 dependencies = [
  "libloading 0.8.9",
 ]
 
 [[package]]
 name = "radeau-mcp"
-version = "0.1.12"
+version = "0.1.16"
 dependencies = [
  "serde",
  "serde_json",
@@ -2488,11 +2488,11 @@ dependencies = [
 
 [[package]]
 name = "radeau-pcap"
-version = "0.1.12"
+version = "0.1.16"
 
 [[package]]
 name = "radeau-proto"
-version = "0.1.12"
+version = "0.1.16"
 
 [[package]]
 name = "raw-window-handle"

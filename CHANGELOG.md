@@ -5,7 +5,7 @@ All notable changes to RadEAU. Versions follow the iteration numbers in
 portable) and `RadEAU_<version>_amd64.AppImage` plus
 `RadEAU-<version>-linux-x64.tar.gz` (Linux), built by the release workflow.
 
-## Unreleased (v0.1.13 – v0.1.16)
+## v0.1.16 — 2026-10-13
 
 RadEAU becomes AI-first: an agent can drive everything the operator can and see every frame.
 
