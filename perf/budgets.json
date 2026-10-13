@@ -1,0 +1,39 @@
+{
+  "idle-stopped": { "scriptMsPerS": 5, "zone:view-trace:commitsPerS": 0, "zone:topbar:commitsPerS": 0 },
+  "trace-fixed": {
+    "min:framesPerS": 3500,
+    "scriptMsPerS": 190,
+    "zone:view-trace:renderMsPerS": 110,
+    "zone:topbar:commitsPerS": 2,
+    "longTasks": 2
+  },
+  "trace-sequential": {
+    "min:framesPerS": 3500,
+    "scriptMsPerS": 210,
+    "zone:view-trace:renderMsPerS": 125,
+    "layoutMsPerS": 60,
+    "zone:topbar:commitsPerS": 2,
+    "longTasks": 2
+  },
+  "network-visible": {
+    "scriptMsPerS": 80,
+    "zone:view-trace:commitsPerS": 1,
+    "traceRowRendersPerS": 1,
+    "zone:view-recorder:commitsPerS": 0.5,
+    "zone:view-settings:commitsPerS": 0.5,
+    "zone:view-network:commitsPerS": 2
+  },
+  "recorder-visible": {
+    "scriptMsPerS": 80,
+    "zone:view-trace:commitsPerS": 1,
+    "zone:view-recorder:commitsPerS": 3,
+    "zone:view-network:commitsPerS": 0.5
+  },
+  "settings-visible": {
+    "scriptMsPerS": 80,
+    "zone:view-trace:commitsPerS": 1,
+    "zone:view-settings:commitsPerS": 2,
+    "zone:view-recorder:commitsPerS": 0.5
+  },
+  "idle-after-stop": { "scriptMsPerS": 5, "zone:view-trace:commitsPerS": 0 }
+}

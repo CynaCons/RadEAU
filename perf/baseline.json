@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-13T11:43:01.653Z",
+  "generatedAt": "2026-10-13T12:43:32.656Z",
   "build": "debug binary + vite dev (React development build)",
   "load": "devgen stress profile, ring filled to cap",
   "fillSeconds": 45,
@@ -17,210 +17,120 @@
       "paintMsPerS": 0,
       "styleMsPerS": 0,
       "layoutMsPerS": 0,
-      "scriptMsPerS": 0.5,
-      "taskMsPerS": 2.6,
+      "scriptMsPerS": 0.6,
+      "taskMsPerS": 3,
       "longTasks": 0,
       "longTaskMs": 0,
-      "lagMaxMs": 14.3
+      "lagMaxMs": 14.6
     },
     {
       "scenario": "trace-fixed",
       "seconds": 8.5,
-      "framesPerS": 4704.4,
+      "framesPerS": 4716.7,
       "zones": {
         "view-trace": {
-          "commitsPerS": 28,
-          "renderMsPerS": 184.4
-        },
-        "view-recorder": {
-          "commitsPerS": 21,
-          "renderMsPerS": 73.9
-        },
-        "topbar": {
-          "commitsPerS": 1.4,
-          "renderMsPerS": 4.8
-        },
-        "view-network": {
-          "commitsPerS": 0.9,
-          "renderMsPerS": 4.3
-        },
-        "view-settings": {
-          "commitsPerS": 1.9,
-          "renderMsPerS": 17.2
+          "commitsPerS": 32,
+          "renderMsPerS": 76.1
         }
       },
-      "traceRowRendersPerS": 307.8,
-      "recalcStylePerS": 1.9,
-      "layoutPerS": 13.1,
-      "paintPerS": 24.5,
-      "paintMsPerS": 8.3,
+      "traceRowRendersPerS": 341.4,
+      "recalcStylePerS": 0,
+      "layoutPerS": 15.5,
+      "paintPerS": 29.4,
+      "paintMsPerS": 10,
       "styleMsPerS": 0,
-      "layoutMsPerS": 12.9,
-      "scriptMsPerS": 365.3,
-      "taskMsPerS": 465.3,
-      "longTasks": 6,
-      "longTaskMs": 326,
-      "lagMaxMs": 79.7
+      "layoutMsPerS": 13.6,
+      "scriptMsPerS": 134.9,
+      "taskMsPerS": 237.9,
+      "longTasks": 0,
+      "longTaskMs": 0,
+      "lagMaxMs": 12.8
     },
     {
       "scenario": "trace-sequential",
       "seconds": 8.6,
-      "framesPerS": 5265.4,
+      "framesPerS": 4659.5,
       "zones": {
         "view-trace": {
-          "commitsPerS": 28.5,
-          "renderMsPerS": 146.8
-        },
-        "view-recorder": {
-          "commitsPerS": 21.4,
-          "renderMsPerS": 76.6
-        },
-        "topbar": {
-          "commitsPerS": 1.6,
-          "renderMsPerS": 3.5
-        },
-        "view-network": {
-          "commitsPerS": 1.1,
-          "renderMsPerS": 3
-        },
-        "view-settings": {
-          "commitsPerS": 2.1,
-          "renderMsPerS": 12.6
+          "commitsPerS": 31.6,
+          "renderMsPerS": 83.5
         }
       },
-      "traceRowRendersPerS": 741.1,
-      "recalcStylePerS": 15,
-      "layoutPerS": 13.2,
-      "paintPerS": 30.1,
-      "paintMsPerS": 18.9,
-      "styleMsPerS": 7.7,
-      "layoutMsPerS": 35.2,
-      "scriptMsPerS": 333.1,
-      "taskMsPerS": 496.9,
-      "longTasks": 1,
-      "longTaskMs": 128,
-      "lagMaxMs": 109
+      "traceRowRendersPerS": 798.1,
+      "recalcStylePerS": 15.1,
+      "layoutPerS": 15.2,
+      "paintPerS": 34.3,
+      "paintMsPerS": 21,
+      "styleMsPerS": 8,
+      "layoutMsPerS": 42,
+      "scriptMsPerS": 150.3,
+      "taskMsPerS": 313.4,
+      "longTasks": 0,
+      "longTaskMs": 0,
+      "lagMaxMs": 15.1
     },
     {
       "scenario": "network-visible",
-      "seconds": 8.5,
-      "framesPerS": 4725.9,
+      "seconds": 8.4,
+      "framesPerS": 5354.5,
       "zones": {
-        "view-trace": {
-          "commitsPerS": 26.7,
-          "renderMsPerS": 215.1
-        },
-        "view-recorder": {
-          "commitsPerS": 20,
-          "renderMsPerS": 90
-        },
-        "topbar": {
-          "commitsPerS": 1.4,
-          "renderMsPerS": 3.9
-        },
         "view-network": {
-          "commitsPerS": 0.9,
-          "renderMsPerS": 3.2
-        },
-        "view-settings": {
-          "commitsPerS": 1.4,
-          "renderMsPerS": 12.9
+          "commitsPerS": 1.1,
+          "renderMsPerS": 2
         }
       },
-      "traceRowRendersPerS": 293.2,
-      "recalcStylePerS": 1.9,
-      "layoutPerS": 0.9,
+      "traceRowRendersPerS": 0,
+      "recalcStylePerS": 0,
+      "layoutPerS": 1.1,
       "paintPerS": 1.9,
-      "paintMsPerS": 0.3,
+      "paintMsPerS": 0.2,
       "styleMsPerS": 0,
-      "layoutMsPerS": 0.3,
-      "scriptMsPerS": 412.4,
-      "taskMsPerS": 487.5,
-      "longTasks": 3,
-      "longTaskMs": 161,
-      "lagMaxMs": 63.1
+      "layoutMsPerS": 0.4,
+      "scriptMsPerS": 42,
+      "taskMsPerS": 134.4,
+      "longTasks": 1,
+      "longTaskMs": 119,
+      "lagMaxMs": 124.6
     },
     {
       "scenario": "recorder-visible",
-      "seconds": 8.5,
-      "framesPerS": 5313.5,
-      "zones": {
-        "view-trace": {
-          "commitsPerS": 27.4,
-          "renderMsPerS": 198.4
-        },
-        "view-recorder": {
-          "commitsPerS": 27.4,
-          "renderMsPerS": 78.2
-        },
-        "topbar": {
-          "commitsPerS": 1.7,
-          "renderMsPerS": 4.5
-        },
-        "view-network": {
-          "commitsPerS": 1.1,
-          "renderMsPerS": 3.5
-        },
-        "view-settings": {
-          "commitsPerS": 1.7,
-          "renderMsPerS": 12.1
-        }
-      },
-      "traceRowRendersPerS": 301.1,
-      "recalcStylePerS": 2.1,
+      "seconds": 8.4,
+      "framesPerS": 5381,
+      "zones": {},
+      "traceRowRendersPerS": 0,
+      "recalcStylePerS": 0,
       "layoutPerS": 0,
       "paintPerS": 0,
       "paintMsPerS": 0,
       "styleMsPerS": 0,
       "layoutMsPerS": 0,
-      "scriptMsPerS": 388.6,
-      "taskMsPerS": 470.9,
-      "longTasks": 1,
-      "longTaskMs": 179,
-      "lagMaxMs": 144.5
+      "scriptMsPerS": 39.2,
+      "taskMsPerS": 119,
+      "longTasks": 0,
+      "longTaskMs": 0,
+      "lagMaxMs": 83.7
     },
     {
       "scenario": "settings-visible",
       "seconds": 8.5,
-      "framesPerS": 5315.9,
-      "zones": {
-        "view-trace": {
-          "commitsPerS": 28.5,
-          "renderMsPerS": 186.6
-        },
-        "view-recorder": {
-          "commitsPerS": 21.4,
-          "renderMsPerS": 74.5
-        },
-        "topbar": {
-          "commitsPerS": 1.6,
-          "renderMsPerS": 5
-        },
-        "view-network": {
-          "commitsPerS": 1.1,
-          "renderMsPerS": 4.9
-        },
-        "view-settings": {
-          "commitsPerS": 1.6,
-          "renderMsPerS": 19.1
-        }
-      },
-      "traceRowRendersPerS": 313.5,
-      "recalcStylePerS": 2.1,
-      "layoutPerS": 2.1,
-      "paintPerS": 1.9,
-      "paintMsPerS": 0.4,
-      "styleMsPerS": 0.4,
-      "layoutMsPerS": 0.7,
-      "scriptMsPerS": 369.5,
-      "taskMsPerS": 441.3,
-      "longTasks": 5,
-      "longTaskMs": 273,
-      "lagMaxMs": 74.3
+      "framesPerS": 4735,
+      "zones": {},
+      "traceRowRendersPerS": 0,
+      "recalcStylePerS": 0,
+      "layoutPerS": 0,
+      "paintPerS": 0,
+      "paintMsPerS": 0,
+      "styleMsPerS": 0,
+      "layoutMsPerS": 0,
+      "scriptMsPerS": 41,
+      "taskMsPerS": 121.2,
+      "longTasks": 0,
+      "longTaskMs": 0,
+      "lagMaxMs": 10.8
     },
     {
       "scenario": "idle-after-stop",
-      "seconds": 8.2,
+      "seconds": 8.1,
       "framesPerS": 0,
       "zones": {},
       "traceRowRendersPerS": 0,
@@ -231,10 +141,10 @@
       "styleMsPerS": 0,
       "layoutMsPerS": 0,
       "scriptMsPerS": 0.4,
-      "taskMsPerS": 61.6,
+      "taskMsPerS": 23.4,
       "longTasks": 0,
       "longTaskMs": 0,
-      "lagMaxMs": 25.6
+      "lagMaxMs": 18.1
     }
   ]
 }
