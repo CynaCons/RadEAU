@@ -114,9 +114,7 @@ pub fn parse_header(buf: &[u8]) -> Result<(DoipHeader, &[u8]), ParseError> {
 }
 
 pub fn plausible(buf: &[u8]) -> bool {
-    parse_header(buf)
-        .map(|(h, _)| ty_code(h.payload_type) != 255)
-        .unwrap_or(false)
+    parse_header(buf).is_ok_and(|(h, _)| ty_code(h.payload_type) != 255)
 }
 
 fn exact(body: &[u8], len: usize) -> Result<(), ParseError> {

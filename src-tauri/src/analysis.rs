@@ -1007,7 +1007,7 @@ fn finish_someip(
             }
         })
         .collect::<Vec<_>>();
-    services.sort_by(|a, b| (a.service, a.method).cmp(&(b.service, b.method)));
+    services.sort_by_key(|a| (a.service, a.method));
     SomeipReport { services }
 }
 

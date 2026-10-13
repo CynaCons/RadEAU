@@ -53,8 +53,8 @@ fn management_address(value: &[u8]) -> Option<String> {
         (1, [a, b, c, d]) => Some(format!("{a}.{b}.{c}.{d}")),
         (2, bytes) if bytes.len() == 16 => {
             let mut words = [0u16; 8];
-            for (word, pair) in words.iter_mut().zip(bytes.chunks_exact(2)) {
-                *word = u16::from_be_bytes([pair[0], pair[1]]);
+            for (word, pair) in words.iter_mut().zip(bytes.as_chunks::<2>().0) {
+                *word = u16::from_be_bytes(*pair);
             }
             Some(
                 words

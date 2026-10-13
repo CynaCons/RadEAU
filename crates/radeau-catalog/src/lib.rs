@@ -518,15 +518,19 @@ pub fn from_arxml_bytes(bytes: &[u8]) -> Result<(Catalog, Vec<Diagnostic>), Impo
     }
     let s = if bytes.starts_with(&[0xff, 0xfe]) {
         let words: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|x| u16::from_le_bytes([x[0], x[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|x| u16::from_le_bytes(*x))
             .collect();
         String::from_utf16(&words)
             .map_err(|e| ImportError::new(format!("invalid UTF-16LE: {e}")))?
     } else if bytes.starts_with(&[0xfe, 0xff]) {
         let words: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|x| u16::from_be_bytes([x[0], x[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|x| u16::from_be_bytes(*x))
             .collect();
         String::from_utf16(&words)
             .map_err(|e| ImportError::new(format!("invalid UTF-16BE: {e}")))?

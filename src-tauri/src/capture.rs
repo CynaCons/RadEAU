@@ -617,7 +617,7 @@ fn retain_frame(ring: &Arc<Mutex<FrameRing>>, frame: &GenFrame, wire: Vec<u8>) {
 
 fn take_credit(credits: &Arc<AtomicU32>) -> bool {
     credits
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
             if c > 0 {
                 Some(c - 1)
             } else {
@@ -628,7 +628,7 @@ fn take_credit(credits: &Arc<AtomicU32>) -> bool {
 }
 
 fn return_credit(credits: &Arc<AtomicU32>) {
-    let _ = credits.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
+    let _ = credits.try_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
         if c < MAX_CREDITS {
             Some(c + 1)
         } else {
@@ -1123,7 +1123,7 @@ pub fn ack_frames(state: State<CaptureState>, n: u32) -> Result<(), String> {
         for _ in 0..n.min(MAX_CREDITS) {
             let _ = session
                 .credits
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
                     if c < MAX_CREDITS {
                         Some(c + 1)
                     } else {

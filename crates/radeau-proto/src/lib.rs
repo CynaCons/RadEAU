@@ -40,11 +40,10 @@ pub enum ParseError {
 pub fn internet_checksum(parts: &[&[u8]]) -> u16 {
     let mut sum = 0u32;
     for part in parts {
-        let mut chunks = part.chunks_exact(2);
-        for c in &mut chunks {
-            sum += u32::from(u16::from_be_bytes([c[0], c[1]]));
+        let (chunks, rem) = part.as_chunks::<2>();
+        for c in chunks {
+            sum += u32::from(u16::from_be_bytes(*c));
         }
-        let rem = chunks.remainder();
         if !rem.is_empty() {
             sum += u32::from(rem[0]) << 8;
         }

@@ -187,7 +187,7 @@ mod tests {
         let mut v = Vec::new();
         EthernetFrame::build([0; 6], [0; 6], ETHERTYPE_GPTP, &[], &mut v);
         let f = EthernetFrame::parse(&v).unwrap();
-        assert!(f.payload.is_empty());
+        assert_eq!(f.payload, []);
         assert_eq!(f.ethertype, ETHERTYPE_GPTP);
     }
 }

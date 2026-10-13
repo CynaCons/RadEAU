@@ -197,7 +197,7 @@ mod tests {
             let walk = walk_extensions(kind, &[1, 2, 3]).unwrap();
             assert_eq!(walk.final_next_header, kind);
             assert_eq!(walk.payload_offset, 0);
-            assert!(walk.headers.is_empty());
+            assert_eq!(walk.headers, [] as [Ipv6Ext; 0]);
         }
     }
 

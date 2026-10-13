@@ -473,6 +473,6 @@ mod tests {
         ];
         let parsed = parse(&wire).unwrap();
         assert_eq!(parsed.authority_count, 1);
-        assert!(parsed.answers.is_empty());
+        assert_eq!(parsed.answers, [] as [DnsAnswer; 0]);
     }
 }

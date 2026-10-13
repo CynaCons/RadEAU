@@ -139,6 +139,6 @@ mod tests {
         let mut v = Vec::new();
         UdpDatagram::build(SRC_IP, DST_IP, 1, 2, &[], &mut v);
         let d = UdpDatagram::parse(&v).unwrap();
-        assert!(d.payload.is_empty());
+        assert_eq!(d.payload, []);
     }
 }

@@ -59,8 +59,8 @@ impl IgmpMessage {
                 .ok_or(ParseError::Malformed)?;
             let record = buf.get(offset..end).ok_or(ParseError::Truncated)?;
             let mut sources = Vec::with_capacity(source_count);
-            for source in record[8..8 + sources_len].chunks_exact(4) {
-                sources.push(source.try_into().expect("exact"));
+            for source in record[8..8 + sources_len].as_chunks::<4>().0 {
+                sources.push(*source);
             }
             message.records.push(IgmpGroupRecord {
                 record_type: prefix[0],

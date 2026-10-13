@@ -68,7 +68,7 @@ pub fn parse(payload: &[u8]) -> Result<SdMessage, ParseError> {
     }
 
     let mut entries = Vec::with_capacity(entries_len / ENTRY_LEN);
-    for entry in payload[PREFIX_LEN..entries_end].chunks_exact(ENTRY_LEN) {
+    for entry in payload[PREFIX_LEN..entries_end].as_chunks::<ENTRY_LEN>().0 {
         if !matches!(
             entry[0],
             ENTRY_FIND_SERVICE

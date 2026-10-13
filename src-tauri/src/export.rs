@@ -128,11 +128,7 @@ impl<'a> JsonlProgress<'a> {
         if done == self.last_done && done != total {
             return;
         }
-        let percent = if total == 0 {
-            100
-        } else {
-            done.saturating_mul(100) / total
-        };
+        let percent = done.saturating_mul(100).checked_div(total).unwrap_or(100);
         let due_percent = percent > self.last_percent;
         let due_time = self.last_emit.elapsed() >= Duration::from_millis(250);
         if due_percent || due_time || done == total {

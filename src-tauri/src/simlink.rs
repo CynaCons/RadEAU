@@ -213,11 +213,7 @@ impl FrameMapper {
     /// capture-side raw-frame ring.
     pub fn map_record_with_wire(&mut self, record: MonitorRecord) -> Option<(GenFrame, Vec<u8>)> {
         match record {
-            MonitorRecord::Gap {
-                dropped_count,
-                span_ns: _,
-                ..
-            } => {
+            MonitorRecord::Gap { dropped_count, .. } => {
                 self.gap_count += 1;
                 self.gap_dropped_total += dropped_count as u64;
                 None
