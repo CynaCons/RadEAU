@@ -1,4 +1,4 @@
-//! Static-dispatch capture channels. Network and file parsing live here;
+//! Static-dispatch capture channels (CP-001). Network and file parsing live here;
 //! classification, retention, batching, and statistics stay in `capture`.
 
 #[cfg(debug_assertions)]
@@ -23,6 +23,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 #[serde(tag = "kind")]
 pub enum SourceSpec {
+    // CP-001: stable tagged-union selection ids for every backend.
     #[serde(rename = "devgen")]
     Devgen { profile: String },
     #[serde(rename = "sim")]
@@ -68,6 +69,7 @@ pub struct Capabilities {
 // Source states own their bounded buffers so capture setup remains allocation-free.
 #[allow(clippy::large_enum_variant)]
 pub enum Source {
+    // CP-001: variants keep read-path dispatch static, without trait objects.
     #[cfg(debug_assertions)]
     Devgen(DevgenSource),
     Sim(SimSource),
@@ -153,6 +155,7 @@ impl Source {
                 transmit: false,
             },
             Self::Pcap(_) | Self::PcapStream(_) => Capabilities {
+                // CP-009: pcap and pcapStream carry file timestamps and, for pcapng, direction.
                 direction: true,
                 timestamp_source: "file",
                 transmit: false,
@@ -256,6 +259,11 @@ fn configure(stream: &TcpStream) -> Result<(), String> {
     stream
         .set_nodelay(true)
         .map_err(|e| format!("set_nodelay: {e}"))
+}
+
+fn pacing_sleep(started: Instant, target: Duration) -> Option<Duration> {
+    let remaining = target.saturating_sub(started.elapsed());
+    (!remaining.is_zero()).then(|| Duration::from_millis(50).min(remaining))
 }
 
 #[cfg(debug_assertions)]
@@ -457,6 +465,7 @@ pub struct PcapSource {
 }
 impl PcapSource {
     fn open(path: &str, pace: &str) -> Result<Self, String> {
+        // CP-002 and CP-004: file replay uses the shared pcap parser and selected pacing mode.
         if !matches!(pace, "realtime" | "fast") {
             return Err(format!("unknown pcap pace '{pace}'"));
         }
@@ -532,10 +541,8 @@ impl PcapSource {
                 }
                 let started = Instant::now();
                 let target = Duration::from_nanos(delay);
-                while started.elapsed() < target {
-                    std::thread::sleep(
-                        Duration::from_millis(50).min(target.saturating_sub(started.elapsed())),
-                    );
+                while let Some(sleep) = pacing_sleep(started, target) {
+                    std::thread::sleep(sleep);
                 }
             }
         }
@@ -561,6 +568,7 @@ pub struct PcapStreamSource {
 }
 impl PcapStreamSource {
     fn connect(addr: &str) -> Result<Self, String> {
+        // CP-003: TCP pcap/pcapng streams feed the same incremental parser.
         let stream = connect(addr)?;
         configure(&stream)?;
         Ok(Self {
@@ -649,6 +657,7 @@ pub struct LiveSource {
 
 impl LiveSource {
     fn open(interface_id: &str, filter: Option<&str>) -> Result<Self, String> {
+        // CP-010, CP-012 and CP-013: runtime-loaded live capture with configured pcap handle.
         let filter = filter.unwrap_or(radeau_livecap::DEFAULT_FILTER);
         let capture = radeau_livecap::LiveCapture::open(interface_id, Some(filter))
             .map_err(|error| error.to_string())?;
@@ -729,5 +738,110 @@ impl LiveSource {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn pcap_bytes(count: usize) -> Vec<u8> {
+        let mut writer = radeau_pcap::PcapWriter::new(Vec::new()).unwrap();
+        for index in 0..count {
+            let mut wire = vec![0u8; 60];
+            wire[0..6].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, index as u8]);
+            wire[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x01, index as u8]);
+            wire[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+            writer
+                .write_record(1_700_000_000_000_000_000 + index as u64 * 1_000_000, &wire)
+                .unwrap();
+        }
+        writer.into_inner()
+    }
+
+    fn temp_pcap(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "radeau-{name}-{}-{}.pcap",
+            std::process::id(),
+            now_ns()
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn cp_003_tcp_stream_uses_parser_until_eof() {
+        // CP-003: a TCP pcap stream is parsed by the same incremental reader until EOF.
+        let bytes = pcap_bytes(3);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            for chunk in bytes.chunks(11) {
+                stream.write_all(chunk).unwrap();
+            }
+        });
+
+        let mut source = PcapStreamSource::connect(&addr.to_string()).unwrap();
+        let mut frames = Vec::new();
+        loop {
+            match source.read(Duration::from_millis(1)) {
+                ChannelRead::Frame { ts_ns, dir, wire } => frames.push((ts_ns, dir, wire)),
+                ChannelRead::Idle => continue,
+                ChannelRead::Ended { detail } => {
+                    assert_eq!(detail, "end of file · 3 frames");
+                    break;
+                }
+                ChannelRead::Gap { .. } => panic!("pcap stream must not synthesize gaps"),
+            }
+        }
+        server.join().unwrap();
+
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0].0, 1_700_000_000_000_000_000);
+        assert_eq!(frames[1].0, 1_700_000_000_001_000_000);
+        assert_eq!(frames[2].0, 1_700_000_000_002_000_000);
+        assert!(frames
+            .iter()
+            .all(|(_, dir, wire)| *dir == crate::codes::DIR_UNKNOWN && wire.len() == 60));
+        assert_eq!(source.status, ChannelStatus::Ended);
+    }
+
+    #[test]
+    fn cp_004_fast_file_replay_reads_every_fixture_record() {
+        // CP-004: fast file replay delivers every record without source-side drops.
+        const RECORDS: usize = 4_096;
+        let path = temp_pcap("cp004-fast", &pcap_bytes(RECORDS));
+        let mut source = PcapSource::open(path.to_str().unwrap(), "fast").unwrap();
+        let mut count = 0usize;
+        loop {
+            match source.read(Duration::ZERO) {
+                ChannelRead::Frame { .. } => count += 1,
+                ChannelRead::Ended { detail } => {
+                    assert_eq!(detail, format!("end of file · {RECORDS} frames"));
+                    break;
+                }
+                ChannelRead::Idle => continue,
+                ChannelRead::Gap { .. } => panic!("pcap file replay must not synthesize gaps"),
+            }
+        }
+        let _ = std::fs::remove_file(path);
+        assert_eq!(count, RECORDS);
+        assert_eq!(source.frames, RECORDS as u64);
+        assert_eq!(source.status, ChannelStatus::Ended);
+    }
+
+    #[test]
+    fn cp_004_realtime_pacing_sleep_is_capped_at_50_ms() {
+        // CP-004: realtime replay sleeps in chunks capped at 50 ms.
+        let started = Instant::now();
+        assert_eq!(
+            pacing_sleep(started, Duration::from_millis(250)),
+            Some(Duration::from_millis(50))
+        );
+        assert!(pacing_sleep(started, Duration::ZERO).is_none());
     }
 }

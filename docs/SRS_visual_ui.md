@@ -813,30 +813,30 @@ afford it.
 
 | ID | Requirement | Priority | Status | Acceptance criteria |
 |---|---|---|---|---|
-| VU-001 | Ship a single dark theme with no light variant or switch | Must | Planned | No theme control exists; the palette resolves to one set of values |
-| VU-002 | Define all colors once in a token module; no component contains a color literal | Must | Planned | A CI lint rule fails the build on any hex or rgb literal outside the token module |
-| VU-003 | Apply no depth-based background tinting to panel surfaces | Must | Planned | Sampled panel luminance is identical at nesting depths 1 and 3 |
-| VU-004 | Contain exactly the 16 specified series colors in the specified order | Must | Planned | Unit test asserts contents and order |
+| VU-001 | Ship a single dark theme with no light variant or switch | Must | Verified | No theme control exists; the palette resolves to one set of values |
+| VU-002 | Define all colors once in a token module; no component contains a color literal | Must | Verified | A CI lint rule fails the build on any hex or rgb literal outside the token module |
+| VU-003 | Apply no depth-based background tinting to panel surfaces | Must | Verified | Sampled panel luminance is identical at nesting depths 1 and 3 |
+| VU-004 | Contain exactly the 16 specified series colors in the specified order | Must | Verified | Unit test asserts contents and order |
 | VU-005 | Assign a new series the first unused palette color, falling back to index modulo 16 | Must | Planned | Removing and re-adding a signal reclaims the freed color; 17 signals do not crash |
-| VU-006 | Bundle both font stacks with the application | Must | Planned | Rendering is identical on a host with neither family installed |
-| VU-007 | Use tabular numerals in all numeric columns and live readouts | Must | Planned | Element width is unchanged across 1000 updates spanning all digit shapes |
-| VU-008 | Run undecorated with an application-drawn title bar and drag region | Must | Planned | Dragging the app bar background moves the window; dragging any control does not |
-| VU-009 | Default the window to 1440 × 900 and enforce a 1024 × 700 minimum | Must | Planned | Resizing below the minimum is refused; no app bar control clips at the minimum |
-| VU-010 | Size the nav rail 65 px collapsed and 240 px expanded, labels hidden but present when collapsed | Must | Planned | Measured widths match; accessible names are available in both states |
+| VU-006 | Bundle both font stacks with the application | Must | Implemented | Rendering is identical on a host with neither family installed |
+| VU-007 | Use tabular numerals in all numeric columns and live readouts | Must | Implemented | Element width is unchanged across 1000 updates spanning all digit shapes |
+| VU-008 | Run undecorated with an application-drawn title bar and drag region | Must | Implemented | Dragging the app bar background moves the window; dragging any control does not |
+| VU-009 | Default the window to 1440 × 900 and enforce a 1024 × 700 minimum | Must | Implemented | Resizing below the minimum is refused; no app bar control clips at the minimum |
+| VU-010 | Size the nav rail 65 px collapsed and 240 px expanded, labels hidden but present when collapsed | Must | Implemented | Measured widths match; accessible names are available in both states |
 | VU-011 | Compute legend width from measured labels, clamped to [180, min(420, container − 320)] px | Must | Planned | Width matches the formula for 0, 1 and 16 signals at three container widths, and persists across restart |
-| VU-012 | Declare a constant row height on every virtualized list: 48 px legend, 32 px trace | Must | Planned | No measurement callback fires during a 10,000-row scroll |
-| VU-013 | Zero-pad frame identifiers to their format's digit count and right-align all numeric columns | Must | Planned | Column width is stable across identifier lengths; decimal points align vertically |
-| VU-014 | Carry frame direction and error status by a text token as well as a color | Must | Planned | A grayscale capture of a mixed trace distinguishes received, transmitted and malformed frames |
+| VU-012 | Declare a constant row height on every virtualized list: 48 px legend, 32 px trace | Must | Implemented | No measurement callback fires during a 10,000-row scroll |
+| VU-013 | Zero-pad frame identifiers to their format's digit count and right-align all numeric columns | Must | Verified | Column width is stable across identifier lengths; decimal points align vertically |
+| VU-014 | Carry frame direction and error status by a text token as well as a color | Must | Verified | A grayscale capture of a mixed trace distinguishes received, transmitted and malformed frames |
 | VU-015 | Indicate the paused state inside the affected region, not only on its control | Must | Planned | A user viewing only the table area can determine the paused state without panning |
 | VU-016 | Allocate at least 60 px per axis tick and emit at most 8 ticks per axis | Must | Planned | A 200 px axis carries at most 3 ticks; no labels overlap at any pane size |
 | VU-017 | Draw point markers only below 2 samples per pixel, sized 4–8 px | Must | Planned | No markers above the threshold; size matches the formula at 0.5 and 1.5 samples/px |
 | VU-018 | Suppress the axis overlay when either pane dimension is below 32 CSS px | Must | Planned | Revealing a hidden pane produces no frame with oversized labels |
-| VU-019 | Put no CSS transition, hover shadow or ripple on any element that updates with incoming data | Must | Planned | Computed-style audit over table rows, legend rows and chart surfaces reports 0 s durations |
-| VU-020 | Limit all animation to the rail transition, the startup fade and pulse, and toast entry | Must | Planned | An automated computed-style sweep finds no other non-zero transition or animation |
-| VU-021 | Drop every permitted transition to zero duration under prefers-reduced-motion | Must | Planned | A single assertion over the same sweep with the media query forced |
-| VU-022 | Give every interactive element a stable kebab-case data-testid and, if icon-only, a matching aria-label | Must | Planned | A CI static scan reports zero interactive elements lacking either attribute |
-| VU-023 | Give every color-indicated state a second non-chromatic indicator | Must | Planned | Grayscale review of each view identifies all states unambiguously |
+| VU-019 | Put no CSS transition, hover shadow or ripple on any element that updates with incoming data | Must | Verified | Computed-style audit over table rows, legend rows and chart surfaces reports 0 s durations |
+| VU-020 | Limit all animation to the rail transition, the startup fade and pulse, and toast entry | Must | Implemented | An automated computed-style sweep finds no other non-zero transition or animation |
+| VU-021 | Drop every permitted transition to zero duration under prefers-reduced-motion | Must | Implemented | A single assertion over the same sweep with the media query forced |
+| VU-022 | Give every interactive element a stable kebab-case data-testid and, if icon-only, a matching aria-label | Must | Verified | A CI static scan reports zero interactive elements lacking either attribute |
+| VU-023 | Give every color-indicated state a second non-chromatic indicator | Must | Implemented | Grayscale review of each view identifies all states unambiguously |
 | VU-024 | Show keyboard focus as a 2 px accent outline at 2 px offset on every interactive element | Must | Planned | Tabbing through each view shows a ring at every stop |
-| VU-025 | Paint a startup overlay before framework mount and fade it over 220 ms after mount | Should | Planned | No frame between window creation and mount shows a blank window |
-| VU-026 | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | Must | Planned | Automated contrast check over the token set and all 16 series colors passes |
-| VU-027 | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a value they display changes — live counters re-render as isolated leaves at the stats rate | Must | Planned | Render-count unit test (stats republish does not re-render a non-stats component); perf: hidden views 0 commits/s, app bar ≤ 2/s |
+| VU-025 | Paint a startup overlay before framework mount and fade it over 220 ms after mount | Should | Implemented | No frame between window creation and mount shows a blank window |
+| VU-026 | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | Must | Implemented | Automated contrast check over the token set and all 16 series colors passes |
+| VU-027 | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a value they display changes — live counters re-render as isolated leaves at the stats rate | Must | Verified | Render-count unit test (stats republish does not re-render a non-stats component); perf: hidden views 0 commits/s, app bar ≤ 2/s |

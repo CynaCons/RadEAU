@@ -141,6 +141,7 @@ export function isColumnFilterActive(
 }
 
 /** Integer / Set membership — no string compares on the hot path. */
+// TR-007: committed column filters project over the ring, never ingest.
 export function matches(row: TraceFrame, f: TraceFilter): boolean {
   if (f.services !== null && !f.services.has(serviceMethodId(row))) return false;
   if (f.names !== null && !f.names.has(nameFilterId(row))) return false;

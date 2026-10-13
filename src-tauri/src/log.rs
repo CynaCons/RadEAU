@@ -1,3 +1,5 @@
+//! Buffered JSONL application log for diagnostics (CP-007).
+
 #![allow(dead_code)]
 
 use serde_json::{Map, Value};
@@ -81,6 +83,7 @@ pub fn path() -> Option<PathBuf> {
 }
 
 pub fn log(level: Level, area: &str, msg: &str, fields: Value) {
+    // CP-007: drop-oldest bounded hand-off keeps capture readers from blocking on disk.
     let Some(state) = logger_slot()
         .try_lock()
         .ok()
@@ -181,6 +184,7 @@ fn dropped_line(count: u64) -> String {
 }
 
 fn writer_loop(state: Arc<WriterState>) {
+    // CP-007: dedicated buffered writer thread flushes periodically and rotates logs.
     let mut writer: Option<OpenLog> = None;
     loop {
         let (batch, stopping) = {
@@ -342,6 +346,7 @@ mod tests {
 
     #[test]
     fn lines_are_valid_json_with_fields() {
+        // CP-007: application log entries are JSONL objects with lifecycle fields.
         let _guard = test_guard();
         let dir = temp_dir("json");
         init(dir.clone());
@@ -362,7 +367,70 @@ mod tests {
     }
 
     #[test]
+    fn cp_007_lifecycle_lines_are_jsonl() {
+        let _guard = test_guard();
+        let dir = temp_dir("lifecycle");
+        let path = dir.join("radeau.log");
+        let mut writer = None;
+        let lines = [
+            make_line(
+                Level::Info,
+                "session",
+                "startup",
+                serde_json::json!({"version": "0.1.test", "os": "TestOS"}),
+            ),
+            make_line(
+                Level::Info,
+                "link",
+                "source ended",
+                serde_json::json!({"detail": "end of file · 2 frames"}),
+            ),
+            make_line(
+                Level::Info,
+                "stats",
+                "session final stats",
+                serde_json::json!({"received": 2, "dropped": 0}),
+            ),
+        ];
+        for line in lines {
+            write_line(&path, &mut writer, &line);
+        }
+        writer.as_mut().unwrap().writer.flush().unwrap();
+
+        let lines = BufReader::new(File::open(path).unwrap())
+            .lines()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let values = lines
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let startup = values
+            .iter()
+            .find(|value| value["msg"] == "startup")
+            .unwrap();
+        let ended = values
+            .iter()
+            .find(|value| value["msg"] == "source ended")
+            .unwrap();
+        let stats = values
+            .iter()
+            .find(|value| value["msg"] == "session final stats")
+            .unwrap();
+        assert_eq!(startup["area"], "session");
+        assert_eq!(startup["version"], "0.1.test");
+        assert_eq!(ended["area"], "link");
+        assert_eq!(ended["detail"], "end of file · 2 frames");
+        assert_eq!(stats["area"], "stats");
+        assert_eq!(stats["received"], 2);
+        assert!(values
+            .iter()
+            .all(|value| value["ts"].as_str().is_some_and(|ts| ts.ends_with('Z'))));
+    }
+
+    #[test]
     fn rotation_triggers_at_size_cap() {
+        // CP-007: rotation happens before appending a line that would exceed the cap.
         let _guard = test_guard();
         let dir = temp_dir("rotation");
         let path = dir.join("radeau.log");
@@ -387,10 +455,10 @@ mod tests {
                 serde_json::json!({"index": index}),
             );
         }
-        log(Level::Error, "cmd", "sentinel", Value::Null);
         wait_for_lines(&dir.join("radeau.log"), 1);
         // The writer flushes on a 2 s cadence; allow three cycles under load.
         for _ in 0..300 {
+            log(Level::Error, "cmd", "sentinel", Value::Null);
             if fs::read_to_string(dir.join("radeau.log"))
                 .unwrap_or_default()
                 .contains("sentinel")

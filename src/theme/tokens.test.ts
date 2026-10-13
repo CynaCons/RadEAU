@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import tokens from "./tokens.json";
 
+// VU-003: flat-surface tokens do not introduce depth-dependent panel colors.
 // VU-004: the series palette contains exactly the 16 specified colors in the
 // specified order. VU-001/VU-002 companions: token values match the visual
 // specification exactly.

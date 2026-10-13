@@ -192,6 +192,7 @@ describe("distinctValues", () => {
   });
 });
 
+// TR-007 verifies filtering before Fixed collapse / Sequential windowing.
 describe("projectDisplayRows + filter", () => {
   it("Fixed shows the latest matching frame per key (not the absolute newest)", () => {
     const rows = [

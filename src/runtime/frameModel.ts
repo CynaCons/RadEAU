@@ -692,6 +692,7 @@ export function srcAddrKey(sa: number, sm: number): number {
  * Per-row identity for Δ-per-key / fixed-mode collapse (SRS_visual_ui §5.2).
  * Computed once in projectRow and stored on TraceFrame.key.
  */
+// TR-005: protocol-class-specific Fixed keys keep distinct flows visible.
 export function frameKey(batch: FrameBatchRaw, k: number): string {
   const p = batch.p[k]!;
   const sv = batch.sv[k]!;
@@ -1134,6 +1135,7 @@ function classDisplay(
 }
 
 /** Projects one columnar entry to the row shape the Trace table renders. */
+// TR-006: projection calculates global and per-key deltas from prior timestamps.
 export function projectRow(
   batch: FrameBatchRaw,
   k: number,

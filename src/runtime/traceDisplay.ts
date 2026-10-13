@@ -19,9 +19,11 @@ import {
 
 export type TraceDisplayMode = "fixed" | "sequential";
 
+// TR-003: Fixed is default and projects latest-per-key, pinned then key order.
 export const DEFAULT_TRACE_MODE: TraceDisplayMode = "fixed";
 
 /** Sequential history-window choices (rows retained at the tail). */
+// TR-004: Sequential exposes the specified chronological tail windows.
 export const HISTORY_WINDOW_OPTIONS = [10_000, 50_000, 200_000] as const;
 export type HistoryWindow = (typeof HISTORY_WINDOW_OPTIONS)[number];
 export const DEFAULT_HISTORY_WINDOW: HistoryWindow = 200_000;

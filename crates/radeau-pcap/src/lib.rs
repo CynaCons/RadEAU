@@ -1,4 +1,4 @@
-//! Bounded, incremental pcap/pcapng parsing without libpcap.
+//! Bounded, incremental pcap/pcapng parsing without libpcap (CP-002, CP-009).
 
 use std::fmt;
 use std::io::{self, Write};
@@ -450,6 +450,7 @@ pub struct PcapWriter<W: Write> {
 }
 impl<W: Write> PcapWriter<W> {
     pub fn new(mut inner: W) -> io::Result<Self> {
+        // CP-006 and CP-014: all exported/recorded files are classic ns pcap, link type 1.
         inner.write_all(&[0x4d, 0x3c, 0xb2, 0xa1])?;
         inner.write_all(&2u16.to_le_bytes())?;
         inner.write_all(&4u16.to_le_bytes())?;
@@ -635,6 +636,7 @@ mod tests {
 
     #[test]
     fn writer_reader_roundtrip() {
+        // CP-006: pcap writer output reads back byte-for-byte through the same parser.
         let frames = [b"abc".as_slice(), b"defgh".as_slice()];
         let mut w = PcapWriter::new(Vec::new()).unwrap();
         w.write_record(1_700_000_000_123_456_789, frames[0])
@@ -658,6 +660,7 @@ mod tests {
 
     #[test]
     fn classic_all_magics_and_byte_orders() {
+        // CP-002: classic pcap supports both byte orders and µs/ns magic values.
         for endian in [Endian::Little, Endian::Big] {
             for nanos in [false, true] {
                 let d = classic(endian, nanos, 1, &[(10, 123_456, b"abc", 4)]);
@@ -677,6 +680,7 @@ mod tests {
 
     #[test]
     fn pcapng_endian_interfaces_resolutions_directions_and_spb() {
+        // CP-002 and CP-009: pcapng byte order, if_tsresol, EPB direction, and SPB reuse.
         for endian in [Endian::Little, Endian::Big] {
             let mut d = shb(endian);
             d.extend(idb(endian, 4, 6, "camera"));
@@ -747,6 +751,7 @@ mod tests {
 
     #[test]
     fn unsupported_links_and_oversized_records_are_diagnosed() {
+        // CP-002: unsupported link types and oversized records refuse cleanly.
         assert_eq!(
             read_all(&classic(Endian::Little, false, 113, &[])),
             Err(PcapError::UnsupportedLinkType(113))
@@ -767,6 +772,7 @@ mod tests {
 
     #[test]
     fn truncated_tail_delivers_complete_records_before_cut() {
+        // CP-002: a truncated tail preserves every complete record before the cut.
         let d = classic(
             Endian::Big,
             false,
@@ -795,6 +801,7 @@ mod tests {
 
     #[test]
     fn random_prefixes_of_every_fixture_never_panic() {
+        // CP-002: fuzz-style fixture prefixes never panic.
         let mut writer = PcapWriter::new(Vec::new()).unwrap();
         writer.write_record(1, b"hello").unwrap();
         let mut ng = shb(Endian::Little);

@@ -53,6 +53,7 @@ function makeBatch(
 }
 
 describe("TraceStore", () => {
+  // TR-001 verifies bounded eviction and both adaptive flush delays.
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -83,7 +84,7 @@ describe("TraceStore", () => {
     store.dispose();
   });
 
-  it("projects columnar entries into full rows with deltas", () => {
+  it("projects columnar entries into full rows with deltas (TR-006)", () => {
     const store = new TraceStore();
     store.ingest(
       makeBatch(0, [
@@ -151,7 +152,7 @@ describe("TraceStore", () => {
     store.dispose();
   });
 
-  it("stages while paused with a live buffered count and merges on resume", () => {
+  it("stages while paused with a live buffered count and merges on resume (TR-009)", () => {
     const store = new TraceStore(100);
     store.setPaused(true);
     store.ingest(makeBatch(0, [{ idx: 1, t: 0.1 }]));
@@ -187,7 +188,7 @@ describe("TraceStore", () => {
     store.dispose();
   });
 
-  it("clear resets everything including pending batches and deltas", () => {
+  it("clear resets everything including pending batches and deltas (TR-010)", () => {
     const store = new TraceStore();
     store.ingest(makeBatch(0, [{ idx: 1, t: 0.1 }]));
     vi.advanceTimersByTime(100);

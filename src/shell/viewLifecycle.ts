@@ -57,5 +57,6 @@ export function useViewLifecycle(viewId: string, lifecycle: ViewLifecycle): void
  * while it is false and the view catches up from the store on resume.
  */
 export function useViewActive(viewId: string): boolean {
+  // VU-027: hidden keep-alive views unsubscribe from display-only updates.
   return useSyncExternalStore(subscribeActive, () => active.has(viewId));
 }

@@ -11,6 +11,7 @@ import {
 } from "./desktop";
 
 /** `radeau-<yyyyMMdd-HHmmss>.pcap` in local time. */
+// TR-013: ring export uses the session-based radeau-*.pcap default name.
 export function defaultExportPcapName(now: Date = new Date()): string {
   const y = now.getFullYear();
   const mo = String(now.getMonth() + 1).padStart(2, "0");

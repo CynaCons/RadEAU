@@ -443,6 +443,7 @@ function DecodedTable(props: { idx: number; signals: readonly DecodedSignal[] })
  * Fetches dissection for `idx` once on mount. Remount (re-expand) to refetch;
  * unmount on collapse discards state.
  */
+// TR-011: expanded rows fetch dissection on demand and surface eviction honestly.
 export function TraceDetailPanel(props: {
   idx: number;
   showCapturedIdx?: boolean;

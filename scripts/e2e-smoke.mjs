@@ -533,6 +533,8 @@ async function main() {
     if (shell.viewport[0] < 1024 || shell.viewport[1] < 700)
       fail(`viewport too small: ${shell.viewport}`);
 
+    // TR-002/TR-003/TR-004: credits sustain flow; Fixed defaults; Sequential grows.
+    // VU-022: the stable, accessible data-testid control surface drives this run.
     // Phase 2 — global run gate + Trace Fixed default (SRS §4.3 / §5.2).
     // Trace is the default view; still click the rail entry when it is ready.
     await waitFor(
@@ -1117,6 +1119,7 @@ async function main() {
       scaled: decoded.scaled,
     }));
 
+    // TR-007/TR-008: committed filters narrow rows, show counts, empty, and clear.
     // Phase 6 — per-column Trace filtering (§5.2 / v0.1.7), sim still streaming.
     await session.eval(COLLAPSE_EXPANDED_PROBE);
 
@@ -1389,7 +1392,8 @@ async function main() {
         })()`);
         return r && r.ok ? r : null;
       }, timeoutMs, label);
-      const detail = await waitFor(async () => {
+    // TR-011: expansion fetches and renders protocol-layer detail on demand.
+    const detail = await waitFor(async () => {
         const d = await session.eval(`(() => {
           const panel = document.querySelector('[data-testid^="trace-detail-"]');
           if (!panel) return null;
@@ -1703,7 +1707,7 @@ async function main() {
       fail(`pcap/time phase: ${err?.message ?? err}`);
     }
 
-    // Phase (e) — live loopback via Npcap (CP-010..013). Isolated; skip honestly
+    // Phase (e) — live loopback via Npcap (CP-010, CP-011, CP-012, CP-013). Isolated; skip honestly
     // when Npcap is missing or no loopback device is listed.
     try {
       const runState = await session.eval(APPBAR_RUN_LABEL_PROBE);
@@ -1820,7 +1824,7 @@ async function main() {
       v016.live = false;
     }
 
-    // Phase (f) — continuous pcap recording (CP-014..016). Isolated; re-selects
+    // Phase (f) — continuous pcap recording (CP-014, CP-015, CP-016). Isolated; re-selects
     // the simulator so the file gets real frames while armed.
     let recordingPass = null;
     const recordingDir = mkdtempSync(join(tmpdir(), "radeau-e2e-rec-"));

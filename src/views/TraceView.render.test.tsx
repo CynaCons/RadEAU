@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+// TR-015/TR-016 and VU-027: isolated updates plus hidden-view stillness.
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";

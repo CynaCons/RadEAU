@@ -1,4 +1,4 @@
-//! Safe, runtime-loaded Npcap/libpcap access.
+//! Safe, runtime-loaded Npcap/libpcap access (CP-010, CP-011, CP-012, CP-013).
 
 mod ffi;
 
@@ -138,6 +138,7 @@ pub fn library_version() -> Result<String, String> {
 }
 
 pub fn list_devices() -> Result<Vec<Device>, String> {
+    // CP-011: device ids/descriptions/addresses/flags come directly from libpcap.
     ffi::list_devices()
 }
 
@@ -150,6 +151,7 @@ pub struct LiveCapture {
 
 impl LiveCapture {
     pub fn open(id: &str, filter: Option<&str>) -> Result<Self, OpenError> {
+        // CP-010 and CP-012: open the runtime-loaded capture library with live-session settings.
         let (raw, precision_ns, datalink, warnings) = ffi::RawCapture::open(id, filter)
             .map_err(|(message, status)| OpenError::new(message, status))?;
         Ok(Self {
@@ -198,6 +200,7 @@ mod tests {
 
     #[test]
     fn failure_remedies_are_specific() {
+        // CP-013: privilege, missing-driver, not-found, and busy failures map to remedies.
         assert_eq!(remedy_for("loader failed: missing", None), NOT_INSTALLED);
         assert_eq!(remedy_for("No such device exists", None), NOT_FOUND);
         assert_eq!(remedy_for("device busy", None), BUSY);
@@ -250,6 +253,7 @@ mod tests {
 
     #[test]
     fn enumeration_never_panics() {
+        // CP-010 and CP-011: absence of the runtime library is a diagnostic, not a panic.
         match list_devices() {
             Ok(_) => {}
             Err(error) => assert_eq!(remedy_for(&error, None), NOT_INSTALLED),
@@ -272,6 +276,7 @@ mod tests {
     #[test]
     #[ignore = "requires an installed capture library and loopback adapter"]
     fn live_loopback_udp_smoke() {
+        // CP-012: manual live loopback verification for real UDP traffic.
         use std::net::UdpSocket;
         use std::time::{Duration, Instant};
 

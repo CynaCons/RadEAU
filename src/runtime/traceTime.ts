@@ -26,6 +26,7 @@ export function formatWallTime(tS: number, sessionEpochMs: number): string {
  * Renders the Time cell. Wall mode falls back to session format when the
  * source has no wall-clock anchor (sessionEpochMs is null).
  */
+// TR-012: session-relative or epoch-anchored wall-clock trace time.
 export function formatTraceTime(
   tS: number,
   mode: TraceTimeMode,

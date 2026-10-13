@@ -25,7 +25,8 @@ import { sessionStore } from "../runtime/sessionStore";
 import { shallowEqual, useStoreSelector } from "../runtime/useStoreSelector";
 import radeauMark from "../assets/radeau-mark.png";
 
-/** Interactive app-bar children opt out of the window drag region (VU-008). */
+/** Interactive app-bar children opt out of the window drag region (VU-008).
+ * VU-009: controls remain usable at the configured minimum window size. */
 const noDrag = {
   onPointerDown: (e: ReactPointerEvent) => e.stopPropagation(),
 };

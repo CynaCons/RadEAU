@@ -5,6 +5,7 @@ import {
   formatExportSummary,
 } from "./ringExport";
 
+// TR-013 verifies the default pcap name and export result presentation.
 describe("ringExport helpers", () => {
   it("builds radeau-yyyyMMdd-HHmmss.pcap names", () => {
     const name = defaultExportPcapName(new Date(2026, 7, 29, 14, 5, 9));

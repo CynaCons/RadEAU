@@ -7,6 +7,7 @@ import {
   wallTimeDisabledReason,
 } from "./traceTime";
 
+// TR-012 verifies both time modes and the unavailable-wall-time reason.
 describe("traceTime formatting", () => {
   it("formats session time to 4 decimal places", () => {
     expect(formatSessionTime(0)).toBe("0.0000");

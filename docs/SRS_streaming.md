@@ -10,11 +10,11 @@ rows cite.
 
 | ID | Requirement | Status | Test |
 |---|---|---|---|
-| PF-001 | Exactly one batched frame event (`frames:batch`) exists on the frame path; payloads are columnar arrays of primitives, never row objects. | Implemented (dev generator path) | `cargo test --workspace` (`capture::tests`) |
-| PF-002 | Deadline-based batch cadence as a pure function `(elapsed, interval) → bool`, default 16 ms; emit ceilings hold for sparse and bursty arrivals. | Implemented | `capture::tests::cadence_*` |
-| PF-003 | Credit-based backpressure: emission pauses at 3 unacked batches; the UI acks exactly once per animation frame; credits reset on session start/stop. | Implemented | `capture::tests` + UI ack loop (`TraceView.tsx`) |
-| PF-004 | Bounded accumulator: 4,000 frames, drop oldest; cleared per session stop; an empty read never flushes a waiting batch. | Implemented | `capture::tests::accumulator_evicts_oldest_at_cap` |
-| PF-005 | UI render and paint budgets are measured under the devgen stress profile with the ring at its cap (`npm run test:perf`, scenarios per view) and enforced against `perf/budgets.json`; a regression past a budget fails the run. | Planned | `scripts/e2e-perf.mjs --check` |
+| PF-001 | Exactly one batched frame event (`frames:batch`) exists on the frame path; payloads are columnar arrays of primitives, never row objects. | Verified | `cargo test --workspace` (`capture::tests`) |
+| PF-002 | Deadline-based batch cadence as a pure function `(elapsed, interval) → bool`, default 16 ms; emit ceilings hold for sparse and bursty arrivals. | Verified | `capture::tests::cadence_*` |
+| PF-003 | Credit-based backpressure: emission pauses at 3 unacked batches; the UI acks exactly once per animation frame; credits reset on session start/stop. | Verified | `cargo test --workspace` (`capture::tests`) + UI ack loop (`TraceView.tsx`) |
+| PF-004 | Bounded accumulator: 4,000 frames, drop oldest; cleared per session stop; an empty read never flushes a waiting batch. | Verified | `capture::tests::accumulator_evicts_oldest_at_cap` |
+| PF-005 | UI render and paint budgets are measured under the devgen stress profile with the ring at its cap (`npm run test:perf`, scenarios per view) and enforced against `perf/budgets.json`; a regression past a budget fails the run. | Verified | `scripts/e2e-perf.mjs --check` |
 
 ---
 

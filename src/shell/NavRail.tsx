@@ -2,6 +2,8 @@ import { Box, ButtonBase, Tooltip, Typography } from "@mui/material";
 import InfoIcon from "@mui/icons-material/Info";
 import { VIEWS } from "./viewRegistry";
 
+// VU-010: fixed accessible rail widths in collapsed and expanded states.
+// VU-021: its permitted transitions honor reduced-motion.
 const COLLAPSED = 65;
 const EXPANDED = 240;
 

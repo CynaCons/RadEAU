@@ -1,4 +1,4 @@
-//! The only unsafe module in this crate.
+//! The only unsafe module in this crate (CP-010, CP-012).
 //!
 //! Layout assumptions follow the public pcap ABI. `pcap_if_t`, `pcap_addr_t`,
 //! `pcap_pkthdr`, `bpf_program`, and the first three fields of `pcap_stat` are
@@ -130,6 +130,7 @@ fn api() -> Result<&'static Api, String> {
 }
 
 fn load_api() -> Result<Api, String> {
+    // CP-010: resolve every libpcap/Npcap symbol at runtime; no link-time SDK dependency.
     let mut errors = Vec::new();
     for candidate in library_candidates() {
         // SAFETY: loading a named pcap library is the purpose of this module;
@@ -320,6 +321,7 @@ unsafe impl Send for RawCapture {}
 
 impl RawCapture {
     pub fn open(id: &str, filter: Option<&str>) -> OpenResult {
+        // CP-012: snaplen 65535, promiscuous, immediate mode, 100 ms timeout, ns when available.
         let api = api().map_err(|error| (error, None))?;
         let id = CString::new(id).map_err(|_| ("interface id contains NUL".into(), None))?;
         let mut error = [0 as c_char; PCAP_ERRBUF_SIZE];

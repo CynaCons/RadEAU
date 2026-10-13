@@ -1,4 +1,4 @@
-//! Continuous pcap recording (SRS_capture.md §7, CP-014..016): while the
+//! Continuous pcap recording (SRS_capture.md §7, CP-014, CP-015, CP-016): while the
 //! record switch is armed, every frame the reader classifies is appended to a
 //! classic pcap file by a dedicated writer thread. The reader never blocks on
 //! disk — the hand-off queue drops oldest and counts what it dropped.
@@ -206,6 +206,7 @@ fn unix_ms(t: SystemTime) -> f64 {
 }
 
 fn file_name(started: SystemTime) -> String {
+    // CP-015: session-start timestamp in radeau-yyyyMMdd-HHmmss.pcap.
     let local: chrono::DateTime<chrono::Local> = started.into();
     format!("radeau-{}.pcap", local.format("%Y%m%d-%H%M%S"))
 }
@@ -259,6 +260,7 @@ impl RecordingState {
     /// Opens the session's file when armed; a no-op otherwise or while one
     /// is already open.
     pub fn begin(&self, app: &AppHandle, started: SystemTime) -> Result<(), String> {
+        // CP-015: arming while stopped stores intent; begin opens when the next session starts.
         if !self.is_armed() {
             return Ok(());
         }
@@ -376,6 +378,7 @@ impl RecordingState {
     }
 
     pub fn snapshot(&self) -> RecordingStateDto {
+        // CP-016: live recording path, frame, byte, and drop counters for the Recorder panel.
         let active = self.active.lock().ok();
         let active = active.as_ref().and_then(|a| a.as_ref());
         let last = self.last.lock().ok().and_then(|l| l.clone());
@@ -451,6 +454,7 @@ pub fn recording_arm(
     app: AppHandle,
     armed: bool,
 ) -> Result<RecordingStateDto, String> {
+    // CP-015: recording is a sub-state of the running capture session.
     state.armed.store(armed, Ordering::Release);
     if armed {
         if capture.is_running() {

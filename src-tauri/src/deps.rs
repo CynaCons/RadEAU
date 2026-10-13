@@ -1,3 +1,5 @@
+//! Read-only dependency probes and diagnostics report rendering (CP-008).
+
 #![allow(dead_code)]
 
 use serde::Serialize;

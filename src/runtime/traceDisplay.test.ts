@@ -71,6 +71,7 @@ describe("fixedDisplayKey", () => {
 });
 
 describe("collapseFixed", () => {
+  // TR-003 verifies last-per-key collapse and pinned/key ordering.
   it("collapses to one row per key, last write wins", () => {
     const rows = [
       row({
@@ -153,7 +154,7 @@ describe("collapseFixed", () => {
 });
 
 describe("windowSequential", () => {
-  it("returns the last N rows", () => {
+  it("returns the last N rows in arrival order (TR-004)", () => {
     const rows = [1, 2, 3, 4, 5].map((id) =>
       row({ id, protocol: "SOME/IP", source: "a", serviceMethod: "0x1101:0x8001", key: "0:4353:32769" }),
     );

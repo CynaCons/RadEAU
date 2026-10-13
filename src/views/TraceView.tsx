@@ -165,6 +165,7 @@ function columnsForMode(mode: TraceDisplayMode): ColumnDef[] {
 // Styles
 // ---------------------------------------------------------------------------
 
+// VU-007/VU-013: numeric trace fields use stable tabular, aligned formatting.
 const MONO: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: 13,
@@ -250,6 +251,7 @@ const TRACE_ROOT_SX: SxProps = {
   overflow: "hidden",
   contain: "layout paint style",
 };
+// TR-017: live appends are layout/paint-contained to the table region.
 const TABLE_REGION_SX: SxProps = {
   flex: 1,
   minWidth: 0,
@@ -404,6 +406,8 @@ function committedKeys(
 }
 
 function TraceRowCells({ f, context }: { f: TraceFrame; context: TraceTableContext }) {
+  // VU-022: interactive row controls have stable IDs and matching accessible labels.
+  // VU-014/VU-023: direction and malformed state retain explicit text tokens.
   countRender("trace-row");
   const key = fixedDisplayKey(f);
   const pinned = context?.pinned.has(key) ?? false;
@@ -498,6 +502,7 @@ function TraceRowCells({ f, context }: { f: TraceFrame; context: TraceTableConte
 const TRACE_LIFECYCLE = {};
 
 function TracePipeline() {
+  // TR-002: one core credit per animation frame while capture is active.
   const capturing = useStoreSelector(sessionStore, (snapshot) => snapshot.running);
   useEffect(() => {
     if (!capturing) return;
@@ -569,6 +574,7 @@ const FILTERED_EMPTY_SX = {
   pt: "40px",
 } as const;
 
+// TR-008: active filters expose shown/total and a distinct filtered-empty state.
 const FILTERED_CHIP_SX = {
   height: 22,
   fontSize: 12,

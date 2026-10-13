@@ -940,6 +940,8 @@ describe("udsTypeLabel", () => {
   });
 });
 
+// TR-005 verifies the Fixed key table across protocol classes.
+// VU-013/VU-014 verify stable identifier formatting and textual direction/error state.
 describe("frameKey", () => {
   const sa = (10 << 24) | (42 << 16) | (0 << 8) | 11;
   const da = (10 << 24) | (42 << 16) | (0 << 8) | 20;

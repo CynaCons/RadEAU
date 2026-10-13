@@ -1,12 +1,13 @@
 /**
- * Frontend perf harness — launches the real RadEAU debug binary against the
+ * Frontend perf harness (PF-005) — launches the real RadEAU debug binary against the
  * vite dev server, drives the dev generator at the stress profile
  * (5,000 frames/s), and measures what the UI does with that load, per
  * scenario:
  *
  *   - React commits + actual render ms per zone (top bar, nav rail, each view)
  *     and per-row renders in the Trace table (src/runtime/perfProbe.tsx);
- *   - style recalcs, layouts, paints and their durations (CDP Performance
+ *   - style recalcs, layouts, paints and their durations (CDP Performance;
+ *     verification evidence for TR-015, TR-016, TR-017, and VU-019)
  *     metrics + a devtools.timeline trace);
  *   - long tasks and event-loop lag;
  *   - frames delivered to the UI per second.

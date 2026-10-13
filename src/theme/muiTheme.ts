@@ -15,6 +15,9 @@ const fontUi = tokensJson.font.ui;
 // The series palette (tokens.series) is consumed via CSS vars until the chart
 // engine lands in v0.2; re-export from here when a TS consumer appears.
 
+// VU-001: the application exposes one dark palette and no theme switch.
+// VU-004/VU-026: the ordered series palette and contrast-targeted tokens feed the theme.
+// VU-020: global ripple is disabled; motion is limited at component sites.
 export const muiTheme = createTheme({
   palette: {
     mode: "dark",

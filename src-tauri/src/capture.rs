@@ -1,10 +1,10 @@
-//! Capture session + the streaming pipeline slice (SRS_streaming.md §1):
+//! Capture session + the streaming pipeline slice (PF-001, PF-002, PF-003,
+//! PF-004 / SRS_streaming.md §1):
 //! deadline-batched emission, bounded drop-oldest accumulator, credit-based
 //! backpressure — one event shape (`frames:batch`) from the first commit.
 //!
-//! Sources (ARCHITECTURE §2 minimal cut): a small internal enum over the
-//! legacy dev generator and the simulator monitor-link TCP client. The full
-//! `Channel` trait lands later — do not grow this into that abstraction yet.
+//! Sources use the static-dispatch channel enum (CP-001); each backend feeds
+//! this single reader loop.
 //!
 //! Events (in addition to `frames:batch`):
 //! - `capture:session` — once per successful start (after sim handshake)
@@ -26,11 +26,11 @@ use crate::dissect::{FrameDetail, FrameRing};
 use crate::endpoints::{EndpointDto, EndpointTable};
 use crate::frame::{GenFrame, SNAP_LEN};
 
-/// Batch cadence (SRS §1): one event per deadline interval, 16 ms default.
+/// Batch cadence (PF-002): one event per deadline interval, 16 ms default.
 pub const BATCH_INTERVAL_MS: u64 = 16;
-/// Bounded accumulator (SRS §1): drop oldest past this many frames.
+/// Bounded accumulator (PF-004): drop oldest past this many frames.
 pub const ACCUMULATOR_CAP: usize = 4_000;
-/// Credit-based backpressure (SRS §1): stop emitting at this many outstanding
+/// Credit-based backpressure (PF-003): stop emitting at this many outstanding
 /// unacknowledged batches; UI acks exactly once per animation frame.
 pub const MAX_CREDITS: u32 = 3;
 const TICK_MS: u64 = 2;
@@ -41,13 +41,16 @@ const EVENT_CAPTURE_LINK: &str = "capture:link";
 const EVENT_CAPTURE_STATS: &str = "capture:stats";
 const EVENT_CAPTURE_EXPORT: &str = "capture:export";
 
+// PF-005: the perf gate drives the devgen stress profile through this same
+// native batch/credit pipeline before checking renderer budgets.
+
 /// Pure deadline cadence: due when a full `interval_ms` has passed since the
 /// last emit. Testable without a network.
 pub fn deadline_due(elapsed_ms: u64, interval_ms: u64, last_emit_ms: u64) -> bool {
     elapsed_ms.saturating_sub(last_emit_ms) >= interval_ms
 }
 
-/// Columnar batch payload — arrays of primitives, never row objects, so one
+/// Columnar batch payload (PF-001) — arrays of primitives, never row objects, so one
 /// user-visible update is one allocation-heavy structure at most.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -263,9 +266,9 @@ struct CaptureStatsEvent {
     malformed: u64,
     kernel_dropped: u64,
     by_class: [u64; crate::codes::PROTO_CLASS_COUNT],
-    recording_frames: u64,
-    recording_bytes: u64,
-    recording_dropped: u64,
+    recording_frames: u64,  // CP-016
+    recording_bytes: u64,   // CP-016
+    recording_dropped: u64, // CP-016
 }
 impl CaptureStats {
     fn observe(&self, f: &GenFrame) {
@@ -369,7 +372,7 @@ fn try_emit_batch(
     }
 }
 
-/// End-of-source flush: emits everything still accumulated regardless of the
+/// End-of-source flush (CP-005): emits everything still accumulated regardless of the
 /// batch deadline, waiting briefly for a credit so a file that replays in
 /// milliseconds does not end its session with the frames unsent.
 fn flush_remaining(
@@ -540,6 +543,7 @@ fn reader_loop(
         }
 
         if source.fast_replay() && accumulator.lock().map(|a| a.len() > 3_000).unwrap_or(false) {
+            // CP-004: fast pcap replay waits at the high-water mark instead of evicting.
             try_emit_batch(
                 &app,
                 &credits,
@@ -600,6 +604,7 @@ fn reader_loop(
             }
             ChannelRead::Idle => {}
             ChannelRead::Ended { detail } => {
+                // CP-005: EOF/stream end closes the session honestly while retaining the ring.
                 while !ui_ready(&attached, start) && !stop.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(10));
                 }
@@ -801,6 +806,7 @@ pub struct InterfaceInfo {
 
 #[tauri::command]
 pub fn capture_list_interfaces() -> Result<Vec<InterfaceInfo>, String> {
+    // CP-011: stable live-capture interface rows come from radeau-livecap.
     radeau_livecap::list_devices()
         .map(|devices| {
             devices
@@ -862,6 +868,7 @@ pub fn export_ring(
     app: AppHandle,
     path: String,
 ) -> Result<ExportSummary, String> {
+    // CP-006: snapshot the retained frame ring and write classic pcap with absolute timestamps.
     if state.starting.load(Ordering::Acquire) {
         return Err("capture is starting".into());
     }
@@ -1040,6 +1047,7 @@ mod tests {
                 payload_off: 14,
             },
         ];
+        // PF-001: one frames:batch payload is columnar arrays, not row objects.
         const EXPECTED: &str = r#"{"seq":12,"i":[7,8,9],"t":[1.25,1.5,2.0],"d":[1,0,1],"s":[2,3,0],"p":[0,1,2],"sv":[4353,65535,0],"m":[32769,33024,99],"ty":[0,0,0],"se":[42,-1,-1],"l":[128,90,58],"pb":[[0,1,2,3,4,5,6,7,8,9,10,11],[255,255,255,255,255,255,255,255,255,255,255,255],[0,0,0,0,0,0,0,0,0,0,0,0]],"sa":[170524683,170524684,0],"da":[170524692,4026531834,0],"sm":[2200130551819,2200130551820,2200130551809],"vl":[-1,17,-1],"po":[42,42,14]}"#;
         assert_eq!(
             serde_json::to_string(&FrameBatch::from_frames(12, &frames)).unwrap(),
@@ -1049,7 +1057,7 @@ mod tests {
 
     #[test]
     fn cadence_ceilings_sparse_and_bursty() {
-        // Simulate arrivals at 100/33/17 ms intervals over 10 s of elapsed
+        // PF-002: simulate arrivals at 100/33/17 ms intervals over 10 s of elapsed
         // time; emitted events must stay within the SRS ceilings.
         for (interval, ceiling) in [(100u64, 10usize), (33, 30), (17, 58)] {
             let mut count = 0;
@@ -1066,6 +1074,7 @@ mod tests {
 
     #[test]
     fn cadence_boundary_cases() {
+        // PF-002: direct boundary checks for the pure cadence function.
         assert!(!deadline_due(0, 16, 0)); // no time has passed since the last emit
         assert!(!deadline_due(15, 16, 0));
         assert!(deadline_due(16, 16, 0)); // exactly at boundary
@@ -1109,12 +1118,14 @@ mod tests {
         for f in frames {
             acc.push(f);
         }
+        // PF-004: bounded accumulator evicts oldest at the cap.
         assert_eq!(acc.len(), ACCUMULATOR_CAP);
         assert_eq!(acc.pending.front().unwrap().idx as usize, 500); // oldest 500 dropped
     }
 
     #[test]
     fn source_spec_deserializes_tagged_union() {
+        // CP-001: stable SourceSpec selection ids deserialize into the static channel enum.
         let d: SourceSpec =
             serde_json::from_str(r#"{"kind":"devgen","profile":"normal"}"#).unwrap();
         match d {
@@ -1131,6 +1142,8 @@ mod tests {
 
     #[test]
     fn sim_mapping_layer_feeds_frame_batch_shape() {
+        // CP-001 and PF-003: the generic reader boundary produces the same batch shape;
+        // ack-credit behavior is pinned by MAX_CREDITS and ack_frames above.
         // Network-free stand-in for a fake monitor server: pinned handshake +
         // record stream → GenFrames → columnar batch (DoD #4).
         let hs = validate_handshake_line(

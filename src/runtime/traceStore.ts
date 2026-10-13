@@ -11,6 +11,7 @@ import {
   TraceFrame,
 } from "./frameModel";
 
+// TR-001: bounded oldest-first ring and adaptive batch flush cadence.
 export const TRACE_RING_CAP = 200_000;
 const PAUSED_STAGING_CAP = 20_000;
 const ADAPTIVE_FLUSH_THRESHOLD = 64;
@@ -104,6 +105,7 @@ export class TraceStore {
     }
   }
 
+  // TR-009: pause stages a bounded raw-ingest window and resume merges in order.
   setPaused(paused: boolean): void {
     if (paused === this.paused) return;
     this.paused = paused;
@@ -125,6 +127,7 @@ export class TraceStore {
     }
   }
 
+  // TR-010: clear resets the ring, staging, pending work, and delta state.
   clear(): void {
     this.ring.fill(null);
     this.head = 0;
