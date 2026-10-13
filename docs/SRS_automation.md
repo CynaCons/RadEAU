@@ -55,3 +55,6 @@ ns unless named `*EpochMs`. Results are JSON objects.
 | `trace_query` | AU-005 | AU-005 | core frame ring |
 | `trace_frame` | `{idx}` | `FrameDetail` | `dissect::frame_detail` |
 | `trace_stats` | — | AU-007 | ring + session + stats |
+| `trace_analyze` | `{from?, sections?}` (SRS_analysis AN-007) | analysis report | `analysis::analyze` |
+| `service_summary` | `{from?, service?}` | SOME/IP section | `analysis::analyze` |
+| `timing_report` | `{from?, service, method}` | one service/method's periods, latency, gaps | `analysis::analyze` |
