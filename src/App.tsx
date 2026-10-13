@@ -6,6 +6,7 @@ import { NavRail } from "./shell/NavRail";
 import { ViewHost } from "./shell/ViewHost";
 import { AboutDialog } from "./shell/AboutDialog";
 import { DEFAULT_VIEW_ID } from "./shell/viewRegistry";
+import { PerfZone } from "./runtime/perfProbe";
 
 export function App() {
   const [railExpanded, setRailExpanded] = useState(false);
@@ -16,14 +17,18 @@ export function App() {
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
       <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
-        <AppTopBar onToggleRail={() => setRailExpanded((v) => !v)} />
+        <PerfZone id="topbar">
+          <AppTopBar onToggleRail={() => setRailExpanded((v) => !v)} />
+        </PerfZone>
         <Box sx={{ flex: 1, minHeight: 0, display: "flex" }}>
-          <NavRail
-            expanded={railExpanded}
-            activeViewId={activeViewId}
-            onNavigate={setActiveViewId}
-            onAbout={() => setAboutOpen(true)}
-          />
+          <PerfZone id="navrail">
+            <NavRail
+              expanded={railExpanded}
+              activeViewId={activeViewId}
+              onNavigate={setActiveViewId}
+              onAbout={() => setAboutOpen(true)}
+            />
+          </PerfZone>
           <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
             {/* Replay time bar mounts here when a replay source is configured (SRS_visual_ui.md §5.9). */}
             <ViewHost activeViewId={activeViewId} />

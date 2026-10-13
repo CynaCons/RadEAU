@@ -110,6 +110,14 @@ export class CdpSession {
     this.ws = new WebSocket(wsUrl);
     this.nextId = 1;
     this.pending = new Map();
+    this.handlers = new Map();
+  }
+
+  /** Subscribes to a CDP event (e.g. "Tracing.dataCollected"). */
+  on(method, cb) {
+    if (!this.handlers.has(method)) this.handlers.set(method, new Set());
+    this.handlers.get(method).add(cb);
+    return () => this.handlers.get(method)?.delete(cb);
   }
 
   async open() {
@@ -126,6 +134,8 @@ export class CdpSession {
         this.pending.delete(msg.id);
         if (msg.error) reject(new Error(msg.error.message));
         else resolve(msg.result);
+      } else if (msg.method && this.handlers.has(msg.method)) {
+        for (const cb of this.handlers.get(msg.method)) cb(msg.params);
       }
     });
   }

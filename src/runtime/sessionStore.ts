@@ -21,6 +21,7 @@ import {
   type SourceKind,
 } from "./captureSource";
 import { liveCaptureDependency } from "./dependencyDisplay";
+import type { RateProfile } from "./devGenMirror";
 import {
   dependencyProbe,
   onCaptureLink,
@@ -57,6 +58,7 @@ export class SessionStore {
   private pcapStreamAddr = "";
   private liveInterfaceId = "";
   private liveFilter = "";
+  private devgenProfile: RateProfile = DEFAULT_DEVGEN_PROFILE;
   private linkStatus: CaptureLinkStatus | null = null;
   private sessionInfo: CaptureSessionInfo | null = null;
   private stats: CaptureStats | null = null;
@@ -132,7 +134,7 @@ export class SessionStore {
   /** Builds the tagged source currently configured (editable only while stopped). */
   currentSource(): CaptureSource {
     return buildCaptureSource(this.sourceKind, {
-      profile: DEFAULT_DEVGEN_PROFILE,
+      profile: this.devgenProfile,
       addr: this.simAddr,
       path: this.pcapPath,
       pace: this.pcapPace,
@@ -148,6 +150,12 @@ export class SessionStore {
     this.sourceKind = kind;
     if (kind === "devgen") this.linkStatus = null;
     this.publish();
+  }
+
+  /** Dev generator rate profile (dev builds only; the perf harness drives it). */
+  setDevgenProfile(profile: RateProfile): void {
+    if (this.running) return;
+    this.devgenProfile = profile;
   }
 
   setSimAddr(addr: string): void {
@@ -301,3 +309,8 @@ export class SessionStore {
 
 /** Application-wide capture session singleton. */
 export const sessionStore = new SessionStore();
+
+if (import.meta.env.DEV) {
+  // Perf/E2E harness handle: rate profile + session control without UI clicks.
+  (globalThis as { __radeauSession?: SessionStore }).__radeauSession = sessionStore;
+}

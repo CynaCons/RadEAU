@@ -2,6 +2,7 @@ import { Box } from "@mui/material";
 import { useEffect, useRef } from "react";
 import { VIEWS } from "./viewRegistry";
 import { resumeView, suspendView } from "./viewLifecycle";
+import { PerfZone } from "../runtime/perfProbe";
 
 /**
  * Keep-alive view host (PRD §3.6, decision D4): every view mounts once and
@@ -50,7 +51,9 @@ export function ViewHost(props: { activeViewId: string }) {
               bgcolor: "var(--surface-canvas)",
             }}
           >
-            <v.component />
+            <PerfZone id={`view-${v.id}`}>
+              <v.component />
+            </PerfZone>
           </Box>
         );
       })}

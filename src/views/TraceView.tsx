@@ -89,6 +89,7 @@ import {
   type TraceTimeMode,
 } from "../runtime/traceTime";
 import { traceStore } from "../runtime/traceStore";
+import { countRender } from "../runtime/perfProbe";
 import type { TraceFrame } from "../runtime/frameModel";
 
 // ---------------------------------------------------------------------------
@@ -379,6 +380,7 @@ function rowContent(
   f: TraceFrame,
   context: TraceTableContext | undefined,
 ): ReactNode {
+  countRender("trace-row");
   const key = fixedDisplayKey(f);
   const pinned = context?.pinned.has(key) ?? false;
   const expanded =

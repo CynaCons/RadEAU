@@ -35,3 +35,4 @@ Thumbs.db
 # Local-only material
 design-reference/
 .mcp.json
+perf/last-run.json

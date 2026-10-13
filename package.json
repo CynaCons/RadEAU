@@ -27,7 +27,8 @@
     "lint:colors": "node scripts/lint-colors.mjs",
     "lint:ids": "node scripts/check-req-ids.mjs",
     "lint:deps": "knip",
-    "ci": "npm run typecheck && npm run test && npm run gen:tokens -- --check && npm run lint:colors && npm run lint:ids && npm run lint:deps"
+    "ci": "npm run typecheck && npm run test && npm run gen:tokens -- --check && npm run lint:colors && npm run lint:ids && npm run lint:deps",
+    "test:perf": "node scripts/e2e-perf.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
