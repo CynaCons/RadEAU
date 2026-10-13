@@ -494,6 +494,73 @@ fn trace_frame_schema() -> Value {
     )])
 }
 
+fn analysis_from_schema() -> Value {
+    json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "ring" } },
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "required": ["kind", "path"],
+                "properties": {
+                    "kind": { "const": "file" },
+                    "path": { "type": "string" }
+                },
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
+fn trace_analyze_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "from": analysis_from_schema(),
+            "sections": {
+                "type": "object",
+                "properties": {
+                    "overview": { "type": "boolean" },
+                    "someip": { "type": "boolean" },
+                    "sd": { "type": "boolean" },
+                    "ptp": { "type": "boolean" },
+                    "bursts": { "type": "boolean" }
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn service_summary_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "from": analysis_from_schema(),
+            "service": { "type": "integer", "minimum": 0, "maximum": 65535 }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn timing_report_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["service", "method"],
+        "properties": {
+            "from": analysis_from_schema(),
+            "service": { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "method": { "type": "integer", "minimum": 0, "maximum": 65535 }
+        },
+        "additionalProperties": false
+    })
+}
+
 fn object_schema(required_properties: &[(&str, Value)]) -> Value {
     let properties = required_properties
         .iter()
@@ -607,6 +674,21 @@ const METHODS: &[MethodSpec] = &[
         description: "An overview of the trace: session state and source, live counters, the ring's span (first/last idx and time) and frame counts per protocol. A good first call to see what is on the bus before querying.",
         schema: empty_object_schema,
     },
+    MethodSpec {
+        name: "trace_analyze",
+        description: "Analyze either the buffered trace or a capture file and return one structured report with optional overview, SOME/IP, service discovery, gPTP, and burst sections.",
+        schema: trace_analyze_schema,
+    },
+    MethodSpec {
+        name: "service_summary",
+        description: "Return the SOME/IP service and sender summary from the buffered trace or a capture file, optionally narrowed to one numeric service id.",
+        schema: service_summary_schema,
+    },
+    MethodSpec {
+        name: "timing_report",
+        description: "Return timing details for one SOME/IP service and method, including sender periods, latency, and all detected gaps from the selected trace source.",
+        schema: timing_report_schema,
+    },
 ];
 
 #[cfg(test)]
@@ -637,6 +719,9 @@ mod tests {
         "trace_query",
         "trace_frame",
         "trace_stats",
+        "trace_analyze",
+        "service_summary",
+        "timing_report",
     ];
 
     fn env_lock() -> &'static Mutex<()> {

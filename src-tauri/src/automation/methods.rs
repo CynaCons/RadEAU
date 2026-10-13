@@ -46,6 +46,15 @@ struct TraceFrameParams {
     idx: u64,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TraceAnalyzeParams {
+    #[serde(default)]
+    from: Option<crate::analysis::AnalysisFrom>,
+    #[serde(default)]
+    sections: Option<crate::analysis::Sections>,
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TraceStatsResult {
@@ -226,6 +235,51 @@ pub fn dispatch(app: &AppHandle, method: &str, params: Option<Value>) -> RpcResu
             ),
         })
         .map_err(encode),
+        // AN-007: trace_analyze / service_summary / timing_report.
+        "trace_analyze" => {
+            let params: TraceAnalyzeParams = parse(params)?;
+            let catalog = app.state::<crate::catalog::CatalogState>();
+            let capture = app.state::<crate::capture::CaptureState>();
+            serde_json::to_value(
+                catalog
+                    .with_active(|active| {
+                        crate::analysis::analyze(
+                            capture.inner(),
+                            &params.from.unwrap_or(crate::analysis::AnalysisFrom::Ring),
+                            &params.sections.unwrap_or_default(),
+                            active,
+                        )
+                    })
+                    .map_err(domain)?,
+            )
+            .map_err(encode)
+        }
+        "service_summary" => {
+            let params: crate::analysis::ServiceSummaryParams = parse(params)?;
+            let catalog = app.state::<crate::catalog::CatalogState>();
+            let capture = app.state::<crate::capture::CaptureState>();
+            serde_json::to_value(
+                catalog
+                    .with_active(|active| {
+                        crate::analysis::service_summary(capture.inner(), params, active)
+                    })
+                    .map_err(domain)?,
+            )
+            .map_err(encode)
+        }
+        "timing_report" => {
+            let params: crate::analysis::TimingReportParams = parse(params)?;
+            let catalog = app.state::<crate::catalog::CatalogState>();
+            let capture = app.state::<crate::capture::CaptureState>();
+            serde_json::to_value(
+                catalog
+                    .with_active(|active| {
+                        crate::analysis::timing_report(capture.inner(), params, active)
+                    })
+                    .map_err(domain)?,
+            )
+            .map_err(encode)
+        }
         _ => Err((-32601, "unknown method".into())),
     }
 }

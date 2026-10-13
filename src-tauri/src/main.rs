@@ -11,6 +11,7 @@ use tauri::Manager;
 // The dev frame generator is a runtime-gated development data source
 // (PRD §3.8) — compiled in every profile, activated only by an explicit
 // capture profile, and superseded as the default source by ecu-netsim (v0.4).
+mod analysis;
 mod automation;
 mod capture;
 mod catalog;
@@ -72,6 +73,7 @@ fn main() {
             diag::app_info,
             diag::log_path,
             diag::open_url,
+            analysis::trace_analyze,
             recording::recording_state,
             recording::recording_arm,
             recording::recording_dir_get,
