@@ -832,11 +832,11 @@ afford it.
 | VU-017 | Draw point markers only below 2 samples per pixel, sized 4–8 px | Must | Planned | No markers above the threshold; size matches the formula at 0.5 and 1.5 samples/px |
 | VU-018 | Suppress the axis overlay when either pane dimension is below 32 CSS px | Must | Planned | Revealing a hidden pane produces no frame with oversized labels |
 | VU-019 | Put no CSS transition, hover shadow or ripple on any element that updates with incoming data | Must | Verified | Computed-style audit over table rows, legend rows and chart surfaces reports 0 s durations |
-| VU-020 | Limit all animation to the rail transition, the startup fade and pulse, and toast entry | Must | Implemented | An automated computed-style sweep finds no other non-zero transition or animation |
+| VU-020 | Limit all animation to the rail transition, the startup fade and pulse, and toast entry | Must | Verified | An automated computed-style sweep finds no other non-zero transition or animation |
 | VU-021 | Drop every permitted transition to zero duration under prefers-reduced-motion | Must | Implemented | A single assertion over the same sweep with the media query forced |
 | VU-022 | Give every interactive element a stable kebab-case data-testid and, if icon-only, a matching aria-label | Must | Verified | A CI static scan reports zero interactive elements lacking either attribute |
 | VU-023 | Give every color-indicated state a second non-chromatic indicator | Must | Implemented | Grayscale review of each view identifies all states unambiguously |
 | VU-024 | Show keyboard focus as a 2 px accent outline at 2 px offset on every interactive element | Must | Planned | Tabbing through each view shows a ring at every stop |
 | VU-025 | Paint a startup overlay before framework mount and fade it over 220 ms after mount | Should | Implemented | No frame between window creation and mount shows a blank window |
-| VU-026 | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | Must | Implemented | Automated contrast check over the token set and all 16 series colors passes |
+| VU-026 | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | Must | Verified | Automated contrast check over the token set and all 16 series colors passes |
 | VU-027 | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a value they display changes — live counters re-render as isolated leaves at the stats rate | Must | Verified | Render-count unit test (stats republish does not re-render a non-stats component); perf: hidden views 0 commits/s, app bar ≤ 2/s |

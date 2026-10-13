@@ -239,6 +239,7 @@ describe("captureSource picker state", () => {
   });
 
   it("sums loss counters for the Dropped chip and builds the breakdown tooltip", () => {
+    // SP-010
     expect(lossTotal(stats())).toBe(0);
     expect(
       lossTotal(

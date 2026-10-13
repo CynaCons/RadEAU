@@ -1259,7 +1259,7 @@ async function main() {
       rowCount: cleared.rowCount,
     }));
 
-    // v0.1.9 DoIP TesterPresent dissection — isolated so a missing Rust
+    // v0.1.9 DoIP TesterPresent dissection (SP-014) — isolated so a missing Rust
     // codec / sim cast reports its own FAIL without aborting the run.
     const v019 = { doipDissect: false };
     try {

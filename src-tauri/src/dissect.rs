@@ -1105,6 +1105,7 @@ fn dissect_ip_transport(
     bytes: &[u8],
     offset: usize,
 ) -> usize {
+    // SP-015: IPv6 and IPv4 transport dissection converge here after extension/header parsing.
     match protocol {
         58 => {
             add_icmpv6(layers, bytes, offset);
@@ -1495,6 +1496,7 @@ fn add_udp_application(
     b: &[u8],
     o: usize,
 ) -> bool {
+    // SP-016: UDP application dissectors are bounded and format-checked before labelling.
     if port(src, dst, 67) || port(src, dst, 68) {
         if let Ok(p) = dhcp::parse(b) {
             let mut f = vec![
@@ -1824,6 +1826,7 @@ fn add_tcp_application(
     b: &[u8],
     o: usize,
 ) -> bool {
+    // SP-018: TCP application dissectors require HTTP/TLS/SSH syntax, not just well-known ports.
     if [80, 8080, 8000].iter().any(|p| port(src, dst, *p)) || http::looks_like_http(b) {
         if let Ok(p) = http::parse(b) {
             let (start, headers, body) = match p {
@@ -2017,6 +2020,7 @@ fn add_tcp_application(
 }
 
 fn add_l2_standard(layers: &mut Vec<FrameLayer>, ty: u16, b: &[u8], o: usize) {
+    // SP-017: EtherType-selected L2 standards get their own bounded dissectors.
     match ty {
         lldp::ETHERTYPE => match lldp::parse(b) {
             Ok(p) => {
@@ -2520,7 +2524,8 @@ mod tests {
     }
 
     #[test]
-    fn dissects_someip_event_with_wire_offsets() {
+    fn dissects_someip_event_with_wire_offsets_sp_001() {
+        // SP-001
         let detail = dissect(123, 1.0421, &someip_wire(&[0xde, 0xad], 0x1101, 0x8001));
         assert_eq!(detail.payload_offset, 58);
         assert_eq!(
@@ -2541,6 +2546,7 @@ mod tests {
 
     #[test]
     fn dissects_udp_vehicle_announcement_fields_and_offsets() {
+        // SP-011
         let body = [
             b"WVWZZZ1JZXW000001".as_slice(),
             &[0x12, 0x34],
@@ -2592,6 +2598,7 @@ mod tests {
 
     #[test]
     fn dissects_tester_present_request_and_positive_response() {
+        // SP-013
         let request = doip_message(0x8001, &[0x0e, 0x80, 0x12, 0x34, 0x3e, 0x00]);
         let response = doip_message(0x8001, &[0x12, 0x34, 0x0e, 0x80, 0x7e, 0x00]);
         for (message, sid, summary) in [
@@ -2662,6 +2669,7 @@ mod tests {
 
     #[test]
     fn explains_bad_inverse_and_oversized_udp_bodies() {
+        // SP-011
         let mut bad_inverse = doip_udp(0x0001, &[]);
         bad_inverse[43] = 0;
         let detail = dissect(0, 0.0, &bad_inverse);
@@ -2680,6 +2688,7 @@ mod tests {
 
     #[test]
     fn labels_tcp_payload_without_a_doip_header_as_midstream() {
+        // SP-012
         let detail = dissect(0, 0.0, &doip_tcp_payload(&[0xaa; 12]));
         let layer = detail.layers.last().unwrap();
         assert_eq!(layer.protocol, "TCP payload (mid-stream)");
@@ -2688,7 +2697,8 @@ mod tests {
     }
 
     #[test]
-    fn catalog_decodes_only_when_loaded() {
+    fn catalog_decodes_only_when_loaded_sp_004() {
+        // SP-021
         let catalog = radeau_catalog::from_arxml(include_str!("../../catalog/sensor-fusion.arxml"))
             .map(|(catalog, _)| catalog)
             .expect("checked-in extract");
@@ -2731,6 +2741,7 @@ mod tests {
 
     #[test]
     fn dissects_icmpv6() {
+        // SP-015
         let detail = dissect(0, 0.0, &ipv6_wire(58, &[128, 0, 0x12, 0x34, 0, 1, 0, 2]));
         assert_eq!(titles(&detail), ["Ethernet II", "IPv6", "ICMPv6"]);
         let layer = &detail.layers[2];
@@ -2752,6 +2763,7 @@ mod tests {
 
     #[test]
     fn dissects_dhcp() {
+        // SP-016
         let mut payload = Vec::new();
         dhcp::build_discover(0x1234_5678, [0, 1, 2, 3, 4, 5], &mut payload);
         let detail = dissect(0, 0.0, &udp_wire(68, 67, &payload));
@@ -2835,6 +2847,7 @@ mod tests {
 
     #[test]
     fn dissects_lldp() {
+        // SP-017
         let payload = lldp::build([0, 1, 2, 3, 4, 5], "eth0", 120, "ecu");
         let detail = dissect(0, 0.0, &l2_wire(lldp::ETHERTYPE, &payload));
         assert_eq!(titles(&detail), ["Ethernet II", "LLDP"]);
@@ -2876,6 +2889,7 @@ mod tests {
 
     #[test]
     fn dissects_http() {
+        // SP-018
         let detail = dissect(
             0,
             0.0,

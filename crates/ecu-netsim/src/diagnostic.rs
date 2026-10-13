@@ -42,6 +42,7 @@ impl Default for DiagnosticSession {
 
 impl DiagnosticSession {
     pub fn frames_at(&mut self, time_ms: u64, ident: &mut u16) -> Vec<ScheduledFrame> {
+        // SP-014: deterministic DoIP discovery, routing activation and UDS demo cast.
         let mut frames = Vec::new();
 
         if matches!(time_ms, 0 | 500 | 1000) || (time_ms != 0 && time_ms.is_multiple_of(30_000)) {
@@ -351,6 +352,7 @@ mod tests {
 
     #[test]
     fn fixed_schedule_covers_diagnostic_cast() {
+        // SP-014
         let mut session = DiagnosticSession::default();
         let mut ident = 1;
         let mut announcements = Vec::new();

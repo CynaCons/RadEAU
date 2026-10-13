@@ -152,6 +152,7 @@ describe("networkDisplay Connection panel", () => {
   });
 
   it("exposes capture:stats counters and a non-zero class line", () => {
+    // SP-010
     const model = connectionPanelModel({
       running: true,
       sourceKind: "sim",
@@ -207,6 +208,7 @@ describe("networkDisplay Connection panel", () => {
   });
 
   it("keeps empty-state copy honest and free of fabricated ECU/counter strings", () => {
+    // NV-004 NV-004 NV-004
     const corpus = [
       ...Object.values(NETWORK_EMPTY),
       SESSION_STOPPED_HINT,

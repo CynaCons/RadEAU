@@ -206,6 +206,7 @@ export function NetworkView() {
         </Stack>
       </RaisedPanel>
 
+      {/* NV-004 */}
       <RaisedPanel
         icon={<HubIcon sx={{ color: "var(--info)" }} />}
         title="Topology"
@@ -217,6 +218,7 @@ export function NetworkView() {
         </Box>
       </RaisedPanel>
 
+      {/* NV-004 */}
       <RaisedPanel
         icon={<CellTowerIcon sx={{ color: "var(--accent-secondary)" }} />}
         title="SD monitor"
@@ -228,6 +230,7 @@ export function NetworkView() {
         </Box>
       </RaisedPanel>
 
+      {/* NV-004 */}
       <RaisedPanel
         icon={<ScheduleIcon sx={{ color: "var(--series-16)" }} />}
         title="PTP"

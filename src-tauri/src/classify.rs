@@ -84,6 +84,7 @@ fn gptp_ty(t: u8) -> u8 {
     }
 }
 fn someip_ty(t: u8) -> u8 {
+    // SP-019
     match t {
         someip::MSG_NOTIFICATION => SOMEIP_TY_NOTIFICATION,
         someip::MSG_REQUEST => SOMEIP_TY_REQUEST,
@@ -126,6 +127,7 @@ fn sd_ty(payload: &[u8]) -> u8 {
         Err(_) => SD_TY_OTHER,
     }
 }
+// SP-008: SOME/IP plausibility is payload-based; UDP port 30490 is not a gate.
 pub fn someip_plausible(payload: &[u8]) -> bool {
     if payload.len() < 16 {
         return false;
@@ -137,6 +139,7 @@ pub fn someip_plausible(payload: &[u8]) -> bool {
         && matches!(payload[14], 0x00 | 0x01 | 0x02 | 0x80 | 0x81)
 }
 pub fn sim_direction(_record_direction: u8) -> u8 {
+    // SP-009: monitor-port direction is switch-relative; simulator frames are observed Rx.
     DIR_RX
 }
 
@@ -261,6 +264,7 @@ pub fn classify_frame(
             base.src_ep = endpoints.assign(EndpointKey::Mac(src_mac)).0 as usize;
         }
         eapol::ETHERTYPE => {
+            // SP-017: EtherType-selected L2 standards classify without IP/transport context.
             base.proto = PROTO_EAPOL;
             if let Ok(h) = eapol::parse(eth.payload) {
                 base.msg_type = h.packet_type;
@@ -354,6 +358,7 @@ fn classify_ipv4(
 }
 
 fn classify_ipv6(base: &mut GenFrame, frame: &[u8], payload: &[u8], l2off: usize) {
+    // SP-015: IPv6 extension walking dispatches to the same transport/app classifiers as IPv4.
     base.proto = PROTO_IPV6;
     let Ok(ip) = Ipv6Packet::parse(payload) else {
         return;
@@ -426,6 +431,7 @@ fn classify_udp(
     payload: &[u8],
     payload_off: usize,
 ) {
+    // SP-016: UDP application classes are promoted only after bounded format checks pass.
     base.proto = PROTO_UDP;
     base.svc = src;
     base.method = dst;
@@ -446,6 +452,7 @@ fn classify_udp(
             base.proto = PROTO_SOMEIP;
         }
     } else if ports_match(src, dst, &[doip::DOIP_PORT]) {
+        // SP-012: UDP 13400 DoIP classification projects logical addresses into columns.
         if let Ok((h, body)) = doip::parse_header(payload) {
             base.payload_off = (payload_off + doip::HEADER_LEN) as u16;
             base.snap = snap(frame, base.payload_off as usize);
@@ -525,6 +532,7 @@ fn classify_tcp(
     payload: &[u8],
     payload_off: usize,
 ) {
+    // SP-018: HTTP/TLS/SSH classification is content-checked, not port-only.
     base.proto = PROTO_TCP;
     base.svc = src;
     base.method = dst;
@@ -669,12 +677,14 @@ mod tests {
     }
     #[test]
     fn direction_is_always_observed() {
+        // SP-009
         for b in [0, 1, 255] {
             assert_eq!(sim_direction(b), DIR_RX)
         }
     }
     #[test]
-    fn runt_never_drops() {
+    fn runt_never_drops_sp_006() {
+        // SP-006
         let mut e = EndpointTable::default();
         let f = classify_frame(&[0; 10], 0, 0.0, DIR_RX, &mut e);
         assert_eq!(f.proto, PROTO_MALFORMED);
@@ -695,6 +705,7 @@ mod tests {
 
     #[test]
     fn udp_doip_discovery_is_classified() {
+        // SP-012
         let mut message = Vec::new();
         doip::build_message(2, 0x0001, &[], &mut message);
         let mut datagram = Vec::new();
@@ -716,6 +727,7 @@ mod tests {
 
     #[test]
     fn tcp_diagnostic_columns_and_midstream_fallback() {
+        // SP-012
         let mut message = Vec::new();
         doip::build_message(2, 0x8001, &[0x0e, 0x80, 0x12, 0x34, 0x3e, 0], &mut message);
         let mut segment = Vec::new();
@@ -752,7 +764,8 @@ mod tests {
     }
 
     #[test]
-    fn someip_on_sd_port_is_untouched() {
+    fn someip_classifies_on_any_udp_port_sp_008() {
+        // SP-008
         let mut message = Vec::new();
         someip::build(
             &SomeIpHeader {
@@ -770,15 +783,53 @@ mod tests {
             &mut message,
         );
         let mut datagram = Vec::new();
-        UdpDatagram::build([1; 4], [2; 4], 30_490, 30_490, &message, &mut datagram);
+        UdpDatagram::build([1; 4], [2; 4], 40_000, 30_501, &message, &mut datagram);
         assert_eq!(
             classified(ipv4::PROTOCOL_UDP, &datagram).proto,
             PROTO_SOMEIP
         );
+
+        let random = [0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 9, 1, 2, 3, 4, 1, 1, 2, 0];
+        assert_eq!(udp_frame(30_490, 30_490, &random).proto, PROTO_UDP);
+    }
+
+    #[test]
+    fn message_type_columns_sp_002() {
+        // SP-019
+        for (wire_type, column_type) in [
+            (someip::MSG_REQUEST, SOMEIP_TY_REQUEST),
+            (someip::MSG_REQUEST_NO_RETURN, SOMEIP_TY_REQUEST_NO_RETURN),
+            (someip::MSG_NOTIFICATION, SOMEIP_TY_NOTIFICATION),
+            (someip::MSG_RESPONSE, SOMEIP_TY_RESPONSE),
+            (someip::MSG_ERROR, SOMEIP_TY_ERROR),
+        ] {
+            let mut message = Vec::new();
+            someip::build(
+                &SomeIpHeader {
+                    service_id: 0x1234,
+                    method_id: if wire_type == someip::MSG_NOTIFICATION {
+                        0x8001
+                    } else {
+                        0x0001
+                    },
+                    length: 0,
+                    client_id: 1,
+                    session_id: 2,
+                    protocol_version: 1,
+                    interface_version: 1,
+                    message_type: wire_type,
+                    return_code: 0,
+                },
+                &[],
+                &mut message,
+            );
+            assert_eq!(udp_frame(40_000, 30_501, &message).msg_type, column_type);
+        }
     }
 
     #[test]
     fn classifies_icmpv6_columns() {
+        // SP-015
         assert_eq!(
             columns(&ipv6_frame(58, &[128, 0, 0, 0, 0, 1, 0, 2])),
             (PROTO_ICMPV6, 128, 0, 128, 0, 58)
@@ -797,6 +848,7 @@ mod tests {
 
     #[test]
     fn classifies_dhcp_columns() {
+        // SP-016
         let mut p = vec![];
         dhcp::build_discover(0x9234_5678, [0, 1, 2, 3, 4, 5], &mut p);
         assert_eq!(
@@ -873,6 +925,7 @@ mod tests {
 
     #[test]
     fn classifies_lldp_columns() {
+        // SP-017
         let p = lldp::build([0, 1, 2, 3, 4, 5], "eth0", 120, "ecu");
         assert_eq!(
             columns(&l2_frame(lldp::ETHERTYPE, &p)),
@@ -909,6 +962,7 @@ mod tests {
 
     #[test]
     fn classifies_http_columns() {
+        // SP-018
         let f = tcp_frame(50_000, 80, b"GET /status HTTP/1.1\r\nHost: ecu\r\n\r\n");
         assert_eq!(
             columns(&f),
@@ -975,6 +1029,7 @@ mod tests {
 
     #[test]
     fn someip_over_ipv6_and_nonfirst_fragment_rules() {
+        // SP-015
         let mut p = vec![];
         someip::build(
             &SomeIpHeader {
@@ -1005,6 +1060,7 @@ mod tests {
 
     #[test]
     fn random_application_port_payloads_remain_transport() {
+        // SP-016 / SP-018
         for port in [
             53, 67, 68, 69, 123, 161, 162, 546, 547, 1900, 319, 320, 5353, 5355,
         ] {

@@ -16,7 +16,7 @@ pub const ETHERTYPE_GPTP: u16 = 0x88F7;
 /// gPTP link-local multicast destination.
 pub const GPTP_MULTICAST: [u8; 6] = [0x01, 0x80, 0xC2, 0x00, 0x00, 0x0E];
 
-/// PTP message-type codes (low nibble of the first byte).
+/// PTP message-type codes (low nibble of the first byte). PT-005.
 pub const MSG_SYNC: u8 = 0x0;
 pub const MSG_FOLLOW_UP: u8 = 0x8;
 pub const MSG_PDELAY_REQ: u8 = 0x2;
@@ -88,7 +88,7 @@ pub fn parse_any_transport(l2_payload: &[u8]) -> Result<GptpMessage, ParseError>
     })
 }
 
-/// Serialize a gPTP message as an Ethernet L2 payload.
+/// Serialize a gPTP message as an Ethernet L2 payload. PT-005.
 pub fn build(msg: &GptpMessage, out: &mut Vec<u8>) {
     let has_timestamp = matches!(msg.msg_type, MSG_SYNC | MSG_FOLLOW_UP);
     out.push(0x10 | (msg.msg_type & 0x0f)); // 802.1AS transportSpecific = 1
@@ -124,7 +124,8 @@ mod tests {
         }
     }
     #[test]
-    fn known_vector_byte_exact() {
+    fn known_vector_byte_exact_pt_001() {
+        // PT-005
         let mut wire = Vec::new();
         build(&sample(), &mut wire);
         assert_eq!(&wire[..4], &[0x10, 2, 0, 44]);
@@ -133,10 +134,28 @@ mod tests {
         assert_eq!(&wire[34..], &[0, 0, 0, 0, 0, 5, 0, 0, 0, 7]);
     }
     #[test]
-    fn round_trip() {
+    fn round_trip_pt_001() {
+        // PT-005
         let mut wire = Vec::new();
         build(&sample(), &mut wire);
         assert_eq!(parse(&wire).unwrap(), sample());
+    }
+    #[test]
+    fn header_only_message_types_round_trip_pt_001() {
+        // PT-005
+        for msg_type in [MSG_PDELAY_REQ, MSG_PDELAY_RESP, MSG_ANNOUNCE] {
+            let msg = GptpMessage {
+                msg_type,
+                domain: 0,
+                sequence_id: u16::from(msg_type),
+                correction_ns: 17,
+                origin_timestamp_ns: None,
+            };
+            let mut wire = Vec::new();
+            build(&msg, &mut wire);
+            assert_eq!(wire.len(), HEADER_LEN);
+            assert_eq!(parse(&wire).unwrap(), msg);
+        }
     }
     #[test]
     fn every_short_prefix_is_truncated() {

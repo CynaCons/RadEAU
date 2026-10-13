@@ -13,6 +13,7 @@ pub const HEADER_LEN: usize = 16;
 pub const LENGTH_COVERED_HEADER: u32 = 8;
 
 /// Message-type codes (SRS_protocols.md §3).
+/// SP-019: preserve the standard SOME/IP message-type byte values.
 pub const MSG_REQUEST: u8 = 0x00;
 pub const MSG_REQUEST_NO_RETURN: u8 = 0x01;
 pub const MSG_NOTIFICATION: u8 = 0x02;
@@ -112,7 +113,8 @@ mod tests {
     }
 
     #[test]
-    fn round_trip() {
+    fn round_trip_sp_001() {
+        // SP-001
         let payload = [0xDE, 0xAD, 0xBE, 0xEF, 0x42];
         let mut wire = Vec::new();
         build(&header(), &payload, &mut wire);
@@ -127,7 +129,8 @@ mod tests {
     }
 
     #[test]
-    fn known_vector_byte_exact() {
+    fn known_vector_byte_exact_sp_001() {
+        // SP-001
         // 0x1101:0x8001, len 8+2, client 1, session 2, ver 1/1, notif, E_OK
         let mut wire = Vec::new();
         build(
@@ -157,10 +160,21 @@ mod tests {
     }
 
     #[test]
-    fn malformed_length_rejected() {
+    fn malformed_length_rejected_sp_001() {
+        // SP-001
         let mut wire = Vec::new();
         build(&header(), &[], &mut wire);
         wire[4..8].copy_from_slice(&3u32.to_be_bytes()); // < covered header
         assert_eq!(parse(&wire).unwrap_err(), ParseError::Malformed);
+    }
+
+    #[test]
+    fn message_type_codes_sp_002() {
+        // SP-019
+        assert_eq!(MSG_REQUEST, 0x00);
+        assert_eq!(MSG_REQUEST_NO_RETURN, 0x01);
+        assert_eq!(MSG_NOTIFICATION, 0x02);
+        assert_eq!(MSG_RESPONSE, 0x80);
+        assert_eq!(MSG_ERROR, 0x81);
     }
 }

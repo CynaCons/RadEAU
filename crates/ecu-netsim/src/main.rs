@@ -31,13 +31,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+// NS-003: monitor clients have bounded writer queues; overflow is reported as a gap record.
 const QUEUE: usize = 4096;
 const PCAP_EPOCH_NS: u64 = 1_767_225_600_000_000_000;
+// NS-001: generated traffic uses serialized Ethernet II / IPv4 / UDP builders with checksums.
+// NS-004: wall-clock runtime uses scheduled event deadlines and a millisecond pacing loop.
 const USAGE: &str = "usage: ecu-netsim [--monitor-port 5560] [--udp-target IP] [--seed N] [--write-pcap PATH --duration SECONDS]\n\n--udp-target sends SOME/IP, SD, and DoIP discovery UDP payloads to IP in addition to the monitor link. The frame's UDP destination port is preserved. Raw-Ethernet traffic and DoIP TCP traffic remain monitor-only.";
 const HANDSHAKE: &str = "{\"link\":\"ecu-netsim-monitor\",\"version\":1,\"scenario\":\"sensor-fusion\",\"ports\":[{\"id\":1,\"name\":\"camera\",\"ip\":\"10.42.0.11\"},{\"id\":2,\"name\":\"radar\",\"ip\":\"10.42.0.12\"},{\"id\":3,\"name\":\"lidar\",\"ip\":\"10.42.0.13\"},{\"id\":4,\"name\":\"dynamics\",\"ip\":\"10.42.0.14\"},{\"id\":5,\"name\":\"fusion\",\"ip\":\"10.42.0.20\"},{\"id\":6,\"name\":\"tester\",\"ip\":\"10.42.0.99\"}]}\n";
 
 #[derive(Clone)]
 struct Record {
+    // PT-007: virtual switch timestamp in ns, serialized on the monitor link and pcap export.
     time: u64,
     port: u16,
     frame: Vec<u8>,
@@ -243,9 +247,11 @@ fn generate_accelerated<F>(
 where
     F: FnMut(Record) -> io::Result<()>,
 {
+    // NS-002: accelerated mode advances a virtual millisecond clock and seeded state only.
     let duration_ms = duration_seconds
         .checked_mul(1000)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "duration is too large"))?;
+    // SP-003: per-ECU SOME/IP session streams share next_id wrap semantics.
     let mut sessions = [1u16; 5];
     let mut seq = 1u16;
     let mut rng = seed;
@@ -297,6 +303,7 @@ where
                 frame: event(NODES[4], 0x8002, session, &mut rng, &mut ident, catalog),
             })?;
             sessions[4] = next_id(session);
+            // SD-006: shipped simulator behavior is cyclic OfferService with TTL 3.
             for (i, node) in NODES.iter().enumerate() {
                 let session = sessions[i];
                 send(Record {
@@ -308,6 +315,7 @@ where
             }
         }
         if time_ms % 125 == 0 {
+            // PT-005: two-step direct-Ethernet gPTP Sync/Follow_Up cadence.
             for kind in [gptp::MSG_SYNC, gptp::MSG_FOLLOW_UP] {
                 send(Record {
                     time,
@@ -569,6 +577,7 @@ fn run(
             fusion_stats_at += Duration::from_secs(1);
         }
         if now >= sd_at {
+            // SD-006: wall-clock path mirrors the accelerated cyclic offers.
             for (i, node) in NODES.iter().enumerate() {
                 let session = sessions[i];
                 emit(
@@ -585,6 +594,7 @@ fn run(
             sd_at += Duration::from_secs(1);
         }
         if now >= ptp_at {
+            // PT-005: wall-clock path mirrors the accelerated two-step cadence.
             for kind in [gptp::MSG_SYNC, gptp::MSG_FOLLOW_UP] {
                 emit(
                     &mut clients,
@@ -646,6 +656,7 @@ fn run(
             );
             runt_at += Duration::from_secs(10);
         }
+        // Wall-clock mode is paced by the scheduled event deadlines and a 1 ms sleep.
         thread::sleep(Duration::from_millis(1));
     }
     if let Some(udp) = udp {
@@ -712,6 +723,7 @@ fn fanout(clients: &mut [Client], record: Record) {
     }
 }
 fn record_bytes(r: &Record) -> Vec<u8> {
+    // PT-007: monitor records carry the virtual switch timestamp in ns.
     let mut out = Vec::new();
     out.extend_from_slice(&(11 + r.frame.len() as u32).to_be_bytes());
     out.extend_from_slice(&r.time.to_be_bytes());
@@ -734,6 +746,7 @@ fn ns(start: Instant) -> u64 {
     start.elapsed().as_nanos().min(u64::MAX as u128) as u64
 }
 fn next_id(v: u16) -> u16 {
+    // SP-003: simulator SOME/IP session ids wrap 0xFFFF -> 1; zero is skipped.
     if v == u16::MAX {
         1
     } else {
@@ -755,6 +768,7 @@ fn event(
     ident: &mut u16,
     catalog: &Catalog,
 ) -> Vec<u8> {
+    // NS-001: simulator events are fully serialized Ethernet II / IPv4 / UDP frames.
     let mut payload = vec![0u8; node.size];
     if let Some(event) = catalog.event(node.service, method) {
         let phase = session as f64 / 20.0;
@@ -839,6 +853,7 @@ fn encode_signal(signal: &Signal, physical: f64, payload: &mut [u8]) {
     }
 }
 fn offer(node: Node, session: u16, ident: &mut u16) -> Vec<u8> {
+    // SD-006: cyclic OfferService payload; TTL 3 keeps the service alive.
     let mut body = Vec::new();
     sd::build(
         &sd::SdMessage {
@@ -1025,6 +1040,7 @@ fn runt_frame() -> Vec<u8> {
     header
 }
 fn ptp(kind: u8, sequence: u16, stamp: u64) -> Vec<u8> {
+    // PT-005: direct Ethernet gPTP frame using the static grandmaster MAC.
     let mut payload = Vec::new();
     gptp::build(
         &gptp::GptpMessage {
@@ -1065,7 +1081,16 @@ mod tests {
     }
 
     #[test]
+    fn session_id_wrap_skips_zero_sp_003() {
+        // SP-003
+        assert_eq!(next_id(1), 2);
+        assert_eq!(next_id(u16::MAX - 1), u16::MAX);
+        assert_eq!(next_id(u16::MAX), 1);
+    }
+
+    #[test]
     fn accelerated_capture_is_deterministic_and_covers_all_traffic() {
+        // NS-001 NS-002
         let catalog =
             radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
                 .map(|(catalog, _)| catalog)
@@ -1193,6 +1218,7 @@ mod tests {
 
     #[test]
     fn accelerated_capture_uses_epoch_plus_switch_time() {
+        // PT-007
         let catalog =
             radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
                 .map(|(catalog, _)| catalog)
@@ -1210,7 +1236,75 @@ mod tests {
     }
 
     #[test]
+    fn accelerated_sd_gptp_and_switch_timestamps_match_shipped_cadence_sd_001_pt_001_pt_004() {
+        // SD-006 PT-005 PT-007
+        let catalog =
+            radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
+                .map(|(catalog, _)| catalog)
+                .expect("checked-in extract");
+        let mut records = Vec::new();
+        generate_accelerated(1, 7, &catalog, |record| {
+            records.push(record);
+            Ok(())
+        })
+        .unwrap();
+
+        let mut offer_times = Vec::new();
+        let mut sync_times = Vec::new();
+        let mut follow_up_times = Vec::new();
+        for record in &records {
+            let encoded = record_bytes(record);
+            assert_eq!(&encoded[4..12], &record.time.to_be_bytes());
+            if record.frame.len() < 14 {
+                continue;
+            }
+            let ethernet = EthernetFrame::parse(&record.frame).unwrap();
+            match ethernet.ethertype {
+                radeau_proto::ethernet::ETHERTYPE_IPV4 => {
+                    let ip = Ipv4Packet::parse(ethernet.payload).unwrap();
+                    if ip.protocol != ipv4::PROTOCOL_UDP {
+                        continue;
+                    }
+                    let udp = UdpDatagram::parse(ip.payload).unwrap();
+                    let Ok((someip, payload)) = someip::parse(udp.payload) else {
+                        continue;
+                    };
+                    if someip.service_id == someip::SD_SERVICE_ID {
+                        let message = sd::parse(payload).unwrap();
+                        assert_eq!(message.flags, 0xc0);
+                        assert_eq!(message.entries.len(), 1);
+                        assert_eq!(message.entries[0].entry_type, sd::ENTRY_OFFER_SERVICE);
+                        assert_eq!(message.entries[0].ttl, 3);
+                        offer_times.push(record.time);
+                    }
+                }
+                gptp::ETHERTYPE_GPTP => match gptp::parse(ethernet.payload).unwrap().msg_type {
+                    gptp::MSG_SYNC => sync_times.push(record.time),
+                    gptp::MSG_FOLLOW_UP => follow_up_times.push(record.time),
+                    other => panic!("unexpected gPTP message type {other}"),
+                },
+                _ => {}
+            }
+        }
+
+        assert_eq!(offer_times.iter().filter(|time| **time == 0).count(), 5);
+        assert_eq!(
+            offer_times
+                .iter()
+                .filter(|time| **time == 1_000_000_000)
+                .count(),
+            5
+        );
+        assert_eq!(
+            sync_times,
+            (0..=8).map(|tick| tick * 125_000_000).collect::<Vec<_>>()
+        );
+        assert_eq!(follow_up_times, sync_times);
+    }
+
+    #[test]
     fn monitor_handshake_and_serialized_records() {
+        // NS-001
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let running = Arc::new(AtomicBool::new(true));
@@ -1368,7 +1462,45 @@ mod tests {
     }
 
     #[test]
-    fn event_payload_is_catalog_decodable_and_zero_tailed() {
+    fn monitor_queue_overflow_emits_gap_record_ns_003() {
+        // NS-003
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.try_send(vec![0xaa]).unwrap();
+        let mut clients = [Client {
+            tx,
+            dropped: 0,
+            first: 0,
+        }];
+        let first = Record {
+            time: 10,
+            port: 1,
+            frame: vec![0, 1, 2, 3],
+        };
+        fanout(&mut clients, first.clone());
+        assert_eq!(clients[0].dropped, 1);
+        assert_eq!(clients[0].first, first.time);
+
+        assert_eq!(rx.recv().unwrap(), vec![0xaa]);
+        fanout(
+            &mut clients,
+            Record {
+                time: 25,
+                port: 1,
+                frame: vec![4, 5, 6, 7],
+            },
+        );
+        let gap = rx.recv().unwrap();
+        assert_eq!(&gap[..4], &23u32.to_be_bytes());
+        assert_eq!(&gap[4..12], &first.time.to_be_bytes());
+        assert_eq!(&gap[12..14], &0xffffu16.to_be_bytes());
+        assert_eq!(gap[14], 0xff);
+        assert_eq!(&gap[15..19], &1u32.to_be_bytes());
+        assert_eq!(&gap[19..27], &15u64.to_be_bytes());
+    }
+
+    #[test]
+    fn event_payload_is_catalog_decodable_and_zero_tailed_sp_004_sp_005() {
+        // SP-021 SP-005
         let catalog =
             radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
                 .map(|(catalog, _)| catalog)
@@ -1394,7 +1526,8 @@ mod tests {
     }
 
     #[test]
-    fn udp_destination_mapping_preserves_someip_payload() {
+    fn udp_destination_mapping_preserves_someip_payload_sp_008() {
+        // SP-008
         let catalog =
             radeau_catalog::from_arxml(include_str!("../../../catalog/sensor-fusion.arxml"))
                 .map(|(catalog, _)| catalog)

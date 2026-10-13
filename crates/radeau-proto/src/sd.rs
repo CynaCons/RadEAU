@@ -1,4 +1,4 @@
-//! SOME/IP-SD payload codec (SRS_protocols.md §2, SRS_ecu_netsim.md SD-001..004).
+//! SOME/IP-SD payload codec (SRS_protocols.md §2, SRS_ecu_netsim.md SD-006).
 //!
 //! Minimal v0.1.3 cut: the SD message frame (flags + entries array) with
 //! type-1 service entries (OfferService / StopOffer via TTL 0). Options are
@@ -18,7 +18,7 @@ pub const ENTRY_OFFER_SERVICE: u8 = 0x01;
 pub const ENTRY_SUBSCRIBE_EVENTGROUP: u8 = 0x06;
 pub const ENTRY_SUBSCRIBE_EVENTGROUP_ACK: u8 = 0x07;
 
-/// One type-1 (service) SD entry. TTL 0 on an Offer means StopOffer.
+/// One service/eventgroup SD entry. SD-006: TTL 0 on an Offer means StopOffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SdEntry {
     pub entry_type: u8,
@@ -137,7 +137,8 @@ mod tests {
     }
 
     #[test]
-    fn known_vector_byte_exact() {
+    fn known_vector_byte_exact_sd_001() {
+        // SD-006
         let mut wire = Vec::new();
         build(&sample(), &mut wire);
         assert_eq!(
@@ -150,10 +151,40 @@ mod tests {
     }
 
     #[test]
-    fn round_trip() {
+    fn round_trip_sd_001() {
+        // SD-006
         let mut wire = Vec::new();
         build(&sample(), &mut wire);
         assert_eq!(parse(&wire).unwrap(), sample());
+    }
+
+    #[test]
+    fn stop_offer_and_flags_round_trip_sd_001() {
+        // SD-006
+        let msg = SdMessage {
+            flags: 0x80,
+            entries: vec![
+                SdEntry {
+                    entry_type: ENTRY_OFFER_SERVICE,
+                    service_id: 0x1101,
+                    instance_id: 1,
+                    major_version: 1,
+                    ttl: 0,
+                    minor_version: 0,
+                },
+                SdEntry {
+                    entry_type: ENTRY_SUBSCRIBE_EVENTGROUP_ACK,
+                    service_id: 0x1101,
+                    instance_id: 1,
+                    major_version: 1,
+                    ttl: 3,
+                    minor_version: 0x8001,
+                },
+            ],
+        };
+        let mut wire = Vec::new();
+        build(&msg, &mut wire);
+        assert_eq!(parse(&wire).unwrap(), msg);
     }
 
     #[test]

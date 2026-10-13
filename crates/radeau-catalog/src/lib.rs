@@ -818,6 +818,7 @@ pub fn from_arxml(xml: &str) -> Result<(Catalog, Vec<Diagnostic>), ImportError> 
     Ok((Catalog { services }, ds))
 }
 
+// SP-021/SP-005: fixed-offset big-endian catalog decode skips truncated fields.
 pub fn decode(signals: &[Signal], payload: &[u8]) -> Vec<DecodedSignal> {
     signals
         .iter()
@@ -1064,7 +1065,8 @@ FusedObjects#1201@1|FusedTrackList#8001[TrackCount@0:U8:1:0:,QualityMean@1:U8:1:
         );
     }
     #[test]
-    fn numeric_decode() {
+    fn numeric_decode_sp_004() {
+        // SP-021
         let mk = |base: BaseType| Signal {
             name: "x".into(),
             byte_offset: 0,
@@ -1083,6 +1085,25 @@ FusedObjects#1201@1|FusedTrackList#8001[TrackCount@0:U8:1:0:,QualityMean@1:U8:1:
             decode(&[mk(BaseType::F32)], &1.5f32.to_be_bytes())[0].scaled,
             1.5
         )
+    }
+
+    #[test]
+    fn truncated_payload_skips_field_sp_005() {
+        // SP-005
+        let signal = Signal {
+            name: "speed".into(),
+            byte_offset: 1,
+            byte_len: 2,
+            base: BaseType::U16,
+            factor: 0.01,
+            offset: -1.0,
+            unit: "m/s".into(),
+            value_table: BTreeMap::new(),
+        };
+        assert!(decode(std::slice::from_ref(&signal), &[0]).is_empty());
+        let decoded = decode(&[signal], &[0, 0x01, 0x2c]);
+        assert_eq!(decoded[0].raw_dec, "300");
+        assert_eq!(decoded[0].scaled, 2.0);
     }
     #[test]
     fn zero_services_is_fatal() {

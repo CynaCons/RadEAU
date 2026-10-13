@@ -7,7 +7,7 @@ modules, `scripts/e2e-*.mjs`). CI runs it with `--check`: Implemented and
 Verified requirements need an implementation trace; Verified ones also a test
 trace. Implemented-without-test is the open verification gap listed below.
 
-**129 requirements** — Implemented 11 · Planned 71 · Verified 47
+**140 requirements** — Implemented 10 · Planned 51 · Superseded 5 · Verified 74
 
 ## SRS_capture.md
 
@@ -34,42 +34,53 @@ trace. Implemented-without-test is the open verification gap listed below.
 
 | ID | Status | Requirement | Implementation | Tests |
 |---|---|---|---|---|
-| SP-001 | Planned | Encode/decode the full SOME/IP header exactly; Length covers Request ID through payload end | `crates/radeau-proto/src/someip.rs` | — |
-| SP-002 | Planned | Message-type semantics: 0x00/0x01/0x02/0x80/0x81; event method ids carry the high bit | — | — |
-| SP-003 | Planned | Session ids increment 1→0xFFFF per client and wrap to 1; 0 never emitted | — | — |
-| SP-004 | Planned | Payload decode against the catalog: big-endian default with per-service override, base types at fixed offse… | — | — |
-| SP-005 | Planned | Payload shorter than a field's extent → signal missing; never partial, never panic | — | — |
-| SP-006 | Planned | Classification never drops: every delivered frame gets exactly one protocol class (SOME/IP, SD, gPTP, ARP, … | `src-tauri/src/codes.rs` | — |
-| SP-007 | Planned | 802.1Q / 802.1ad tags are peeled (one or two); outer VLAN id carried, inner EtherType classified; dissectio… | — | — |
-| SP-008 | Planned | SOME/IP is recognized by header plausibility on any UDP port; 30490 is a fast path, never a gate | — | — |
-| SP-009 | Planned | Direction is relative to RadEAU's host: Rx observed, Tx originated by RadEAU, unknown when the source canno… | `src-tauri/src/codes.rs` | — |
-| SP-010 | Planned | Capture statistics (received, emitted, accumulator drops, gaps, malformed, kernel drops, per-class counts) … | `src-tauri/src/codes.rs`<br>`src/runtime/captureSource.ts`<br>`src/runtime/desktop.ts` | — |
-| SP-011 | Planned | DoIP header and payload codec per ISO 13400-2 (SRS_protocols §6): version / inverse-version validation, the… | — | — |
-| SP-012 | Planned | DoIP classification on UDP 13400 and boundary-aligned TCP 13400; identity columns carry logical addresses a… | — | — |
-| SP-013 | Planned | UDS sub-layer for 0x8001 messages: SID name, positive / negative response mapping with NRC names, sub-funct… | — | — |
-| SP-014 | Planned | The simulator carries a deterministic diagnostic session (announcements, routing activation, TesterPresent,… | — | — |
-| SP-015 | Planned | IPv6 extension-header walk with transport dispatch identical to IPv4 (UDP/TCP application classes, SOME/IP … | — | — |
-| SP-016 | Planned | UDP application classes (DHCPv4/v6, DNS/mDNS/LLMNR, NTP, SSDP, PTP over UDP, TFTP, SNMP) classified by port… | — | — |
-| SP-017 | Planned | L2 classes (LLDP, AVTP, MACsec, EAPOL) classified by EtherType and dissected (TLVs, AVTP subtypes, SecTAG, … | — | — |
-| SP-018 | Planned | TCP application classes (HTTP request/status lines + headers, TLS record/handshake with SNI and ALPN, SSH b… | — | — |
-| SD-001 | Planned | Server lifecycle: initial delay → doubling repetition → cyclic main phase; StopOffer via TTL 0 | `crates/radeau-proto/src/sd.rs` | — |
+| SP-001 | Verified | Encode/decode the full SOME/IP header exactly; Length covers Request ID through payload end | `crates/radeau-proto/src/someip.rs` | `crates/radeau-proto/src/someip.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-002 | Superseded | Message-type semantics: 0x00/0x01/0x02/0x80/0x81; event method ids carry the high bit | — | — |
+| SP-003 | Verified | Simulator SOME/IP session ids increment 1→0xFFFF per ECU stream and wrap to 1; 0 is skipped | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
+| SP-004 | Superseded | Payload decode against the catalog: big-endian default with per-service override, base types at fixed offse… | — | — |
+| SP-005 | Verified | Payload shorter than a field's extent → signal missing; never partial, never panic | `crates/radeau-catalog/src/lib.rs` | `crates/ecu-netsim/src/main.rs`<br>`crates/radeau-catalog/src/lib.rs` |
+| SP-006 | Verified | Classification never drops: every delivered frame gets exactly one protocol class (SOME/IP, SD, gPTP, ARP, … | `src-tauri/src/codes.rs` | `src-tauri/src/classify.rs` |
+| SP-007 | Verified | 802.1Q / 802.1ad tags are peeled (one or two); outer VLAN id carried, inner EtherType classified; dissectio… | `crates/radeau-proto/src/ethernet.rs` | `crates/radeau-proto/src/ethernet.rs` |
+| SP-008 | Verified | SOME/IP is recognized by header plausibility on any UDP port; 30490 is a fast path, never a gate | `src-tauri/src/classify.rs` | `crates/ecu-netsim/src/main.rs`<br>`src-tauri/src/classify.rs` |
+| SP-009 | Verified | Direction is relative to RadEAU's host: Rx observed, Tx originated by RadEAU, unknown when the source canno… | `src-tauri/src/classify.rs`<br>`src-tauri/src/codes.rs` | `src-tauri/src/classify.rs` |
+| SP-010 | Verified | Capture statistics (received, emitted, accumulator drops, gaps, malformed, kernel drops, per-class counts) … | `src-tauri/src/codes.rs`<br>`src/runtime/captureSource.ts`<br>`src/runtime/desktop.ts` | `src/runtime/captureSource.test.ts`<br>`src/runtime/networkDisplay.test.ts` |
+| SP-011 | Verified | DoIP header and payload codec per ISO 13400-2 (SRS_protocols §6): version / inverse-version validation, the… | `crates/radeau-proto/src/doip.rs` | `crates/radeau-proto/src/doip.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-012 | Verified | DoIP classification on UDP 13400 and boundary-aligned TCP 13400; identity columns carry logical addresses a… | `src-tauri/src/classify.rs` | `src-tauri/src/classify.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-013 | Verified | UDS sub-layer for 0x8001 messages: SID name, positive / negative response mapping with NRC names, sub-funct… | `crates/radeau-proto/src/doip.rs` | `crates/radeau-proto/src/doip.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-014 | Verified | The simulator carries a deterministic diagnostic session (announcements, routing activation, TesterPresent,… | `crates/ecu-netsim/src/diagnostic.rs` | `crates/ecu-netsim/src/diagnostic.rs`<br>`scripts/e2e-smoke.mjs` |
+| SP-015 | Verified | IPv6 extension-header walk with transport dispatch identical to IPv4 (UDP/TCP application classes, SOME/IP … | `crates/ecu-netsim/src/standard_traffic.rs`<br>`src-tauri/src/classify.rs` | `crates/ecu-netsim/src/standard_traffic.rs`<br>`src-tauri/src/classify.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-016 | Verified | UDP application classes (DHCPv4/v6, DNS/mDNS/LLMNR, NTP, SSDP, PTP over UDP, TFTP, SNMP) classified by port… | `src-tauri/src/classify.rs` | `crates/ecu-netsim/src/standard_traffic.rs`<br>`src-tauri/src/classify.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-017 | Verified | L2 classes (LLDP, AVTP, MACsec, EAPOL) classified by EtherType and dissected (TLVs, AVTP subtypes, SecTAG, … | `src-tauri/src/classify.rs` | `crates/ecu-netsim/src/standard_traffic.rs`<br>`src-tauri/src/classify.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-018 | Verified | TCP application classes (HTTP request/status lines + headers, TLS record/handshake with SNI and ALPN, SSH b… | `crates/ecu-netsim/src/standard_traffic.rs`<br>`src-tauri/src/classify.rs` | `crates/ecu-netsim/src/standard_traffic.rs`<br>`src-tauri/src/classify.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-019 | Verified | Message-type semantics as shipped: 0x00/0x01/0x02/0x80/0x81 are preserved in the Trace type columns; simula… | `crates/radeau-proto/src/someip.rs`<br>`src-tauri/src/classify.rs` | `crates/radeau-proto/src/someip.rs`<br>`src-tauri/src/classify.rs` |
+| SP-020 | Planned | Type/method-id inconsistencies (an event type without the method high bit, or a request type with it) are f… | — | — |
+| SP-021 | Verified | Whole-byte payload decode against the catalog: big-endian base types at fixed offsets; physical = raw × fac… | `crates/radeau-catalog/src/lib.rs` | `crates/ecu-netsim/src/main.rs`<br>`crates/radeau-catalog/src/lib.rs`<br>`src-tauri/src/dissect.rs` |
+| SP-022 | Planned | Per-service byte-order override and MSB0 bit slices in payload decode, core and UI decoders bit-identical | — | — |
+| SD-001 | Superseded | Server lifecycle: initial delay → doubling repetition → cyclic main phase; StopOffer via TTL 0 | — | — |
 | SD-002 | Planned | TTL bookkeeping: no re-offer within TTL → service down | — | — |
 | SD-003 | Planned | Subscribe / Ack handshake precedes event flow; Nack surfaces as an error state | — | — |
 | SD-004 | Planned | Reboot detection (flag + session-id regression) discards learned state | — | — |
 | SD-005 | Planned | RadEAU's SD model is derived passively from observed traffic only | — | — |
-| PT-001 | Planned | Two-step gPTP: Sync/Follow_Up 125 ms, Pdelay 1 s, Announce 1 s, EtherType 0x88F7, domain 0, static GM | — | — |
+| SD-006 | Verified | Shipped SD server traffic: cyclic OfferService every 1 s with TTL 3; the shared SD codec preserves StopOffe… | `crates/ecu-netsim/src/main.rs`<br>`crates/radeau-proto/src/sd.rs` | `crates/ecu-netsim/src/main.rs`<br>`crates/radeau-proto/src/sd.rs` |
+| SD-007 | Planned | SD server initial-wait and doubling-repetition phases before the cyclic main phase | — | — |
+| PT-001 | Superseded | Two-step gPTP: Sync/Follow_Up 125 ms, Pdelay 1 s, Announce 1 s, EtherType 0x88F7, domain 0, static GM | — | — |
 | PT-002 | Planned | Per-node clock model (offset, drift ppm) converges through the servo | — | — |
 | PT-003 | Planned | Sensor payload timestamps use PTP-corrected node time | — | — |
-| PT-004 | Planned | Every monitored frame carries a switch-time ns stamp; recordings persist it; replay preserves it | — | — |
-| NS-001 | Planned | Virtual-wire frames are fully serialized Ethernet II / IPv4 / UDP with valid checksums | — | — |
-| NS-002 | Planned | Determinism: same scenario + seed in accelerated mode → byte-identical monitor stream | — | — |
-| NS-003 | Planned | All simulator queues bounded with drop counters; monitor overflow emits gap records, never silent loss | — | — |
-| NS-004 | Planned | Real-time pacing accuracy at default scenario rates | — | — |
+| PT-004 | Superseded | Every monitored frame carries a switch-time ns stamp; recordings persist it; replay preserves it | — | — |
+| PT-005 | Verified | Direct-Ethernet two-step gPTP Sync/Follow_Up every 125 ms (EtherType 0x88F7, domain 0, static GM); codec su… | `crates/ecu-netsim/src/main.rs`<br>`crates/ecu-netsim/src/standard_traffic.rs`<br>`crates/radeau-proto/src/gptp.rs` | `crates/ecu-netsim/src/main.rs`<br>`crates/ecu-netsim/src/standard_traffic.rs`<br>`crates/radeau-proto/src/gptp.rs` |
+| PT-006 | Planned | Simulator Pdelay (1 s) and Announce (1 s) cadence on Ethernet with correction fields consumed | — | — |
+| PT-007 | Verified | Simulator monitor records carry a switch-time ns stamp; the accelerated pcap export persists epoch + switch… | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
+| PT-008 | Planned | RadEAU recordings persist the network (switch) timestamp and replay preserves it | — | — |
+| NS-001 | Verified | Shipped simulator SOME/IP events, SD offers, and background IPv4/UDP traffic are serialized as Ethernet II … | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
+| NS-002 | Verified | Determinism: same seed in accelerated pcap/export mode → byte-identical monitor stream | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
+| NS-003 | Verified | Monitor-client queues are bounded; overflow emits explicit gap records instead of silently losing frames | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
+| NS-004 | Implemented | Real-time pacing accuracy at default scenario rates | `crates/ecu-netsim/src/main.rs` | — |
 | NS-005 | Planned | Every fault verb (§7) is exposed on the control channel with an observable effect | — | — |
 | NS-006 | Planned | Scenario config is versioned, seeded YAML validated with precise errors | — | — |
 | NV-001 | Planned | Topology view: ECUs, offered services, subscription edges from passive observation | — | — |
 | NV-002 | Planned | SD monitor: per-service state machine with TTL countdown, correlated to Trace | — | — |
 | NV-003 | Planned | PTP status: sync tree and per-node offset/rate charts through the standard chart stack | — | — |
+| NV-004 | Verified | Until NV-001..003 ship, the Network view's Topology, SD monitor and PTP panels show honest empty states — n… | `src/runtime/networkDisplay.ts`<br>`src/views/NetworkView.tsx` | `src/runtime/networkDisplay.test.ts` |
 
 ## SRS_graphing.md
 
@@ -159,35 +170,28 @@ trace. Implemented-without-test is the open verification gap listed below.
 | VU-017 | Planned | Draw point markers only below 2 samples per pixel, sized 4–8 px | — | — |
 | VU-018 | Planned | Suppress the axis overlay when either pane dimension is below 32 CSS px | — | — |
 | VU-019 | Verified | Put no CSS transition, hover shadow or ripple on any element that updates with incoming data | `src/views/TraceView.tsx` | `scripts/e2e-perf.mjs` |
-| VU-020 | Implemented | Limit all animation to the rail transition, the startup fade and pulse, and toast entry | `src/theme/muiTheme.ts` | — |
+| VU-020 | Verified | Limit all animation to the rail transition, the startup fade and pulse, and toast entry | `src/theme/muiTheme.ts` | `src/shell/NavRail.test.tsx` |
 | VU-021 | Implemented | Drop every permitted transition to zero duration under prefers-reduced-motion | `src/shell/NavRail.tsx` | `src/shell/NavRail.test.tsx` |
 | VU-022 | Verified | Give every interactive element a stable kebab-case data-testid and, if icon-only, a matching aria-label | `src/views/TraceView.tsx` | `scripts/e2e-smoke.mjs` |
 | VU-023 | Implemented | Give every color-indicated state a second non-chromatic indicator | `src/views/TraceView.tsx` | — |
 | VU-024 | Planned | Show keyboard focus as a 2 px accent outline at 2 px offset on every interactive element | — | — |
 | VU-025 | Implemented | Paint a startup overlay before framework mount and fade it over 220 ms after mount | `src/main.tsx` | — |
-| VU-026 | Implemented | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | `src/theme/muiTheme.ts` | — |
+| VU-026 | Verified | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | `src/theme/muiTheme.ts` | `src/theme/tokens.test.ts` |
 | VU-027 | Verified | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a … | `src/shell/viewLifecycle.ts` | `src/views/TraceView.render.test.tsx` |
 
 ## Verification gap
 
-Implemented requirements with no test trace yet (9): VU-006, VU-007, VU-008, VU-009, VU-012, VU-020, VU-023, VU-025, VU-026.
+Implemented requirements with no test trace yet (8): NS-004, VU-006, VU-007, VU-008, VU-009, VU-012, VU-023, VU-025.
 
 ## Untraced source files
 
-Implementation files that reference no requirement (62). Each is either covered by a requirement that should name it, or is infrastructure.
+Implementation files that reference no requirement (51). Each is either covered by a requirement that should name it, or is infrastructure.
 
-- `crates/ecu-netsim/src/diagnostic.rs`
-- `crates/ecu-netsim/src/main.rs`
-- `crates/ecu-netsim/src/standard_traffic.rs`
-- `crates/radeau-catalog/src/lib.rs`
 - `crates/radeau-proto/src/arp.rs`
 - `crates/radeau-proto/src/avtp.rs`
 - `crates/radeau-proto/src/dhcp.rs`
 - `crates/radeau-proto/src/dns.rs`
-- `crates/radeau-proto/src/doip.rs`
 - `crates/radeau-proto/src/eapol.rs`
-- `crates/radeau-proto/src/ethernet.rs`
-- `crates/radeau-proto/src/gptp.rs`
 - `crates/radeau-proto/src/http.rs`
 - `crates/radeau-proto/src/icmp.rs`
 - `crates/radeau-proto/src/icmpv6.rs`
@@ -207,9 +211,7 @@ Implementation files that reference no requirement (62). Each is either covered 
 - `crates/radeau-proto/src/tls.rs`
 - `crates/radeau-proto/src/udp.rs`
 - `src-tauri/src/catalog.rs`
-- `src-tauri/src/classify.rs`
 - `src-tauri/src/devgen.rs`
-- `src-tauri/src/dissect.rs`
 - `src-tauri/src/endpoints.rs`
 - `src-tauri/src/frame.rs`
 - `src-tauri/src/main.rs`
@@ -225,7 +227,6 @@ Implementation files that reference no requirement (62). Each is either covered 
 - `src/runtime/catalogStore.ts`
 - `src/runtime/devGenMirror.ts`
 - `src/runtime/frameDetail.ts`
-- `src/runtime/networkDisplay.ts`
 - `src/runtime/perfProbe.tsx`
 - `src/runtime/recorderDisplay.ts`
 - `src/runtime/simulationDisplay.ts`
@@ -235,6 +236,5 @@ Implementation files that reference no requirement (62). Each is either covered 
 - `src/shell/ViewHost.tsx`
 - `src/shell/viewRegistry.tsx`
 - `src/views/AutomationView.tsx`
-- `src/views/NetworkView.tsx`
 - `src/views/SettingsView.tsx`
 - `src/views/SimulationView.tsx`

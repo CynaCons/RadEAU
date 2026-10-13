@@ -20,8 +20,11 @@ import { PROTO_LABELS } from "./wireCodes";
 export const NETWORK_EMPTY = {
   externalNodes: "no external nodes attached",
   automation: "automation surface arrives v0.7",
+  // NV-004: topology is present only as honest deferred copy until passive SD graphing ships.
   topology: "derived from observed SD traffic — live decode arrives v0.5",
+  // NV-004: SD state-machine panel is an honest deferred state, not fabricated service data.
   sdMonitor: "derived from observed SD traffic — live decode arrives v0.5",
+  // NV-004: PTP status panel is an honest deferred state until offset charts are wired.
   ptp: "derived from observed PTP traffic — live decode arrives v0.5",
 } as const;
 

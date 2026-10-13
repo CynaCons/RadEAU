@@ -46,6 +46,7 @@ const CLOCK_V6: [u8; 16] = [
 impl StandardTraffic {
     /// Called once per simulated millisecond in both accelerated and wall-clock paths.
     pub fn frames_at(&mut self, ms: u64, ident: &mut u16) -> Vec<ScheduledFrame> {
+        // SP-015..SP-018: deterministic standard-protocol background traffic for demo/E2E.
         let mut frames = Vec::new();
         match ms {
             // Router discovery every 5 s, neighbour resolution and the mDNS
@@ -93,9 +94,11 @@ impl StandardTraffic {
             frames.push(frame(FUSION_PORT, lldp_frame()));
         }
         if ms.is_multiple_of(2_000) {
+            // PT-005: background IEEE 1588-over-UDP Announce traffic.
             frames.push(frame(FUSION_PORT, ptp_udp(true, ms, ident)));
         }
         if ms.is_multiple_of(1_000) {
+            // PT-005: background IEEE 1588-over-UDP Sync traffic.
             frames.push(frame(FUSION_PORT, ptp_udp(false, ms, ident)));
         }
         // 100 Hz AAF stream: enough to read as a continuous stream in the
@@ -644,6 +647,7 @@ mod tests {
 
     #[test]
     fn schedule_has_required_cadences_and_exchanges() {
+        // PT-005
         let mut traffic = StandardTraffic::default();
         let mut ident = 1;
         let counts = (0..=40_000)
@@ -670,6 +674,7 @@ mod tests {
 
     #[test]
     fn representative_frames_are_byte_exact() {
+        // SP-015 / SP-016 / SP-017 / SP-018 / PT-005
         // Full-frame FNV-1a goldens make every locally encoded/builder-backed
         // frame kind byte-exact without embedding several kilobytes of hex.
         fn hash(bytes: &[u8]) -> u64 {

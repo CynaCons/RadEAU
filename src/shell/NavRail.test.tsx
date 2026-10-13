@@ -1,28 +1,40 @@
 // @vitest-environment happy-dom
-// VU-010/VU-021: rail width contract and reduced-motion transition policy.
+// VU-010/VU-020/VU-021: rail width contract and permitted/reduced-motion transition policy.
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 
 import { NavRail } from "./NavRail";
 
+async function renderNavRail(expanded: boolean) {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      createElement(NavRail, {
+        expanded,
+        activeViewId: "trace",
+        onNavigate: () => undefined,
+        onAbout: () => undefined,
+      }),
+    );
+  });
+  return { container, root };
+}
+
 describe("NavRail", () => {
-  it("DEBUG dump", async () => {
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const root = createRoot(container);
-    await act(async () => {
-      root.render(
-        createElement(NavRail, {
-          expanded: false,
-          activeViewId: "trace",
-          onNavigate: () => undefined,
-          onAbout: () => undefined,
-        }),
-      );
-    });
+  it("sizes the collapsed and expanded rail while keeping labels accessible (VU-010)", async () => {
+    const { container, root } = await renderNavRail(false);
     const rail = container.querySelector('[data-testid="nav-rail"]') as HTMLElement;
-    console.log("WIDTH collapsed:", getComputedStyle(rail).width, rail.className);
+    const trace = container.querySelector('[data-testid="nav-trace"]') as HTMLElement;
+    const label = trace.querySelector("p") as HTMLElement;
+
+    expect(getComputedStyle(rail).width).toBe("65px");
+    expect(trace.getAttribute("aria-label")).toBe("Trace");
+    expect(getComputedStyle(label).opacity).toBe("0");
+
     await act(async () => {
       root.render(
         createElement(NavRail, {
@@ -33,26 +45,20 @@ describe("NavRail", () => {
         }),
       );
     });
-    console.log("WIDTH expanded:", getComputedStyle(rail).width, rail.className);
-    const styleTags = Array.from(document.head.querySelectorAll("style")).map((s) => s.textContent).join("\n");
-    console.log("HAS reduced motion rule:", styleTags.includes("prefers-reduced-motion"));
-    const count = styleTags.split("prefers-reduced-motion").length - 1;
-    console.log("COUNT reduced-motion blocks:", count);
-    const label = container.querySelector('[data-testid="nav-trace"] p') as HTMLElement;
-    console.log("LABEL class:", label?.className);
-    const labelHash = label.className.match(/css-([a-z0-9]+)/)?.[0];
-    const labelIdx = styleTags.indexOf(`.${labelHash}{`);
-    console.log("LABEL rule:", styleTags.slice(Math.max(0, labelIdx - 10), labelIdx + 200));
-    const mqIdxs: number[] = [];
-    let searchFrom = 0;
-    for (;;) {
-      const found = styleTags.indexOf("prefers-reduced-motion", searchFrom);
-      if (found === -1) break;
-      mqIdxs.push(found);
-      searchFrom = found + 1;
-    }
-    for (const i of mqIdxs) console.log("MQ BLOCK:", styleTags.slice(i - 5, i + 150));
+    expect(getComputedStyle(rail).width).toBe("240px");
+    expect(getComputedStyle(label).opacity).toBe("1");
     await act(async () => root.unmount());
-    expect(true).toBe(true);
+  });
+
+  it("keeps rail motion limited and reduced-motion-safe (VU-020, VU-021)", async () => {
+    const { root } = await renderNavRail(false);
+    const styleTags = Array.from(document.head.querySelectorAll("style")).map((s) => s.textContent).join("\n");
+
+    expect(styleTags).toContain("transition:width 225ms cubic-bezier(0.4, 0, 0.6, 1)");
+    expect(styleTags).toContain("transition:opacity 225ms cubic-bezier(0.4, 0, 0.6, 1)");
+    expect(styleTags).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(styleTags.match(/transition:none/g)?.length).toBeGreaterThanOrEqual(2);
+
+    await act(async () => root.unmount());
   });
 });

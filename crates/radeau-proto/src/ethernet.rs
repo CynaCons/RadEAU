@@ -42,6 +42,7 @@ impl<'a> EthernetFrame<'a> {
         let mut ethertype = u16::from_be_bytes([hdr[12], hdr[13]]);
         let mut header_len = HEADER_LEN;
         let mut vlan = None;
+        // SP-007: peel one or two 802.1Q / 802.1ad tags while retaining the outer VLAN.
         for _ in 0..2 {
             if !matches!(ethertype, ETHERTYPE_VLAN | ETHERTYPE_QINQ) {
                 break;
@@ -153,7 +154,8 @@ mod tests {
     }
 
     #[test]
-    fn peels_two_tags_and_keeps_outer() {
+    fn peels_two_tags_and_keeps_outer_sp_007() {
+        // SP-007
         let mut wire = vec![0; 12];
         wire.extend_from_slice(&ETHERTYPE_QINQ.to_be_bytes());
         wire.extend_from_slice(&10u16.to_be_bytes());

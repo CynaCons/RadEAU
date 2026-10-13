@@ -1,4 +1,4 @@
-//! Bounded Diagnostics over Internet Protocol (DoIP) codec.
+//! Bounded Diagnostics over Internet Protocol (DoIP) codec (SP-011).
 use crate::ParseError;
 
 pub const DOIP_PORT: u16 = 13_400;
@@ -316,6 +316,7 @@ pub fn build_message(version: u8, payload_type: u16, body: &[u8], out: &mut Vec<
 }
 
 pub fn uds_sid_name(sid: u8) -> Option<&'static str> {
+    // SP-013: UDS service IDs are table-driven for request and positive-response display.
     match sid {
         0x10 => Some("DiagnosticSessionControl"),
         0x11 => Some("ECUReset"),
@@ -372,6 +373,7 @@ mod tests {
 
     #[test]
     fn byte_exact_header_and_validation() {
+        // SP-011
         assert_eq!(
             message(0x8001, &[0x0e, 0x80]),
             [2, 0xfd, 0x80, 1, 0, 0, 0, 2, 0x0e, 0x80]
@@ -408,6 +410,7 @@ mod tests {
 
     #[test]
     fn vectors_cover_every_payload_type() {
+        // SP-011
         let vin = *b"WVWZZZ1JZXW000001";
         let cases: Vec<(u16, Vec<u8>)> = vec![
             (0x0000, vec![1]),
@@ -447,6 +450,7 @@ mod tests {
 
     #[test]
     fn uds_names_requests_responses_and_nrcs() {
+        // SP-013
         for sid in [
             0x10, 0x11, 0x14, 0x19, 0x22, 0x27, 0x28, 0x2e, 0x31, 0x34, 0x36, 0x37, 0x3e, 0x85,
         ] {
