@@ -386,6 +386,8 @@ describe("projectDisplayRows filter perf guardrail (v0.1.7)", () => {
     // Sanity: both paths produce matching rows; timings go to the final report.
     expect(fixed.length).toBeGreaterThan(0);
     expect(seq).toHaveLength(WINDOW);
+    // Performance evidence is intentionally emitted for the static-check report.
+    // eslint-disable-next-line no-console
     console.log(
       `[filter-perf] 200k rows: Fixed=${fixedMs.toFixed(1)}ms Sequential(window=${WINDOW})=${seqMs.toFixed(1)}ms fixedRows=${fixed.length}`,
     );

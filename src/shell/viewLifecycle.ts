@@ -25,11 +25,6 @@ function subscribeActive(cb: () => void): () => void {
   return () => activeListeners.delete(cb);
 }
 
-/** True while the view is resumed (visible). */
-export function isViewActive(viewId: string): boolean {
-  return active.has(viewId);
-}
-
 export function registerViewLifecycle(viewId: string, lifecycle: ViewLifecycle): () => void {
   registry.set(viewId, lifecycle);
   return () => {

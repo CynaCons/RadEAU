@@ -105,10 +105,10 @@ describe("recorderDisplay", () => {
       },
     ]);
     expect(rows).toHaveLength(2);
-    expect(rows[0].basename).toBe("radeau-b.pcap");
-    expect(rows[0].bytesLabel).toBe("2 KB");
-    expect(rows[0].framesLabel).toBe("10 frames");
-    expect(rows[1].framesLabel).toBeNull();
-    expect(rows[1].bytesLabel).toBe("100 B");
+    expect(rows[0]!.basename).toBe("radeau-b.pcap");
+    expect(rows[0]!.bytesLabel).toBe("2 KB");
+    expect(rows[0]!.framesLabel).toBe("10 frames");
+    expect(rows[1]!.framesLabel).toBeNull();
+    expect(rows[1]!.bytesLabel).toBe("100 B");
   });
 });

@@ -59,7 +59,10 @@ export function formatClassCounts(byClass: readonly number[]): string | null {
   const parts: string[] = [];
   for (let i = 0; i < byClass.length && i < PROTO_LABELS.length; i += 1) {
     const n = byClass[i];
-    if (n > 0) parts.push(`${PROTO_LABELS[i]} ${n.toLocaleString("en-US")}`);
+    const label = PROTO_LABELS[i];
+    if (n !== undefined && label !== undefined && n > 0) {
+      parts.push(`${label} ${n.toLocaleString("en-US")}`);
+    }
   }
   return parts.length > 0 ? parts.join(" · ") : null;
 }
@@ -90,7 +93,7 @@ function sourceAddress(input: {
       const id = (input.liveInterfaceId ?? "").trim();
       return id || null;
     }
-    default:
+    case "devgen":
       return null;
   }
 }

@@ -47,7 +47,7 @@ export interface AppInfo {
 function browserAppInfo(): AppInfo {
   const envVersion =
     typeof import.meta !== "undefined"
-      ? (import.meta.env?.PACKAGE_VERSION as string | undefined)
+      ? (import.meta.env?.["PACKAGE_VERSION"] as string | undefined)
       : undefined;
   return {
     version: envVersion && envVersion.length > 0 ? envVersion : "browser",
@@ -205,7 +205,7 @@ class MirrorCapture {
       this.emitted += rows.length;
       for (const r of rows) {
         if (r.proto >= 0 && r.proto < PROTO_CLASS_COUNT) {
-          this.byClass[r.proto] += 1;
+          this.byClass[r.proto]! += 1;
         }
       }
       for (const cb of this.subscribers) cb(batch);

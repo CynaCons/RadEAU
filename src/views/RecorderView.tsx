@@ -36,8 +36,7 @@ import { recordingStore } from "../runtime/recordingStore";
 import { runExportRing } from "../runtime/ringExport";
 import { sessionStore } from "../runtime/sessionStore";
 import { traceStore } from "../runtime/traceStore";
-import { shallowEqual } from "../runtime/useStoreSelector";
-import { useActiveStoreSelector } from "../components/useActiveStoreSelector";
+import { shallowEqual, useStoreSelector } from "../runtime/useStoreSelector";
 import { useViewActive, useViewLifecycle } from "../shell/viewLifecycle";
 
 const MONO = {
@@ -46,12 +45,11 @@ const MONO = {
 } as const;
 
 function ActiveRecordingStats(props: { active: boolean }) {
-  const stats = useActiveStoreSelector(
-    props.active,
+  const stats = useStoreSelector(
     recordingStore,
     ({ frames, bytes, dropped }) => ({ frames, bytes, dropped }),
-    { frames: 0, bytes: 0, dropped: 0 },
     shallowEqual,
+    props.active,
   );
   return (
     <Typography sx={{ ...MONO, fontSize: 12, color: "text.secondary" }} data-testid="recorder-active-stats">
@@ -61,7 +59,7 @@ function ActiveRecordingStats(props: { active: boolean }) {
 }
 
 function ExportBufferedFrames(props: { active: boolean }) {
-  const frameCount = useActiveStoreSelector(props.active, traceStore, (snap) => snap.rows.length, 0);
+  const frameCount = useStoreSelector(traceStore, (snap) => snap.rows.length, Object.is, props.active);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -100,13 +98,12 @@ function ExportBufferedFrames(props: { active: boolean }) {
 export function RecorderView() {
   useViewLifecycle("recorder", {});
   const active = useViewActive("recorder");
-  const session = useActiveStoreSelector(active, sessionStore, ({ running, sourceKind, pcapPath }) => ({ running, sourceKind, pcapPath }), sessionStore.getSnapshot(), shallowEqual);
-  const recording = useActiveStoreSelector(
-    active,
+  const session = useStoreSelector(sessionStore, ({ running, sourceKind, pcapPath }) => ({ running, sourceKind, pcapPath }), shallowEqual, active);
+  const recording = useStoreSelector(
     recordingStore,
     ({ armed, active, path, error, dir, list, dirError }) => ({ armed, active, path, error, dir, list, dirError }),
-    recordingStore.getSnapshot(),
     shallowEqual,
+    active,
   );
   const [dirDraft, setDirDraft] = useState(recording.dir);
 
@@ -169,7 +166,7 @@ export function RecorderView() {
       <RaisedPanel
         icon={<FiberManualRecordIcon sx={{ color: "var(--error)" }} />}
         title="Record"
-        leftRule={panelActive ? "var(--error)" : undefined}
+        {...(panelActive ? { leftRule: "var(--error)" } : {})}
         testId="recorder-record-panel"
       >
         <Stack spacing={2}>

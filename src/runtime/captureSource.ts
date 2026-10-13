@@ -243,7 +243,7 @@ export function sourceKindLabel(kind: SourceKind): string {
       return "pcap stream";
     case "live":
       return "Physical interface";
-    default:
+    case "devgen":
       return "Dev generator";
   }
 }
@@ -302,7 +302,7 @@ export function captureButtonLabel(capturing: boolean, kind: SourceKind): string
       return "Start capture · pcap stream";
     case "live":
       return "Start capture · physical interface";
-    default:
+    case "devgen":
       return "Start capture · dev generator";
   }
 }

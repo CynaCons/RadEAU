@@ -177,7 +177,7 @@ export class TraceStore {
       for (let k = 0; k < batch.i.length; k += 1) {
         const row = projectRow(batch, k, prev, this.lastByKey);
         decoded.push(row);
-        const t = batch.t[k];
+        const t = batch.t[k]!;
         this.lastByKey.set(row.key, t);
         prev = t;
       }

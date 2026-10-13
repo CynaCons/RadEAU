@@ -143,7 +143,7 @@ async function main() {
   console.log("1/3 tauri build --no-bundle (vite + release radeau)…");
   try {
     await run("npx", ["tauri", "build", "--no-bundle"]);
-  } catch (err) {
+  } catch {
     console.warn("tauri build failed — stopping locked radeau and retrying once…");
     try {
       await run("powershell", [
@@ -160,7 +160,7 @@ async function main() {
   console.log("2/3 cargo build --release -p ecu-netsim…");
   try {
     await run("cargo", ["build", "--release", "-p", "ecu-netsim"]);
-  } catch (err) {
+  } catch {
     console.warn("ecu-netsim build failed — stopping locked process and retrying once…");
     try {
       await run("powershell", [

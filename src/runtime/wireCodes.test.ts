@@ -15,7 +15,7 @@ function parseRustConsts(src: string): Map<string, number> {
   const re = /pub const ([A-Z0-9_]+):\s*(?:u8|usize)\s*=\s*(\d+)\s*;/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src)) !== null) {
-    out.set(m[1], Number(m[2]));
+    out.set(m[1]!, Number(m[2]!));
   }
   return out;
 }

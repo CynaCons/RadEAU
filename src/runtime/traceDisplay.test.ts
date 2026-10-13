@@ -148,7 +148,7 @@ describe("collapseFixed", () => {
     expect(fixed).toHaveLength(2);
     // Key ascending: "0:…" < "1:…"
     expect(fixed.map((r) => r.id)).toEqual([2, 3]);
-    expect(fixed[0].deltaKey).toBe("0.1000");
+    expect(fixed[0]!.deltaKey).toBe("0.1000");
   });
 });
 
@@ -170,7 +170,7 @@ describe("IncrementalTraceProjection", () => {
       epoch,
       startSequence: all.length - visible.length,
       endSequence: all.length,
-      get: (index) => visible[index],
+      get: (index) => visible[index]!,
     };
   }
 

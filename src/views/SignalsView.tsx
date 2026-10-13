@@ -673,7 +673,7 @@ export function SignalsView() {
               title={paused ? "Resume plotting" : "Pause plotting"}
               testId="plotter-pause-btn"
               pressed={paused}
-              glyphColor={paused ? "var(--warning)" : undefined}
+              {...(paused ? { glyphColor: "var(--warning)" } : {})}
               onClick={() => setPaused((v) => !v)}
             >
               {paused ? <PlayArrowIcon /> : <PauseIcon />}

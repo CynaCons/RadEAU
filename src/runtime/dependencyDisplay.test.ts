@@ -133,8 +133,8 @@ describe("dependencyDisplay row model", () => {
     expect(liveCapturePlatform(windowsRows)).toBe("windows");
 
     const linuxRows: DependencyRow[] = [
-      { ...windowsRows[0], status: "not-applicable", version: null, path: null },
-      { ...windowsRows[1], status: "missing" },
+      { ...windowsRows[0]!, status: "not-applicable", version: null, path: null },
+      { ...windowsRows[1]!, status: "missing" },
     ];
     expect(liveCaptureDependency(linuxRows)?.id).toBe("libpcap");
     expect(liveCapturePlatform(linuxRows)).toBe("linux");

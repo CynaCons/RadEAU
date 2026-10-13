@@ -69,4 +69,32 @@ describe("useStoreSelector", () => {
     expect(renders).toBe(2);
     await act(async () => root.unmount());
   });
+
+  it("freezes while inactive and catches up once on reactivation", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const store = new Store({ running: false, stats: 0 });
+    let renders = 0;
+    let active = true;
+    let seen = false;
+    function Probe() {
+      renders += 1;
+      seen = useStoreSelector(store, (s) => s.running, Object.is, active);
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => store.set({ running: false, stats: 1 }));
+    expect(renders).toBe(1);
+    active = false;
+    await act(async () => root.render(createElement(Probe)));
+    const inactiveRenders = renders;
+    await act(async () => store.set({ running: true, stats: 2 }));
+    expect(renders).toBe(inactiveRenders);
+    expect(seen).toBe(false);
+    active = true;
+    await act(async () => root.render(createElement(Probe)));
+    expect(renders).toBe(inactiveRenders + 1);
+    expect(seen).toBe(true);
+    await act(async () => root.unmount());
+  });
 });

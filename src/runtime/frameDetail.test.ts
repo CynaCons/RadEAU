@@ -91,11 +91,11 @@ describe("formatHexDump", () => {
     const rows = formatHexDump(SOMEIP_DETAIL.bytes, SOMEIP_DETAIL.payloadOffset, SOMEIP_DETAIL.wireLen);
     expect(rows).not.toBeNull();
     expect(rows!.length).toBe(2);
-    expect(rows![0].offsetLabel).toBe("002A");
-    expect(rows![0].hex.split(" ")).toHaveLength(16);
-    expect(rows![0].hex).toMatch(/^[0-9A-F]{2}( [0-9A-F]{2}){15}$/);
-    expect(rows![1].offsetLabel).toBe("003A");
-    expect(rows![1].hex.split(" ").length).toBeLessThanOrEqual(16);
+    expect(rows![0]!.offsetLabel).toBe("002A");
+    expect(rows![0]!.hex.split(" ")).toHaveLength(16);
+    expect(rows![0]!.hex).toMatch(/^[0-9A-F]{2}( [0-9A-F]{2}){15}$/);
+    expect(rows![1]!.offsetLabel).toBe("003A");
+    expect(rows![1]!.hex.split(" ").length).toBeLessThanOrEqual(16);
   });
 
   it("omits the dump when payloadOffset == wireLen", () => {

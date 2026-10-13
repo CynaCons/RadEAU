@@ -693,13 +693,13 @@ export function srcAddrKey(sa: number, sm: number): number {
  * Computed once in projectRow and stored on TraceFrame.key.
  */
 export function frameKey(batch: FrameBatchRaw, k: number): string {
-  const p = batch.p[k];
-  const sv = batch.sv[k];
-  const m = batch.m[k];
-  const ty = batch.ty[k];
-  const sa = batch.sa[k];
-  const da = batch.da[k];
-  const sm = batch.sm[k];
+  const p = batch.p[k]!;
+  const sv = batch.sv[k]!;
+  const m = batch.m[k]!;
+  const ty = batch.ty[k]!;
+  const sa = batch.sa[k]!;
+  const da = batch.da[k]!;
+  const sm = batch.sm[k]!;
   const addr = srcAddrKey(sa, sm);
   switch (p) {
     case PROTO_SOMEIP:
@@ -723,7 +723,7 @@ export function frameKey(batch: FrameBatchRaw, k: number): string {
       if (isDoipDiagnostic(ty)) {
         // The response travels target→source; order the pair so both
         // directions of one UDS exchange share the live row.
-        const se = batch.se[k];
+        const se = batch.se[k]!;
         const lo = Math.min(sv, m);
         const hi = Math.max(sv, m);
         return `10:${lo}<>${hi}:${se < 0 ? "x" : se & ~0x40}`;
@@ -848,7 +848,7 @@ function payloadPreview(pb: readonly number[], wireLen: number, po: number): str
   if (shown === 0) return "--";
   let out = "";
   for (let j = 0; j < shown; j += 1) {
-    out += pb[j].toString(16).toUpperCase().padStart(2, "0") + (j < shown - 1 ? " " : "");
+    out += pb[j]!.toString(16).toUpperCase().padStart(2, "0") + (j < shown - 1 ? " " : "");
   }
   return out + (payloadLen > shown ? " …" : "");
 }
@@ -944,7 +944,7 @@ function classDisplay(
       return {
         protocol,
         serviceMethod: diag ? `${hex4(sv)} → ${hex4(m)}` : "--",
-        name: DOIP_TYPE_NAMES[ty] ?? DOIP_TYPE_NAMES[DOIP_TY_OTHER],
+        name: DOIP_TYPE_NAMES[ty] ?? DOIP_TYPE_NAMES[DOIP_TY_OTHER]!,
         type: diag ? udsTypeLabel(se) : "--",
       };
     }
@@ -1140,24 +1140,24 @@ export function projectRow(
   prevT: number | null,
   lastByKey: Map<string, number>,
 ): TraceFrame {
-  const idx = batch.i[k];
-  const t = batch.t[k];
-  const dir = dirOf(batch.d[k]);
-  const srcEp = batch.s[k];
+  const idx = batch.i[k]!;
+  const t = batch.t[k]!;
+  const dir = dirOf(batch.d[k]!);
+  const srcEp = batch.s[k]!;
   const ep = resolveEndpoint(srcEp);
   const source = ep.label;
   const sourceTitle = ep.title;
-  const proto = batch.p[k];
-  const sv = batch.sv[k];
-  const m = batch.m[k];
-  const ty = batch.ty[k];
-  const se = batch.se[k];
-  const len = batch.l[k];
-  const sa = batch.sa[k];
-  const da = batch.da[k];
-  const sm = batch.sm[k];
-  const vl = batch.vl[k];
-  const po = batch.po[k];
+  const proto = batch.p[k]!;
+  const sv = batch.sv[k]!;
+  const m = batch.m[k]!;
+  const ty = batch.ty[k]!;
+  const se = batch.se[k]!;
+  const len = batch.l[k]!;
+  const sa = batch.sa[k]!;
+  const da = batch.da[k]!;
+  const sm = batch.sm[k]!;
+  const vl = batch.vl[k]!;
+  const po = batch.po[k]!;
   const key = frameKey(batch, k);
 
   const { protocol, serviceMethod, name, type } = classDisplay(
@@ -1186,7 +1186,7 @@ export function projectRow(
     // DoIP / §7 classes reuse `se` for a secondary id; Session stays blank.
     session: sessionIsSecondary(proto) || se < 0 ? "--" : String(se),
     length: String(len),
-    payload: payloadPreview(batch.pb[k], len, po),
+    payload: payloadPreview(batch.pb[k]!, len, po),
     deltaGlobal: prevT === null ? "--" : (t - prevT).toFixed(4),
     deltaKey: lastByKey.get(key) === undefined ? "--" : (t - (lastByKey.get(key) as number)).toFixed(4),
     channel: "1",

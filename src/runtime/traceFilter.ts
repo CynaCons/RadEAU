@@ -166,7 +166,7 @@ export function applyFilter(
   if (!isFilterActive(f)) return rows;
   const out: TraceFrame[] = [];
   for (let i = 0; i < rows.length; i += 1) {
-    const row = isTraceRows(rows) ? rows.get(i) : rows[i];
+    const row = isTraceRows(rows) ? rows.get(i) : rows[i]!;
     if (matches(row, f)) out.push(row);
   }
   return out;
@@ -192,7 +192,7 @@ export function distinctValues(
 ): TraceFilterOption[] {
   const counts = new Map<string, { label: string; count: number }>();
   for (let i = 0; i < rows.length; i += 1) {
-    const row = isTraceRows(rows) ? rows.get(i) : rows[i];
+    const row = isTraceRows(rows) ? rows.get(i) : rows[i]!;
     let key: string;
     let label: string;
     switch (column) {

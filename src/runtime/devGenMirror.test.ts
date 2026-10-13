@@ -50,7 +50,7 @@ describe("DevGenMirror", () => {
     }
     const fused = rows.filter((r) => r.svc === 0x1201 && r.session >= 0);
     for (let j = 1; j < fused.length; j += 1) {
-      expect(fused[j].session).toBe(fused[j - 1].session + 1);
+      expect(fused[j]!.session).toBe(fused[j - 1]!.session + 1);
     }
   });
 
@@ -118,12 +118,12 @@ describe("projectMirrorBatch", () => {
       expect(batch[key]).toHaveLength(50);
     }
     expect(batch.pb).toHaveLength(50);
-    expect(batch.i[0]).toBe(rows[0].idx);
-    expect(batch.t[49]).toBeCloseTo(rows[49].tS, 10);
+    expect(batch.i[0]).toBe(rows[0]!.idx);
+    expect(batch.t[49]).toBeCloseTo(rows[49]!.tS, 10);
     expect(batch.d.every((d) => d === DIR_RX || d === DIR_TX)).toBe(true);
-    expect(batch.ty.some((t, i) => rows[i].proto === PROTO_SOMEIP && t === SOMEIP_TY_NOTIFICATION)).toBe(
+    expect(batch.ty.some((t, i) => rows[i]!.proto === PROTO_SOMEIP && t === SOMEIP_TY_NOTIFICATION)).toBe(
       true,
     );
-    expect(batch.po.some((po, i) => rows[i].proto === PROTO_GPTP && po === 14)).toBe(true);
+    expect(batch.po.some((po, i) => rows[i]!.proto === PROTO_GPTP && po === 14)).toBe(true);
   });
 });

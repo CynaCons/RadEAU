@@ -53,6 +53,7 @@ export function collapseFixed(
   const byKey = new Map<string, TraceFrame>();
   for (let i = 0; i < rows.length; i += 1) {
     const row = isTraceRows(rows) ? rows.get(i) : rows[i];
+    if (row === undefined) continue;
     byKey.set(fixedDisplayKey(row), row);
   }
   const entries = Array.from(byKey.entries());
@@ -101,7 +102,7 @@ export function projectDisplayRows(
     return windowSequential(rows, historyWindow);
   }
   if (mode === "fixed") {
-    return collapseFixed(applyFilter(rows, filter) as TraceFrame[], pinned);
+    return collapseFixed(applyFilter(rows, filter), pinned);
   }
   return windowSequentialFiltered(rows, historyWindow, filter, opts);
 }

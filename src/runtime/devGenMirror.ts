@@ -131,11 +131,11 @@ export class DevGenMirror {
 
   private genSomeipEvent(): MirrorRow {
     const k = this.idx % SERVICES.length;
-    const s = SERVICES[k];
+    const s = SERVICES[k]!;
     const payloadLen = s.baseLen + Math.floor(this.rng() * 4) * 8;
     // Wire length: Eth(14) + IPv4(20) + UDP(8) + payload.
     const wireLen = 42 + payloadLen;
-    this.sessions[k] += 1;
+    this.sessions[k]! += 1;
     const sa = endpointIp(s.srcEp);
     const row: MirrorRow = {
       idx: this.idx,
@@ -146,7 +146,7 @@ export class DevGenMirror {
       svc: s.svc,
       method: s.method,
       msgType: SOMEIP_TY_NOTIFICATION,
-      session: this.sessions[k],
+      session: this.sessions[k]!,
       wireLen,
       sa,
       da: endpointIp(4), // fusion as a stand-in destination
@@ -160,7 +160,7 @@ export class DevGenMirror {
   }
 
   private genSdOffer(): MirrorRow {
-    const s = SERVICES[this.sdCycle % SERVICES.length];
+    const s = SERVICES[this.sdCycle % SERVICES.length]!;
     this.sdCycle += 1;
     const wireLen = 42 + 36;
     const row: MirrorRow = {

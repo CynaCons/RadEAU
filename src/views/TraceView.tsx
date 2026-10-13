@@ -648,7 +648,7 @@ function TraceTableRegion(
                   // Constant 32 px rows (VU-012) — no per-row measurement — except
                   // while a dissection row is open and must grow.
                   defaultItemHeight={32}
-                  fixedItemHeight={tableBase.expansion === null ? 32 : undefined}
+                  {...(tableBase.expansion === null ? { fixedItemHeight: 32 } : {})}
                   components={tableComponents}
                   fixedHeaderContent={fixedHeaderContent}
                   itemContent={rowContent}

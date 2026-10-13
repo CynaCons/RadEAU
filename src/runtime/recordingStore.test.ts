@@ -154,7 +154,7 @@ describe("RecordingStore", () => {
       startedMs: null,
     });
     await vi.waitFor(() => expect(store.getSnapshot().list).toHaveLength(1));
-    expect(store.getSnapshot().list[0].bytes).toBe(4096);
+    expect(store.getSnapshot().list[0]!.bytes).toBe(4096);
   });
 
   it("setDir commits and surfaces rejection while active", async () => {
@@ -177,7 +177,6 @@ describe("RecordingStore", () => {
     ];
     await store.refreshList();
     expect(store.getSnapshot().list).toHaveLength(2);
-    expect(store.getSnapshot().list[0].path).toBe("/a.pcap");
+    expect(store.getSnapshot().list[0]!.path).toBe("/a.pcap");
   });
 });
-

@@ -73,7 +73,6 @@ import {
 } from "../runtime/desktop";
 import { sessionStore } from "../runtime/sessionStore";
 import { shallowEqual, useStoreSelector } from "../runtime/useStoreSelector";
-import { useActiveStoreSelector } from "../components/useActiveStoreSelector";
 import { useViewActive, useViewLifecycle } from "../shell/viewLifecycle";
 
 // ── Local state for groups not yet wired to the core (PRD §6). ──
@@ -208,13 +207,12 @@ export function SettingsView() {
   useViewLifecycle("settings", {});
   const active = useViewActive("settings");
   const desktop = isDesktop();
-  const session = useActiveStoreSelector(
-    active,
+  const session = useStoreSelector(
     sessionStore,
     ({ running, sourceKind, simAddr, pcapPath, pcapPace, pcapStreamAddr, liveInterfaceId, liveFilter, lastError }) =>
       ({ running, sourceKind, simAddr, pcapPath, pcapPace, pcapStreamAddr, liveInterfaceId, liveFilter, lastError }),
-    sessionStore.getSnapshot(),
     shallowEqual,
+    active,
   );
   const appInfo = useStoreSelector(appInfoStore, (snapshot) => snapshot.info);
   const controlsLocked = sourceControlsDisabled(session.running);

@@ -22,8 +22,7 @@ import {
   NETWORK_EMPTY,
 } from "../runtime/networkDisplay";
 import { sessionStore } from "../runtime/sessionStore";
-import { shallowEqual } from "../runtime/useStoreSelector";
-import { useActiveStoreSelector } from "../components/useActiveStoreSelector";
+import { shallowEqual, useStoreSelector } from "../runtime/useStoreSelector";
 import { useViewActive, useViewLifecycle } from "../shell/viewLifecycle";
 
 const MONO = {
@@ -32,7 +31,7 @@ const MONO = {
 } as const;
 
 function NetworkStatsChips(props: { active: boolean }) {
-  const rawStats = useActiveStoreSelector(props.active, sessionStore, (snapshot) => snapshot.stats, null);
+  const rawStats = useStoreSelector(sessionStore, (snapshot) => snapshot.stats, Object.is, props.active);
   if (!rawStats) return null;
   const snapshot = sessionStore.getSnapshot();
   const stats = connectionPanelModel({ ...snapshot, stats: rawStats }).stats;
@@ -54,7 +53,7 @@ function NetworkStatsChips(props: { active: boolean }) {
 }
 
 function NetworkStatsDetails(props: { active: boolean }) {
-  const rawStats = useActiveStoreSelector(props.active, sessionStore, (snapshot) => snapshot.stats, null);
+  const rawStats = useStoreSelector(sessionStore, (snapshot) => snapshot.stats, Object.is, props.active);
   if (!rawStats) return null;
   const stats = connectionPanelModel({ ...sessionStore.getSnapshot(), stats: rawStats }).stats;
   if (!stats) return null;
@@ -73,13 +72,12 @@ function NetworkStatsDetails(props: { active: boolean }) {
 export function NetworkView() {
   useViewLifecycle("network", {});
   const active = useViewActive("network");
-  const session = useActiveStoreSelector(
-    active,
+  const session = useStoreSelector(
     sessionStore,
     ({ running, sourceKind, simAddr, pcapPath, pcapStreamAddr, liveInterfaceId, linkStatus, sessionInfo }) =>
       ({ running, sourceKind, simAddr, pcapPath, pcapStreamAddr, liveInterfaceId, linkStatus, sessionInfo }),
-    sessionStore.getSnapshot(),
     shallowEqual,
+    active,
   );
   const model = useMemo(
     () =>

@@ -91,9 +91,9 @@ export function TraceDetailBody(props: {
       {state.status === "ready" ? (
         <ReadyDetail
           detail={state.detail}
-          showCapturedIdx={showCapturedIdx}
-          collapsedLayers={collapsedLayers}
-          onToggleLayer={onToggleLayer}
+          {...(showCapturedIdx === undefined ? {} : { showCapturedIdx })}
+          {...(collapsedLayers === undefined ? {} : { collapsedLayers })}
+          {...(onToggleLayer === undefined ? {} : { onToggleLayer })}
         />
       ) : null}
     </Box>
@@ -473,7 +473,7 @@ export function TraceDetailPanel(props: {
     <TraceDetailBody
       idx={idx}
       state={state}
-      showCapturedIdx={showCapturedIdx}
+      {...(showCapturedIdx === undefined ? {} : { showCapturedIdx })}
       collapsedLayers={collapsedLayers}
       onToggleLayer={(n) => {
         setCollapsedLayers((prev) => {

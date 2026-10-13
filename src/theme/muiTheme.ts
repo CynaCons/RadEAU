@@ -10,7 +10,8 @@ import tokensJson from "./tokens.json";
  */
 
 export const color = tokensJson.color as Record<string, string>;
-const fontUi = tokensJson.font.ui as string;
+const token = (name: string): string => color[name]!;
+const fontUi = tokensJson.font.ui;
 // The series palette (tokens.series) is consumed via CSS vars until the chart
 // engine lands in v0.2; re-export from here when a TS consumer appears.
 
@@ -18,19 +19,19 @@ export const muiTheme = createTheme({
   palette: {
     mode: "dark",
     background: {
-      default: color["surface-canvas"],
-      paper: color["surface-raised"],
+      default: token("surface-canvas"),
+      paper: token("surface-raised"),
     },
-    primary: { main: color["accent-primary"], dark: color["accent-primary-dark"] },
-    secondary: { main: color["accent-secondary"], dark: color["accent-secondary-dark"] },
-    info: { main: color["info"], dark: color["info-dark"] },
-    success: { main: color["success"], dark: color["success-dark"] },
-    warning: { main: color["warning"], dark: color["warning-dark"] },
-    error: { main: color["error"], dark: color["error-dark"] },
-    divider: color["border"],
+    primary: { main: token("accent-primary"), dark: token("accent-primary-dark") },
+    secondary: { main: token("accent-secondary"), dark: token("accent-secondary-dark") },
+    info: { main: token("info"), dark: token("info-dark") },
+    success: { main: token("success"), dark: token("success-dark") },
+    warning: { main: token("warning"), dark: token("warning-dark") },
+    error: { main: token("error"), dark: token("error-dark") },
+    divider: token("border"),
     text: {
-      primary: color["text-primary"],
-      secondary: color["text-secondary"],
+      primary: token("text-primary"),
+      secondary: token("text-secondary"),
     },
   },
   typography: {
