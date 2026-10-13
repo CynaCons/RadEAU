@@ -186,13 +186,44 @@ other unsupported data link is refused with a diagnostic naming it.
 
 | ID | Requirement | Priority | Status | Acceptance criteria |
 |---|---|---|---|---|
-| CP-014 | While the record switch is armed, every frame the reader classifies is appended to a classic pcap file (ns magic, link type 1, absolute timestamps from the session epoch) by a dedicated writer thread fed by a bounded queue (8,192 frames, drop-oldest, counted) with a 256 KB / 2 s flush discipline; the reader never blocks on disk | Must | Verified | A 60 s simulator session records a file that replays through the pcap source with the same frame count as `capture:stats.received` minus `recordingDropped` |
-| CP-015 | Recording is a sub-state of a running session: arming while stopped stores the intent and starts the file with the next session; stopping the session closes the file; the file name is `radeau-<session start yyyyMMdd-HHmmss>.pcap` in the recordings directory (Settings › Recording, default the platform documents dir / RadEAU); the app-bar indicator shows `error` only while bytes are actually being written | Must | Verified | Indicator color follows real writes; a write failure surfaces as an inline alert and disarms recording |
+| CP-014 | While the record switch is armed, every frame the reader classifies is appended to a classic pcap file (ns magic, link type 1, absolute timestamps from the session epoch) by a dedicated writer thread fed by a bounded queue (8,192 frames, drop-oldest, counted) with a 256 KB / 2 s flush discipline; the reader never blocks on disk | Must | Superseded (by CP-017) | A 60 s simulator session records a file that replays through the pcap source with the same frame count as `capture:stats.received` minus `recordingDropped` |
+| CP-015 | Recording is a sub-state of a running session: arming while stopped stores the intent and starts the file with the next session; stopping the session closes the file; the file name is `radeau-<session start yyyyMMdd-HHmmss>.pcap` in the recordings directory (Settings › Recording, default the platform documents dir / RadEAU); the app-bar indicator shows `error` only while bytes are actually being written | Must | Superseded (by CP-018) | Indicator color follows real writes; a write failure surfaces as an inline alert and disarms recording |
 | CP-016 | `capture:stats` gains `recordingFrames`, `recordingBytes`, `recordingDropped`; the Recorder view's Record panel shows the active path, frames and bytes live and lists this session's recordings when stopped (true files only) | Must | Verified | E2E: arm, run the sim 5 s, stop → a file exists whose size matches `recordingBytes`; the Recorder list shows it |
 
-Recording writes pcap (not the v0.6 JSONL format) because it is the format the
-bench engineer can open anywhere; the JSONL recording with decoded names and
-the replay worker stay in v0.6. Commands: `recording_arm(bool)`,
+Recording writes pcap because it is the format the bench engineer can open
+anywhere; §8 moves it to pcapng (decision D10) and §9 adds the replay
+transport. Commands: `recording_arm(bool)`,
 `recording_dir_set(path)`, `recording_list() → [{path, bytes, frames,
 startedMs}]`; events: `recording:state {armed, active, path, frames, bytes,
 dropped, error}`.
+
+## 8. pcapng recordings (CP-017..019; decision D10)
+
+| ID | Requirement | Priority | Status | Acceptance criteria |
+|---|---|---|---|---|
+| CP-017 | While recording, every frame the reader classifies is appended to a **pcapng** file by a dedicated writer thread fed by a bounded queue (8,192 frames, drop-oldest, counted) with a 256 KB / 2 s flush discipline; the reader never blocks on disk. The file holds one Section Header Block (`shb_userappl` = `RadEAU <version>`, a comment with source kind, source detail, session start in UTC RFC 3339, timestamp source, and scenario/seed when known), one Interface Description Block per source (link type 1, `if_tsresol` 9, `if_name` = source label) and one Enhanced Packet Block per frame (ns timestamp, captured and original length, `epb_flags` inbound/outbound when the direction is known) | Must | Planned | A simulator session records a file that `tshark -r` reads with zero errors and that replays through the pcap source with `capture:stats.received − recordingDropped` frames |
+| CP-018 | Recording is a sub-state of a running session: arming while stopped stores the intent and opens the file with the next session; arming while running opens a file immediately; disarming or stopping closes it. Names are `radeau-<session start yyyyMMdd-HHmmss>.pcapng`, and a file is rotated to `…-001.pcapng`, `…-002.pcapng` when it reaches the rotation size (default 512 MiB, Settings › Recording) — each rotated file is a complete pcapng. The indicator shows `error` only while bytes are being written; a write failure surfaces inline and disarms | Must | Planned | Arm/disarm mid-session produce a closed, valid file; a rotation size of 1 MiB over a stress session yields several valid files whose frame counts sum to the recorded total |
+| CP-019 | The EPB timestamp is the session's network timestamp at ns resolution — simulator switch time, NIC capture time, or the original record time when the session itself replays a file — so replaying a recording reproduces every frame's timestamp exactly (PT-008) | Must | Planned | Record a simulator session, replay the file: per-frame timestamps and wire bytes are identical |
+
+## 9. Replay transport (CP-020..023)
+
+A replay is a capture session whose source is a pcap/pcapng file; it emits
+through the same batch path, ring and recording rules as live capture, with
+transport control on top.
+
+| ID | Requirement | Priority | Status | Acceptance criteria |
+|---|---|---|---|---|
+| CP-020 | Opening a file for replay (`replay_open(path)`) prepares it in one bounded pass off the UI thread: metadata `{path, frames, firstTsNs, lastTsNs, durationNs, interfaces, comment}` and a sparse seek index (one checkpoint per 5,000 frames: byte offset, timestamp, frame number); memory is O(frames / 5,000); progress events for large files | Must | Planned | A 100k-frame fixture opens with frames, duration and 20 checkpoints; a truncated file reports its cut like CP-002 |
+| CP-021 | Transport: `replay_play`, `replay_pause`, `replay_step` (exactly one frame while paused), `replay_seek(tNs)`, `replay_set_speed(x)` with x ∈ {0.1, 0.25, 0.5, 1, 2, 5, 10} or `max`; pacing runs against an absolute schedule anchored at (wall clock, file time) and re-anchored on every play, speed change and seek — no accumulated drift; sleeps cap at 50 ms so commands apply within 50 ms; `max` never drops (CP-004) | Must | Planned | At 1× a 5 s fixture plays in 5 s ± 2%; at 10× in 0.5 s ± 10%; pause holds the frame count steady; step adds exactly one row |
+| CP-022 | Seek binary-searches the index to the checkpoint at or before the target, skips forward to the target without emitting, clears the UI trace and the core frame ring (one `replay:seek {tNs, frame}` event), then continues in the current state (playing or paused) | Must | Planned | Seek to the middle of a fixture: the first row after the seek is the first frame at or after the target; no earlier frame is emitted |
+| CP-023 | `replay:position {state: playing \| paused \| ended, tNs, frame, frames, durationNs, speed}` is emitted at ≈10 Hz while playing and immediately on play, pause, step, seek, speed change and end | Must | Planned | Position events arrive at 8–12 Hz at 1×; one event follows each transport command within 100 ms |
+
+## 10. Decoded JSONL export (CP-024)
+
+| ID | Requirement | Priority | Status | Acceptance criteria |
+|---|---|---|---|---|
+| CP-024 | `export_jsonl(path, from)` writes one JSON object per frame — `{idx, tNs, dir, len, protocol, name, type, key, layers: [{protocol, summary, fields: [{name, value}]}], payloadHex}`, the same dissection as `frame_detail`, catalog-decoded signals when a catalog is loaded — from the core frame ring (`from: "ring"`) or a recording file (`from: {file}`); a streaming buffered writer with bounded memory and `export:progress` events | Must | Planned | Export of the 5 s fixture yields one valid JSON line per frame whose protocol/name match the Trace rows and whose layers match `frame_detail` |
+
+Commands and events of §8–§10 are UI verbs and therefore also automation
+verbs (PRD §8.1): the MCP tools of PLAN v0.1.15 call exactly these.
+

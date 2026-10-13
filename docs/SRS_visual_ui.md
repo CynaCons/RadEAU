@@ -520,8 +520,12 @@ button, with the buffered frame count beside it). The Replay panel's
 source-path control opens a `.pcap` / `.pcapng` file (a recording from the
 list can be replayed the same way) and sets the Interface to the pcap source
 (SRS_capture §2) — replay for the bench prototype build, honest about being file
-playback through the capture path. The JSONL recording with decoded names
-and the paced replay worker remain v0.6.
+playback through the capture path. Recordings are pcapng (SRS_capture §8);
+opening a file for replay prepares it (`replay_open`, SRS_capture CP-020) and
+shows its frame count, duration and section comment under the path field;
+transport is the replay time bar (§5.9). A **Export decoded JSONL** action
+beside the pcap export writes the ring or the selected recording as decoded
+JSONL (SRS_capture CP-024).
 
 ### 5.4 Simulation
 
@@ -654,6 +658,14 @@ turns `info` when engaged, closed by a 1 px right rule with 16 px clearance; a
 flexible small slider bounded by the capture's timestamp range; and a small
 play/pause button that takes the `warning` tint while paused. Every disabled
 state here carries a tooltip naming the precondition.
+
+The bar drives the replay transport of SRS_capture §9: play/pause, a step
+button (one frame, enabled while paused), a speed select (0.1×–10×, max), and
+the slider seeks on release (dragging shows the target time without seeking).
+The position label and slider follow `replay:position`; at end of file the bar
+shows `ended` and play restarts from the beginning. The fast-analysis switch
+stays disabled with the tooltip "analysis arrives with trace analysis" until
+PLAN v0.1.16.
 
 ## 6. Chart visual specification
 
@@ -840,3 +852,4 @@ afford it.
 | VU-025 | Paint a startup overlay before framework mount and fade it over 220 ms after mount | Should | Verified | No frame between window creation and mount shows a blank window |
 | VU-026 | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | Must | Verified | Automated contrast check over the token set and all 16 series colors passes |
 | VU-027 | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a value they display changes — live counters re-render as isolated leaves at the stats rate | Must | Verified | Render-count unit test (stats republish does not re-render a non-stats component); perf: hidden views 0 commits/s, app bar ≤ 2/s |
+| VU-028 | While the session source is a replay file, a replay time bar (§5.9) shows position / duration, play/pause, single-step, speed (0.1×–10×, max) and a seek slider bound to the file's time range, all driven by `replay:position`; the bar is absent otherwise | Must | Planned | E2E: open the fixture, play at 10×, pause, step adds one row, seek to the middle updates the label and the first row |

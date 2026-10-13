@@ -1,6 +1,6 @@
 # D5 — IPC transport for frame batches
 
-Status: Accepted (provisional) · 2026-08-26
+Status: Accepted · 2026-08-26 (provisional) · confirmed 2026-10-13
 
 ## Context
 
@@ -31,3 +31,16 @@ a default that hardened by accident.
   user-visible update is one allocation, one copy across the boundary.
 - This record is updated from provisional to final, with the measured numbers,
   as part of the first frame consumer's definition of done.
+
+## Confirmation (2026-10-13, PLAN v0.1.13)
+
+The provisional binary transport is **replaced** by what shipped and was
+measured: one `frames:batch` Tauri event per batch carrying **columnar arrays
+of primitives as JSON** (SRS_streaming PF-001). Measured on the dev laptop:
+the core classifies, batches and serializes 1.05 M frames/s (release,
+117 bytes/frame); in the UI at 5,000 frames/s the dominant cost was React
+re-rendering (fixed by render discipline: script time 365 → 140 ms/s in the
+dev build), not JSON parsing. The owner chose to keep JSON (2026-10-12).
+Reopen only if a profile under line-rate load shows `JSON.parse` of batches
+as a top cost — then binary columns over a Tauri channel, same batch contract.
+

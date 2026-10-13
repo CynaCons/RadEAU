@@ -10,7 +10,7 @@ deleted. `scripts/check-req-ids.mjs` fails CI on duplicate definitions.
 
 | Prefix | Area | Owning document | Allocated | Next free |
 |---|---|---|---|---|
-| VU- | Visual and UI | SRS_visual_ui.md | 001–027 | 028 |
+| VU- | Visual and UI | SRS_visual_ui.md | 001–028 | 029 |
 | GR- | Graphing / engines | SRS_graphing.md | 001–008 | 009 |
 | ZM- | Zoom / interaction | SRS_graphing.md | 001–003 | 004 |
 | AS- | Autoscale | SRS_graphing.md | 001–004 | 005 |
@@ -24,7 +24,7 @@ deleted. `scripts/check-req-ids.mjs` fails CI on duplicate definitions.
 | NS- | Network simulator | SRS_ecu_netsim.md | 001–006 | 007 |
 | NV- | Network view | SRS_ecu_netsim.md | 001–004 | 005 |
 | TR- | Trace view | SRS_trace_view.md | 001–017 | 018 |
-| CP- | Capture sources and backends | SRS_capture.md | 001–016 | 017 |
+| CP- | Capture sources and backends | SRS_capture.md | 001–024 | 025 |
 
 ## E2E test numbers
 

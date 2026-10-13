@@ -7,7 +7,7 @@ modules, `scripts/e2e-*.mjs`). CI runs it with `--check`: Implemented and
 Verified requirements need an implementation trace; Verified ones also a test
 trace. Implemented-without-test is the open verification gap listed below.
 
-**140 requirements** — Implemented 6 · Planned 51 · Superseded 5 · Verified 78
+**149 requirements** — Implemented 6 · Planned 60 · Superseded 7 · Verified 76
 
 ## SRS_capture.md
 
@@ -18,7 +18,7 @@ trace. Implemented-without-test is the open verification gap listed below.
 | CP-003 | Verified | A pcap/pcapng record stream over TCP uses the same parser; backpressure is TCP flow control; end of stream … | `src-tauri/src/channel.rs` | `src-tauri/src/channel.rs` |
 | CP-004 | Verified | File replay never drops a frame: real-time pacing by record timestamps (50 ms sleep cap) or as-fast-as-poss… | `src-tauri/src/channel.rs` | `src-tauri/src/capture.rs`<br>`src-tauri/src/channel.rs` |
 | CP-005 | Verified | End of file/stream ends the session honestly: final stats, link `closed` with the detail `end of file · n f… | `src/runtime/captureSource.ts`<br>`src/runtime/sessionStore.ts` | `scripts/e2e-smoke.mjs`<br>`src-tauri/src/capture.rs`<br>`src/runtime/sessionStore.test.ts` |
-| CP-006 | Verified | Buffered-frame export writes the frame ring as classic pcap (ns magic, link type 1, absolute timestamps fro… | `crates/radeau-pcap/src/lib.rs`<br>`src/runtime/desktop.ts`<br>`src/runtime/ringExport.ts` | `crates/radeau-pcap/src/lib.rs`<br>`src-tauri/src/capture.rs` |
+| CP-006 | Verified | Buffered-frame export writes the frame ring as classic pcap (ns magic, link type 1, absolute timestamps fro… | `crates/radeau-pcap/src/lib.rs`<br>`src/runtime/desktop.ts`<br>`src/runtime/ringExport.ts` | `crates/radeau-pcap/src/lib.rs`<br>`src-tauri/src/capture.rs`<br>`src/runtime/ringExport.run.test.ts` |
 | CP-007 | Verified | The core writes `radeau.log` (JSONL, rotated) through a buffered writer thread; session lifecycle, link tra… | `src-tauri/src/log.rs`<br>`src/runtime/desktop.ts` | `src-tauri/src/log.rs` |
 | CP-008 | Verified | Read-only dependency probes report installed / missing / incompatible / blocked with version, path and an o… | `src-tauri/src/deps.rs`<br>`src-tauri/src/diag.rs`<br>`src/runtime/dependencyDisplay.ts`<br>`src/runtime/desktop.ts` | `scripts/e2e-smoke.mjs` |
 | CP-009 | Verified | Direction comes from pcapng EPB flags when present (inbound → Rx, outbound → Tx) and is `unknown` otherwise… | `crates/radeau-pcap/src/lib.rs`<br>`src-tauri/src/channel.rs`<br>`src/runtime/traceTime.ts` | `crates/radeau-pcap/src/lib.rs` |
@@ -26,9 +26,17 @@ trace. Implemented-without-test is the open verification gap listed below.
 | CP-011 | Verified | `capture_list_interfaces()` enumerates devices with stable ids (`\Device\NPF_{GUID}` / ifname), friendly de… | `crates/radeau-livecap/src/lib.rs`<br>`src/runtime/captureSource.ts`<br>`src/runtime/desktop.ts` | `crates/radeau-livecap/src/lib.rs`<br>`scripts/e2e-smoke.mjs`<br>`src-tauri/src/capture.rs` |
 | CP-012 | Verified | A live session opens promiscuous with snaplen 65,535, immediate mode, a 100 ms read timeout (so stop stays … | `crates/radeau-livecap/src/ffi.rs`<br>`crates/radeau-livecap/src/lib.rs`<br>`src-tauri/src/channel.rs`<br>`src/runtime/captureSource.ts` | `crates/radeau-livecap/src/lib.rs`<br>`scripts/e2e-smoke.mjs`<br>`src-tauri/src/channel.rs` |
 | CP-013 | Verified | Privilege and access failures (admin-restricted Npcap, missing CAP_NET_RAW on Linux, device busy) surface a… | `crates/radeau-livecap/src/lib.rs`<br>`src-tauri/src/channel.rs`<br>`src/runtime/captureSource.ts` | `crates/radeau-livecap/src/lib.rs`<br>`scripts/e2e-smoke.mjs` |
-| CP-014 | Verified | While the record switch is armed, every frame the reader classifies is appended to a classic pcap file (ns … | `crates/radeau-pcap/src/lib.rs`<br>`src-tauri/src/recording.rs`<br>`src/runtime/captureSource.ts`<br>`src/runtime/desktop.ts`<br>`src/runtime/recordingStore.ts`<br>`src/views/RecorderView.tsx` | `scripts/e2e-smoke.mjs`<br>`src/runtime/desktop.browser.test.ts` |
-| CP-015 | Verified | Recording is a sub-state of a running session: arming while stopped stores the intent and starts the file w… | `src-tauri/src/recording.rs` | `scripts/e2e-smoke.mjs`<br>`src-tauri/src/recording.rs` |
+| CP-014 | Superseded | While the record switch is armed, every frame the reader classifies is appended to a classic pcap file (ns … | `crates/radeau-pcap/src/lib.rs`<br>`src-tauri/src/recording.rs`<br>`src/runtime/captureSource.ts`<br>`src/runtime/desktop.ts`<br>`src/runtime/recordingStore.ts`<br>`src/views/RecorderView.tsx` | `scripts/e2e-smoke.mjs`<br>`src/runtime/desktop.browser.test.ts`<br>`src/views/RecorderView.render.test.tsx` |
+| CP-015 | Superseded | Recording is a sub-state of a running session: arming while stopped stores the intent and starts the file w… | `src-tauri/src/recording.rs` | `scripts/e2e-smoke.mjs`<br>`src-tauri/src/recording.rs` |
 | CP-016 | Verified | `capture:stats` gains `recordingFrames`, `recordingBytes`, `recordingDropped`; the Recorder view's Record p… | `src-tauri/src/recording.rs`<br>`src/runtime/captureSource.ts` | `scripts/e2e-smoke.mjs`<br>`src-tauri/src/capture.rs`<br>`src-tauri/src/recording.rs` |
+| CP-017 | Planned | While recording, every frame the reader classifies is appended to a **pcapng** file by a dedicated writer t… | — | — |
+| CP-018 | Planned | Recording is a sub-state of a running session: arming while stopped stores the intent and opens the file wi… | — | — |
+| CP-019 | Planned | The EPB timestamp is the session's network timestamp at ns resolution — simulator switch time, NIC capture … | — | — |
+| CP-020 | Planned | Opening a file for replay (`replay_open(path)`) prepares it in one bounded pass off the UI thread: metadata… | — | — |
+| CP-021 | Planned | Transport: `replay_play`, `replay_pause`, `replay_step` (exactly one frame while paused), `replay_seek(tNs)… | — | — |
+| CP-022 | Planned | Seek binary-searches the index to the checkpoint at or before the target, skips forward to the target witho… | — | — |
+| CP-023 | Planned | `replay:position {state: playing \| paused \| ended, tNs, frame, frames, durationNs, speed}` is emitted at ≈1… | — | — |
+| CP-024 | Planned | `export_jsonl(path, from)` writes one JSON object per frame — `{idx, tNs, dir, len, protocol, name, type, k… | — | — |
 
 ## SRS_ecu_netsim.md
 
@@ -80,7 +88,7 @@ trace. Implemented-without-test is the open verification gap listed below.
 | NV-001 | Planned | Topology view: ECUs, offered services, subscription edges from passive observation | — | — |
 | NV-002 | Planned | SD monitor: per-service state machine with TTL countdown, correlated to Trace | — | — |
 | NV-003 | Planned | PTP status: sync tree and per-node offset/rate charts through the standard chart stack | — | — |
-| NV-004 | Verified | Until NV-001..003 ship, the Network view's Topology, SD monitor and PTP panels show honest empty states — n… | `src/runtime/networkDisplay.ts`<br>`src/views/NetworkView.tsx` | `src/runtime/networkDisplay.test.ts` |
+| NV-004 | Verified | Until NV-001..003 ship, the Network view's Topology, SD monitor and PTP panels show honest empty states — n… | `src/runtime/networkDisplay.ts`<br>`src/views/NetworkView.tsx` | `src/runtime/networkDisplay.test.ts`<br>`src/views/NetworkView.render.test.tsx` |
 
 ## SRS_graphing.md
 
@@ -135,13 +143,13 @@ trace. Implemented-without-test is the open verification gap listed below.
 | TR-004 | Verified | Sequential mode shows the last N matching rows (history window 10,000 / 50,000 / 200,000) in arrival order … | `src/runtime/traceDisplay.ts` | `scripts/e2e-smoke.mjs`<br>`src/runtime/traceDisplay.test.ts` |
 | TR-005 | Verified | Fixed-mode keys follow SRS_visual_ui §5.2 and SRS_protocols §7 per class (service/method; protocol + source… | `src/runtime/frameModel.ts` | `src/runtime/frameModel.test.ts` |
 | TR-006 | Verified | Δ global is the time since the previous row; Δ per key the time since the previous row of the same key | `src/runtime/frameModel.ts` | `src/runtime/traceStore.test.ts` |
-| TR-007 | Verified | Column filters (Service:Method, Name, Protocol, Direction) project over the untouched ring before the mode … | `src/runtime/traceFilter.ts` | `scripts/e2e-smoke.mjs`<br>`src/runtime/traceFilter.test.ts` |
+| TR-007 | Verified | Column filters (Service:Method, Name, Protocol, Direction) project over the untouched ring before the mode … | `src/runtime/traceFilter.ts` | `scripts/e2e-smoke.mjs`<br>`src/components/TraceFilterPopover.render.test.tsx`<br>`src/runtime/traceFilter.test.ts` |
 | TR-008 | Verified | While a filter is active a `Filtered · shown / total` chip shows and the empty state reads "No rows match t… | `src/views/TraceView.tsx` | `scripts/e2e-smoke.mjs` |
 | TR-009 | Verified | Pause stops display updates and stages up to 20,000 incoming rows (oldest dropped beyond) with a `Paused · … | `src/runtime/traceStore.ts` | `src/runtime/traceStore.test.ts` |
 | TR-010 | Verified | Clear empties the UI ring, the staged rows and the per-key delta state | `src/runtime/traceStore.ts` | `src/runtime/traceStore.test.ts` |
 | TR-011 | Verified | Any row expands to the protocol-layer dissection fetched on demand from the core (`frame_detail`), never fr… | `src/components/TraceDetailPanel.tsx` | `scripts/e2e-smoke.mjs` |
 | TR-012 | Verified | Time renders as session-relative seconds (4 decimals) or wall-clock when the session epoch is known; wall-c… | `src/runtime/traceTime.ts` | `src/runtime/traceTime.test.ts` |
-| TR-013 | Verified | Export writes the core's buffered frames as a pcap (default name `radeau-<session start>.pcap`) and is disa… | `src/runtime/ringExport.ts` | `src/runtime/ringExport.test.ts` |
+| TR-013 | Verified | Export writes the core's buffered frames as a pcap (default name `radeau-<session start>.pcap`) and is disa… | `src/runtime/ringExport.ts` | `src/runtime/ringExport.run.test.ts`<br>`src/runtime/ringExport.test.ts` |
 | TR-014 | Verified | Work per flush is proportional to the arrived batch: no flush rebuilds an array or projection over the whol… | `src/runtime/traceDisplay.ts` | `src/runtime/traceDisplay.test.ts` |
 | TR-015 | Verified | A flush re-renders only the table subtree; toolbar, chips and popovers re-render only when the values they … | `src/views/TraceView.tsx` | `scripts/e2e-perf.mjs`<br>`src/views/TraceView.render.test.tsx` |
 | TR-016 | Verified | While the Trace view is hidden it performs zero React commits; the ring keeps ingesting and the view shows … | `src/views/TraceView.tsx` | `scripts/e2e-perf.mjs`<br>`src/views/TraceView.render.test.tsx` |
@@ -158,7 +166,7 @@ trace. Implemented-without-test is the open verification gap listed below.
 | VU-005 | Planned | Assign a new series the first unused palette color, falling back to index modulo 16 | — | — |
 | VU-006 | Verified | Bundle both font stacks with the application | `src/main.tsx` | `src/theme/visualContract.test.ts` |
 | VU-007 | Implemented | Use tabular numerals in all numeric columns and live readouts | `src/views/TraceView.tsx` | — |
-| VU-008 | Verified | Run undecorated with an application-drawn title bar and drag region | `src/shell/AppTopBar.tsx` | `src/theme/visualContract.test.ts` |
+| VU-008 | Verified | Run undecorated with an application-drawn title bar and drag region | `src/shell/AppTopBar.tsx` | `src/shell/AppTopBar.render.test.tsx`<br>`src/theme/visualContract.test.ts` |
 | VU-009 | Verified | Default the window to 1440 × 900 and enforce a 1024 × 700 minimum | `src/shell/AppTopBar.tsx` | `src/theme/visualContract.test.ts` |
 | VU-010 | Implemented | Size the nav rail 65 px collapsed and 240 px expanded, labels hidden but present when collapsed | `src/shell/NavRail.tsx` | `src/shell/NavRail.test.tsx` |
 | VU-011 | Planned | Compute legend width from measured labels, clamped to [180, min(420, container − 320)] px | `src/views/SignalsView.tsx` | — |
@@ -177,7 +185,8 @@ trace. Implemented-without-test is the open verification gap listed below.
 | VU-024 | Planned | Show keyboard focus as a 2 px accent outline at 2 px offset on every interactive element | — | — |
 | VU-025 | Verified | Paint a startup overlay before framework mount and fade it over 220 ms after mount | `src/main.tsx` | `src/theme/visualContract.test.ts` |
 | VU-026 | Verified | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | `src/theme/muiTheme.ts` | `src/theme/tokens.test.ts` |
-| VU-027 | Verified | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a … | `src/shell/viewLifecycle.ts` | `src/views/TraceView.render.test.tsx` |
+| VU-027 | Verified | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a … | `src/shell/viewLifecycle.ts` | `src/shell/viewLifecycle.test.tsx`<br>`src/views/TraceView.render.test.tsx` |
+| VU-028 | Planned | While the session source is a replay file, a replay time bar (§5.9) shows position / duration, play/pause, … | — | — |
 
 ## Verification gap
 

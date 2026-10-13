@@ -280,12 +280,15 @@ appearance: [docs/SRS_visual_ui.md](docs/SRS_visual_ui.md) §6.
 
 ## 6. Recording, replay, analysis
 
-- **Recordings are JSONL** — one storage frame per line (payload as hex up to
-  the snap length): append-only, streamable, truncation-tolerant, byte-offset
-  addressable. The optional network timestamp (ns) is part of format v1.
-  Readers skip malformed lines and ignore unknown fields. Filenames = sortable
-  timestamp + sanitized task label. Recording is a sub-state of capture: armed
-  at session start, rejected during replay and in transmit-only mode.
+- **Recordings are pcapng** (decision D10, amending the original JSONL frame
+  recording): written by the core from the raw wire bytes, one Enhanced Packet
+  Block per frame whose ns timestamp is the network timestamp (simulator
+  switch time, NIC capture time), session metadata in the section comment,
+  opened unchanged by Wireshark. Filenames = sortable timestamp; size-based
+  rotation. Recording is a sub-state of capture (arming while running starts
+  a file immediately), rejected during replay. **JSONL** is the format of the
+  core event log and of the **decoded export** (one dissected frame per line)
+  that agents and grep read.
 - **Replay prepare** (blocking pool): metadata, sorted distinct-timestamp vector
   for the scrub bar, sparse seek index (1 checkpoint / 5,000 frames). Seek =
   binary search to the checkpoint, scan forward, rebuild the RX snapshot
