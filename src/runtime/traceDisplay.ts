@@ -184,6 +184,13 @@ export class IncrementalTraceProjection {
     if (filtered) this.dropEvictedMatches(base);
 
     if (mode === "sequential") {
+      // Keys are only read in Fixed mode; still drop evicted ones here so
+      // ephemeral flows cannot grow the table past the ring (TR-014).
+      if (this.latestByKey.size > rows.length) {
+        for (const [key, latest] of this.latestByKey) {
+          if (latest.sequence < base) this.latestByKey.delete(key);
+        }
+      }
       const window = historyWindow <= 0 ? 0 : historyWindow;
       if (!filtered) {
         const count = Math.min(rows.length, window);

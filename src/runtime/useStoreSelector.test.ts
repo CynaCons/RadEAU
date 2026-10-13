@@ -97,4 +97,20 @@ describe("useStoreSelector", () => {
     expect(seen).toBe(true);
     await act(async () => root.unmount());
   });
+
+  it("recomputes when the selector changes without a store publish (review R4b-2)", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const store = new Store({ a: 1, b: 2 });
+    let seen = 0;
+    function Probe({ field }: { field: "a" | "b" }) {
+      seen = useStoreSelector(store, (s) => s[field]);
+      return null;
+    }
+    const root = createRoot(document.createElement("div"));
+    await act(async () => root.render(createElement(Probe, { field: "a" })));
+    expect(seen).toBe(1);
+    await act(async () => root.render(createElement(Probe, { field: "b" })));
+    expect(seen).toBe(2);
+    await act(async () => root.unmount());
+  });
 });

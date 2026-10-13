@@ -14,6 +14,8 @@ import {
 // TR-001: bounded oldest-first ring and adaptive batch flush cadence.
 export const TRACE_RING_CAP = 200_000;
 const PAUSED_STAGING_CAP = 20_000;
+/** Bound on the Δ-per-key table: ephemeral flows must not grow it forever. */
+const LAST_BY_KEY_CAP = 65_536;
 const ADAPTIVE_FLUSH_THRESHOLD = 64;
 const FLUSH_FAST_MS = 50;
 const FLUSH_SLOW_MS = 100;
@@ -182,6 +184,11 @@ export class TraceStore {
         decoded.push(row);
         const t = batch.t[k]!;
         this.lastByKey.set(row.key, t);
+        if (this.lastByKey.size > LAST_BY_KEY_CAP) {
+          // Drop the oldest-inserted key; it only loses its previous Δ.
+          const oldest = this.lastByKey.keys().next().value;
+          if (oldest !== undefined) this.lastByKey.delete(oldest);
+        }
         prev = t;
       }
     }

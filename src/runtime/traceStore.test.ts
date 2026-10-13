@@ -256,4 +256,20 @@ describe("TraceStore", () => {
     expect(rows.get(4).deltaKey).toBe("0.2500");
     store.dispose();
   });
+
+  it("bounds the delta-per-key table across ephemeral keys (review R4b-7)", () => {
+    const store = new TraceStore(1_000);
+    const rows = Array.from({ length: 70_000 }, (_, j) => ({
+      idx: j,
+      t: j / 1000,
+      sv: j & 0xffff,
+      m: j >> 16,
+    }));
+    store.ingest(makeBatch(0, rows));
+    vi.advanceTimersByTime(50);
+    const internal = store as unknown as { lastByKey: Map<string, number> };
+    expect(internal.lastByKey.size).toBeLessThanOrEqual(65_536);
+    expect(store.getSnapshot().rows).toHaveLength(1_000);
+    store.dispose();
+  });
 });

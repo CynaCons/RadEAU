@@ -48,21 +48,22 @@ export function useStoreSelector<S, T>(
   isEqual: (a: T, b: T) => boolean = Object.is,
   active = true,
 ): T {
-  const selectorRef = useRef(selector);
-  selectorRef.current = selector;
-  const cache = useRef<{ snap: S; value: T } | null>(null);
+  // Cached by snapshot AND selector identity: a selector that changed (new
+  // props in its closure) recomputes even when the store did not publish.
+  const cache = useRef<{ snap: S; selector: (snapshot: S) => T; value: T } | null>(null);
 
   const getSelection = (): T => {
     const prev = cache.current;
     if (!active && prev !== null) return prev.value;
     const snap = store.getSnapshot();
-    if (prev !== null && prev.snap === snap) return prev.value;
-    const next = selectorRef.current(snap);
+    if (prev !== null && prev.snap === snap && prev.selector === selector) return prev.value;
+    const next = selector(snap);
     if (prev !== null && isEqual(prev.value, next)) {
       prev.snap = snap;
+      prev.selector = selector;
       return prev.value;
     }
-    cache.current = { snap, value: next };
+    cache.current = { snap, selector, value: next };
     return next;
   };
 

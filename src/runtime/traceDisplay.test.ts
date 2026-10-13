@@ -250,4 +250,29 @@ describe("IncrementalTraceProjection", () => {
     expect(internal.matching.length - internal.matchingHead).toBeLessThanOrEqual(capacity);
     expect(internal.matching.length).toBeLessThanOrEqual(capacity + 4_096 + 100);
   });
+
+  it("drops evicted keys in Sequential mode too (review R4b-6)", () => {
+    const projection = new IncrementalTraceProjection();
+    const capacity = 100;
+    const window: TraceFrame[] = [];
+    let total = 0;
+    for (let step = 0; step < 50; step += 1) {
+      for (let i = 0; i < 100; i += 1) {
+        total += 1;
+        // Every frame is a new flow key, like ephemeral UDP ports.
+        window.push(row({ id: total, protocol: "UDP", source: "a", key: `flow:${total}` }));
+      }
+      if (window.length > capacity) window.splice(0, window.length - capacity);
+      const rows: TraceRows = {
+        length: window.length,
+        epoch: 0,
+        startSequence: total - window.length,
+        endSequence: total,
+        get: (index) => window[index] as TraceFrame,
+      };
+      projection.project(rows, "sequential", new Set(), 200_000);
+    }
+    const internal = projection as unknown as { latestByKey: Map<string, unknown> };
+    expect(internal.latestByKey.size).toBeLessThanOrEqual(2 * capacity);
+  });
 });
