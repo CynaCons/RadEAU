@@ -5,6 +5,18 @@ All notable changes to RadEAU. Versions follow the iteration numbers in
 portable) and `RadEAU_<version>_amd64.AppImage` plus
 `RadEAU-<version>-linux-x64.tar.gz` (Linux), built by the release workflow.
 
+## Unreleased (v0.1.13 – v0.1.16)
+
+RadEAU becomes AI-first: an agent can drive everything the operator can and see every frame.
+
+### Highlights
+
+- **Agent access (MCP).** `radeau-mcp`, shipped next to `radeau`, is an MCP stdio server: an agent (Claude Code, Codex, any MCP client) starts and stops capture on any source, records, opens and replays recordings, queries the trace (filters, paging), fetches any frame's full dissection, gets statistics and analysis, and exports decoded JSONL. The app serves the matching loopback JSON-RPC endpoint (`127.0.0.1:5555`; a non-loopback bind requires a token and an allowlist). Everything an agent does shows in the UI — run control, record switch, replay bar — and an **Agent** chip marks a connected agent. See the README, "Agent access (MCP)".
+- **Trace analysis.** One bounded pass over the buffered trace or a recording: protocols, endpoints and conversations; SOME/IP per service/method with per-sender cadence (mean, p50, p99, jitter), gaps and request/response latency; SD offer lifecycles with reboot detection; gPTP Sync cadence and grandmaster; traffic bursts. Available to agents (`trace_analyze`, `service_summary`, `timing_report`) and in the Network view (**Analyze buffered trace**).
+- **pcapng recordings and a replay transport.** Recordings are pcapng (session metadata in the section comment, direction flags, network timestamps at ns resolution, size-based rotation, arm/disarm mid-session). Replays open with a seek index and play at 0.1×–10× or as fast as possible, with pause, single-step and seek from the replay time bar. Any recording or the buffered trace exports as decoded JSONL.
+- **Faster, leaner UI.** Hidden views do no work, only the Trace table follows the stream, and Trace ingestion and projection cost scales with what arrived instead of the 200,000-row history (Trace script time at 5,000 frames/s cut from 365 to 140 ms/s in the development build, long tasks gone). The core's frame path runs 26% faster with the same output. Performance budgets are enforced (`npm run test:perf`).
+- **Engineering base.** Strict TypeScript, ESLint, clippy (pedantic on the codec crates), rustfmt, cargo-deny (a quick-xml advisory fixed), an independent code review with every finding fixed or answered (`docs/reviews/v0.1.13-code-review.md`), coverage raised (UI 49% → 82%, core 75% → 81%), and requirement traceability enforced in CI (`docs/TRACEABILITY.md`, 168 requirements).
+
 ## v0.1.12 — 2026-08-30
 
 First published build.

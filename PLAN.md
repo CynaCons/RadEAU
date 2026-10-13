@@ -97,14 +97,14 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Agent mirroring in the UI: agent-connected indicator, actions reflected in session/recorder state, agent commands in the event log [agent: claude]
 - [x] E2E: scripted MCP client captures from netsim, records, replays, seeks and queries; answers checked against the trace [agent: claude]
 
-### v0.1.16 — Trace analysis — for agents and the UI (current) (ACTIVE)
+### v0.1.16 — Trace analysis — for agents and the UI (2026-10-13 — fixture within 1%; E2E agent analysis 32.99 ms; Network snapshot) (COMPLETE)
 **Goal:** Give agents answers, not just rows: one-pass analytics over the live ring or a recording file, exposed as MCP tools and in the UI. The signal-array analysis mode for charts (PRD §6) stays with graphing.
-- [ ] One-pass analytics engine over the ring or a recording file (blocking pool, bounded memory): per-protocol and per-endpoint statistics, conversations
-- [ ] SOME/IP service/method summaries, request/response latency, cyclic event period + jitter, gaps and bursts
-- [ ] SD lifecycle summary (offers, subscriptions, TTL expiry, reboots) and PTP sync summary
-- [ ] MCP analysis tools: trace_analyze, service_summary, timing_report — over live or recorded traces
-- [ ] Analysis panel in the UI showing the same reports
-- [ ] E2E: analysis of a netsim recording with known schedules matches the expected periods, latencies and counts
+- [x] One-pass analytics engine over the ring or a recording file (blocking pool, bounded memory): per-protocol and per-endpoint statistics, conversations [agent: claude]
+- [x] SOME/IP service/method summaries, request/response latency, cyclic event period + jitter, gaps and bursts [agent: claude]
+- [x] SD lifecycle summary (offers, subscriptions, TTL expiry, reboots) and PTP sync summary [agent: claude]
+- [x] MCP analysis tools: trace_analyze, service_summary, timing_report — over live or recorded traces [agent: claude]
+- [x] Analysis panel in the UI showing the same reports [agent: claude]
+- [x] E2E: analysis of a netsim recording with known schedules matches the expected periods, latencies and counts [agent: claude]
 
 ## v0.2 — Graphing
 
