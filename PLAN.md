@@ -73,20 +73,20 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] Tests: coverage reports (cargo llvm-cov, vitest coverage) and gaps closed on the hot path and the runtime stores [agent: claude]
 - [x] ASPICE traceability: generated requirement → implementation → test matrix from the SRS docs, a CI check that every requirement has a Status and a test, orphan code and requirements flagged; missing specs written (SRS_trace_view TR-) and SRS rows amended to match the shipped software [agent: claude]
 
-### v0.1.14 — Recording + replay — pcapng recordings, paced replay with transport controls (current) (ACTIVE)
+### v0.1.14 — Recording + replay — pcapng recordings, paced replay with transport controls (2026-10-13 — E2E records pcapng + replays (pause/step/seek/max) green; perf gate green) (COMPLETE)
 **Goal:** Recording and replay pulled forward from v0.6.0. Recordings are pcapng written by the Rust core from raw frame bytes (decision D10, amending PRD §6 JSONL frames; JSONL stays the event-log format and an on-demand decoded export). Replay paces against an absolute schedule with seek, speed and step, through the same pipeline as live capture.
-- [ ] Decision D10 recorded (pcapng for frame recordings, JSONL for the event log and decoded export) + PRD §6 and SRS_capture amended
-- [ ] pcapng writer on the existing buffered recorder thread: section/interface blocks per source, ns timestamps, session metadata in comments; start/stop mid-session; size/time rotation; sanitized timestamped names
-- [ ] Replay prepare on the blocking pool: metadata, duration, scrub timestamps, sparse seek index (1 checkpoint / 5,000 frames) for pcap and pcapng
-- [ ] Replay worker: absolute-schedule pacing, 50 ms sleep cap, speeds 0.1×–10× + as-fast-as-possible, pause/resume/single-step; same batched path as live with a replay source label
-- [ ] Seek rebuilds the ring without re-emitting the skipped frames; 10 Hz position events, immediate on seek
-- [ ] Recorder view wired: recordings list, open/replay, transport controls, scrub bar, live recording stats
-- [ ] Decoded JSONL export of a recording or the ring (one frame per line: summary, dissection, payload hex) for agents and grep
-- [ ] Core event log (JSONL): session lifecycle, source transitions, recording start/stop/rotate, drop and gap counters, faults — buffered writer with size-capped rotation
-- [ ] E2E: netsim capture recorded → replayed at 1× and max speed → seek → row-for-row match with the live session; the file opens in Wireshark (tshark check when available)
-- [ ] Network timestamp (ns) carried per frame in the pcapng recording (packet-block option), populated from switch time where the source has it (decision D3, PT-004)
+- [x] Decision D10 recorded (pcapng for frame recordings, JSONL for the event log and decoded export) + PRD §6 and SRS_capture amended [agent: claude]
+- [x] pcapng writer on the existing buffered recorder thread: section/interface blocks per source, ns timestamps, session metadata in comments; start/stop mid-session; size/time rotation; sanitized timestamped names [agent: claude]
+- [x] Replay prepare on the blocking pool: metadata, duration, scrub timestamps, sparse seek index (1 checkpoint / 5,000 frames) for pcap and pcapng [agent: claude]
+- [x] Replay worker: absolute-schedule pacing, 50 ms sleep cap, speeds 0.1×–10× + as-fast-as-possible, pause/resume/single-step; same batched path as live with a replay source label [agent: claude]
+- [x] Seek rebuilds the ring without re-emitting the skipped frames; 10 Hz position events, immediate on seek [agent: claude]
+- [x] Recorder view wired: recordings list, open/replay, transport controls, scrub bar, live recording stats [agent: claude]
+- [x] Decoded JSONL export of a recording or the ring (one frame per line: summary, dissection, payload hex) for agents and grep [agent: claude]
+- [x] Core event log (JSONL): session lifecycle, source transitions, recording start/stop/rotate, drop and gap counters, faults — buffered writer with size-capped rotation [agent: claude]
+- [x] E2E: netsim capture recorded → replayed at 1× and max speed → seek → row-for-row match with the live session; the file opens in Wireshark (tshark check when available) [agent: claude]
+- [x] Network timestamp (ns) carried per frame in the pcapng recording (packet-block option), populated from switch time where the source has it (decision D3, PT-004) [agent: claude]
 
-### v0.1.15 — Agent access — automation core + radeau-mcp
+### v0.1.15 — Agent access — automation core + radeau-mcp (current) (ACTIVE)
 **Goal:** RadEAU becomes AI-first: an agent sees and controls everything — capture, recording, replay, and the full trace — through an MCP server. The running GUI app hosts a loopback automation server (PRD §8.1); a radeau-mcp stdio binary bridges agents (Claude Code, Codex, …) to it, and the UI shows what the agent is doing. Pulled forward from v0.7.1.
 - [ ] Spec first: SRS_automation.md (AU-) — command set, MCP tool catalog, paging/size bounds, error model, security posture
 - [ ] One command layer in the core shared by Tauri commands and the automation server (UI-verb parity: anything the UI can do, an agent can do)
