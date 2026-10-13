@@ -818,10 +818,10 @@ afford it.
 | VU-003 | Apply no depth-based background tinting to panel surfaces | Must | Verified | Sampled panel luminance is identical at nesting depths 1 and 3 |
 | VU-004 | Contain exactly the 16 specified series colors in the specified order | Must | Verified | Unit test asserts contents and order |
 | VU-005 | Assign a new series the first unused palette color, falling back to index modulo 16 | Must | Planned | Removing and re-adding a signal reclaims the freed color; 17 signals do not crash |
-| VU-006 | Bundle both font stacks with the application | Must | Implemented | Rendering is identical on a host with neither family installed |
+| VU-006 | Bundle both font stacks with the application | Must | Verified | Rendering is identical on a host with neither family installed |
 | VU-007 | Use tabular numerals in all numeric columns and live readouts | Must | Implemented | Element width is unchanged across 1000 updates spanning all digit shapes |
-| VU-008 | Run undecorated with an application-drawn title bar and drag region | Must | Implemented | Dragging the app bar background moves the window; dragging any control does not |
-| VU-009 | Default the window to 1440 × 900 and enforce a 1024 × 700 minimum | Must | Implemented | Resizing below the minimum is refused; no app bar control clips at the minimum |
+| VU-008 | Run undecorated with an application-drawn title bar and drag region | Must | Verified | Dragging the app bar background moves the window; dragging any control does not |
+| VU-009 | Default the window to 1440 × 900 and enforce a 1024 × 700 minimum | Must | Verified | Resizing below the minimum is refused; no app bar control clips at the minimum |
 | VU-010 | Size the nav rail 65 px collapsed and 240 px expanded, labels hidden but present when collapsed | Must | Implemented | Measured widths match; accessible names are available in both states |
 | VU-011 | Compute legend width from measured labels, clamped to [180, min(420, container − 320)] px | Must | Planned | Width matches the formula for 0, 1 and 16 signals at three container widths, and persists across restart |
 | VU-012 | Declare a constant row height on every virtualized list: 48 px legend, 32 px trace | Must | Implemented | No measurement callback fires during a 10,000-row scroll |
@@ -837,6 +837,6 @@ afford it.
 | VU-022 | Give every interactive element a stable kebab-case data-testid and, if icon-only, a matching aria-label | Must | Verified | A CI static scan reports zero interactive elements lacking either attribute |
 | VU-023 | Give every color-indicated state a second non-chromatic indicator | Must | Implemented | Grayscale review of each view identifies all states unambiguously |
 | VU-024 | Show keyboard focus as a 2 px accent outline at 2 px offset on every interactive element | Must | Planned | Tabbing through each view shows a ring at every stop |
-| VU-025 | Paint a startup overlay before framework mount and fade it over 220 ms after mount | Should | Implemented | No frame between window creation and mount shows a blank window |
+| VU-025 | Paint a startup overlay before framework mount and fade it over 220 ms after mount | Should | Verified | No frame between window creation and mount shows a blank window |
 | VU-026 | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | Must | Verified | Automated contrast check over the token set and all 16 series colors passes |
 | VU-027 | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a value they display changes — live counters re-render as isolated leaves at the stats rate | Must | Verified | Render-count unit test (stats republish does not re-render a non-stats component); perf: hidden views 0 commits/s, app bar ≤ 2/s |
