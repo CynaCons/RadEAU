@@ -8,7 +8,7 @@ import RemoveIcon from "@mui/icons-material/Remove";
 import CropSquareIcon from "@mui/icons-material/CropSquare";
 import FilterNoneIcon from "@mui/icons-material/FilterNone";
 import CloseIcon from "@mui/icons-material/Close";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   closeWindow,
@@ -22,12 +22,66 @@ import {
 } from "../runtime/recorderDisplay";
 import { recordingStore } from "../runtime/recordingStore";
 import { sessionStore } from "../runtime/sessionStore";
+import { shallowEqual, useStoreSelector } from "../runtime/useStoreSelector";
 import radeauMark from "../assets/radeau-mark.png";
 
 /** Interactive app-bar children opt out of the window drag region (VU-008). */
 const noDrag = {
   onPointerDown: (e: ReactPointerEvent) => e.stopPropagation(),
 };
+
+const WINDOW_BUTTON_SX = {
+  width: 24,
+  height: 24,
+  p: "4px",
+  borderRadius: "4px",
+  color: "text.secondary",
+} as const;
+
+function RecordingControls(props: { disabled: boolean }) {
+  const recording = useStoreSelector(
+    recordingStore,
+    ({ armed, active, frames, path }) => ({ armed, active, hasFrames: frames > 0, path }),
+    shallowEqual,
+  );
+  const indicatorColor = recordIndicatorColor({ ...recording, frames: recording.hasFrames ? 1 : 0 });
+  const indicatorTooltip = recordIndicatorTooltip(recording);
+  const switchTooltip = props.disabled
+    ? "Recording is disabled while a pcap file is the capture source"
+    : recording.armed
+      ? "Disarm continuous pcap recording"
+      : "Arm continuous pcap recording";
+
+  return (
+    <>
+      <Tooltip title={indicatorTooltip}>
+        <RadioButtonCheckedIcon
+          data-testid="appbar-record-indicator"
+          data-color-token={recording.active && recording.hasFrames ? "error" : recording.armed ? "warning" : "text-secondary"}
+          sx={{ fontSize: 16, color: indicatorColor, mx: 1 }}
+        />
+      </Tooltip>
+      <Tooltip title={switchTooltip}>
+        <span>
+          <Switch
+            {...noDrag}
+            size="small"
+            checked={recording.armed}
+            disabled={props.disabled}
+            onChange={(_, checked) => { void recordingStore.arm(checked); }}
+            data-testid="appbar-record-switch"
+            inputProps={{ "aria-label": "Arm recording" }}
+            sx={{
+              mr: 1,
+              "& .MuiSwitch-switchBase.Mui-checked": { color: "var(--error)" },
+              "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": { backgroundColor: "var(--error)" },
+            }}
+          />
+        </span>
+      </Tooltip>
+    </>
+  );
+}
 
 /**
  * App bar (SRS_visual_ui.md §4.3): 48 px, surface-raised, 1 px bottom border,
@@ -38,28 +92,15 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
   const [autosave, setAutosave] = useState(true);
   const [sessionTitle, setSessionTitle] = useState("");
   const [maximized, setMaximized] = useState(false);
-  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
-  const recording = useSyncExternalStore(recordingStore.subscribe, recordingStore.getSnapshot);
-  const running = session.running;
+  const { running, sourceKind } = useStoreSelector(
+    sessionStore,
+    ({ running, sourceKind }) => ({ running, sourceKind }),
+    shallowEqual,
+  );
   // Recording a replay of a pcap file is pointless — keep the switch off.
-  const recordDisabled = session.sourceKind === "pcap";
-  const indicatorColor = recordIndicatorColor(recording);
-  const indicatorTooltip = recordIndicatorTooltip(recording);
-  const recordSwitchTooltip = recordDisabled
-    ? "Recording is disabled while a pcap file is the capture source"
-    : recording.armed
-      ? "Disarm continuous pcap recording"
-      : "Arm continuous pcap recording";
+  const recordDisabled = sourceKind === "pcap";
 
   useEffect(() => onMaximizedChange(setMaximized), []);
-
-  const windowButtonSx = {
-    width: 24,
-    height: 24,
-    p: "4px",
-    borderRadius: "4px",
-    color: "text.secondary",
-  } as const;
 
   return (
     <Box
@@ -129,42 +170,7 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
         />
       </Box>
 
-      <Tooltip title={indicatorTooltip}>
-        <RadioButtonCheckedIcon
-          data-testid="appbar-record-indicator"
-          data-color-token={
-            recording.active && recording.frames > 0
-              ? "error"
-              : recording.armed
-                ? "warning"
-                : "text-secondary"
-          }
-          sx={{ fontSize: 16, color: indicatorColor, mx: 1 }}
-        />
-      </Tooltip>
-
-      <Tooltip title={recordSwitchTooltip}>
-        <span>
-          <Switch
-            {...noDrag}
-            size="small"
-            checked={recording.armed}
-            disabled={recordDisabled}
-            onChange={(_, checked) => {
-              void recordingStore.arm(checked);
-            }}
-            data-testid="appbar-record-switch"
-            inputProps={{ "aria-label": "Arm recording" }}
-            sx={{
-              mr: 1,
-              "& .MuiSwitch-switchBase.Mui-checked": { color: "var(--error)" },
-              "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track": {
-                backgroundColor: "var(--error)",
-              },
-            }}
-          />
-        </span>
-      </Tooltip>
+      <RecordingControls disabled={recordDisabled} />
 
       <Button
         {...noDrag}
@@ -188,7 +194,7 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
             aria-label="Minimize window"
             onClick={minimizeWindow}
             data-testid="appbar-minimize-btn"
-            sx={windowButtonSx}
+            sx={WINDOW_BUTTON_SX}
           >
             <RemoveIcon sx={{ fontSize: 16 }} />
           </IconButton>
@@ -199,7 +205,7 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
             aria-label={maximized ? "Restore window" : "Maximize window"}
             onClick={toggleMaximizeWindow}
             data-testid="appbar-maximize-btn"
-            sx={windowButtonSx}
+            sx={WINDOW_BUTTON_SX}
           >
             {maximized ? <FilterNoneIcon sx={{ fontSize: 14 }} /> : <CropSquareIcon sx={{ fontSize: 16 }} />}
           </IconButton>
@@ -211,7 +217,7 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
             onClick={closeWindow}
             data-testid="appbar-close-btn"
             sx={{
-              ...windowButtonSx,
+              ...WINDOW_BUTTON_SX,
               "&:hover": { bgcolor: "var(--error)", color: "var(--text-primary)" },
             }}
           >

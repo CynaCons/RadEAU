@@ -19,7 +19,7 @@ import DownloadIcon from "@mui/icons-material/Download";
 import FiberManualRecordIcon from "@mui/icons-material/FiberManualRecord";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { RaisedPanel } from "../components/RaisedPanel";
 import { pickDirectory, pickPcapFile } from "../runtime/desktop";
@@ -36,22 +36,78 @@ import { recordingStore } from "../runtime/recordingStore";
 import { runExportRing } from "../runtime/ringExport";
 import { sessionStore } from "../runtime/sessionStore";
 import { traceStore } from "../runtime/traceStore";
-import { useViewLifecycle } from "../shell/viewLifecycle";
+import { shallowEqual } from "../runtime/useStoreSelector";
+import { useActiveStoreSelector } from "../components/useActiveStoreSelector";
+import { useViewActive, useViewLifecycle } from "../shell/viewLifecycle";
 
 const MONO = {
   fontFamily: "var(--font-mono)",
   fontSize: 13,
 } as const;
 
+function ActiveRecordingStats(props: { active: boolean }) {
+  const stats = useActiveStoreSelector(
+    props.active,
+    recordingStore,
+    ({ frames, bytes, dropped }) => ({ frames, bytes, dropped }),
+    { frames: 0, bytes: 0, dropped: 0 },
+    shallowEqual,
+  );
+  return (
+    <Typography sx={{ ...MONO, fontSize: 12, color: "text.secondary" }} data-testid="recorder-active-stats">
+      {formatActiveRecordingStats(stats)}
+    </Typography>
+  );
+}
+
+function ExportBufferedFrames(props: { active: boolean }) {
+  const frameCount = useActiveStoreSelector(props.active, traceStore, (snap) => snap.rows.length, 0);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  const tooltip = frameCount === 0 ? "no frames buffered" : "Export buffered frames as pcap";
+
+  const onExport = async () => {
+    if (busy || frameCount === 0) return;
+    setBusy(true);
+    setMessage(null);
+    const outcome = await runExportRing();
+    setBusy(false);
+    if (outcome.message === "export cancelled") return;
+    setError(!outcome.ok);
+    setMessage(outcome.message);
+  };
+
+  return (
+    <Stack direction="row" spacing={1} alignItems="center">
+      <Tooltip title={tooltip}>
+        <span>
+          <Button variant="outlined" size="small" startIcon={<DownloadIcon />} disabled={frameCount === 0 || busy}
+            onClick={() => { void onExport(); }} data-testid="recorder-export-btn">
+            {recorderExportLabel(frameCount)}
+          </Button>
+        </span>
+      </Tooltip>
+      {message ? (
+        <Typography sx={{ fontSize: 12, color: error ? "var(--error)" : "text.secondary" }} data-testid="recorder-export-result">
+          {message}
+        </Typography>
+      ) : null}
+    </Stack>
+  );
+}
+
 export function RecorderView() {
   useViewLifecycle("recorder", {});
-  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
-  const recording = useSyncExternalStore(recordingStore.subscribe, recordingStore.getSnapshot);
-  const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
-  const frameCount = snap.rows.length;
-  const [exportBusy, setExportBusy] = useState(false);
-  const [exportMessage, setExportMessage] = useState<string | null>(null);
-  const [exportError, setExportError] = useState(false);
+  const active = useViewActive("recorder");
+  const session = useActiveStoreSelector(active, sessionStore, ({ running, sourceKind, pcapPath }) => ({ running, sourceKind, pcapPath }), sessionStore.getSnapshot(), shallowEqual);
+  const recording = useActiveStoreSelector(
+    active,
+    recordingStore,
+    ({ armed, active, path, error, dir, list, dirError }) => ({ armed, active, path, error, dir, list, dirError }),
+    recordingStore.getSnapshot(),
+    shallowEqual,
+  );
   const [dirDraft, setDirDraft] = useState(recording.dir);
 
   // Keep the editable field in sync when the store loads / Browse commits.
@@ -85,17 +141,6 @@ export function RecorderView() {
     }
   };
 
-  const onExport = async () => {
-    if (exportBusy || frameCount === 0) return;
-    setExportBusy(true);
-    setExportMessage(null);
-    const outcome = await runExportRing();
-    setExportBusy(false);
-    if (outcome.message === "export cancelled") return;
-    setExportError(!outcome.ok);
-    setExportMessage(outcome.message);
-  };
-
   const onReplayBrowse = async () => {
     if (session.running) return;
     const path = await pickPcapFile();
@@ -113,8 +158,6 @@ export function RecorderView() {
     void navigator.clipboard?.writeText(recording.path);
   };
 
-  const exportTooltip =
-    frameCount === 0 ? "no frames buffered" : "Export buffered frames as pcap";
   const armTooltip = recordDisabled
     ? "Recording is disabled while a pcap file is the capture source"
     : "Arm continuous pcap recording (starts with the next session)";
@@ -229,12 +272,7 @@ export function RecorderView() {
                   </span>
                 </Tooltip>
               </Stack>
-              <Typography
-                sx={{ ...MONO, fontSize: 12, color: "text.secondary" }}
-                data-testid="recorder-active-stats"
-              >
-                {formatActiveRecordingStats(recording)}
-              </Typography>
+              <ActiveRecordingStats active={active} />
             </Stack>
           ) : null}
 
@@ -308,35 +346,7 @@ export function RecorderView() {
             </Stack>
           )}
 
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Tooltip title={exportTooltip}>
-              <span>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<DownloadIcon />}
-                  disabled={frameCount === 0 || exportBusy}
-                  onClick={() => {
-                    void onExport();
-                  }}
-                  data-testid="recorder-export-btn"
-                >
-                  {recorderExportLabel(frameCount)}
-                </Button>
-              </span>
-            </Tooltip>
-            {exportMessage ? (
-              <Typography
-                sx={{
-                  fontSize: 12,
-                  color: exportError ? "var(--error)" : "text.secondary",
-                }}
-                data-testid="recorder-export-result"
-              >
-                {exportMessage}
-              </Typography>
-            ) : null}
-          </Stack>
+          <ExportBufferedFrames active={active} />
         </Stack>
       </RaisedPanel>
 

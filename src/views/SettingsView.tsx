@@ -32,7 +32,7 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SettingsEthernetIcon from "@mui/icons-material/SettingsEthernet";
 import SpeedIcon from "@mui/icons-material/Speed";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { RaisedPanel } from "../components/RaisedPanel";
 import {
@@ -72,7 +72,9 @@ import {
   pickPcapFile,
 } from "../runtime/desktop";
 import { sessionStore } from "../runtime/sessionStore";
-import { useViewLifecycle } from "../shell/viewLifecycle";
+import { shallowEqual, useStoreSelector } from "../runtime/useStoreSelector";
+import { useActiveStoreSelector } from "../components/useActiveStoreSelector";
+import { useViewActive, useViewLifecycle } from "../shell/viewLifecycle";
 
 // ── Local state for groups not yet wired to the core (PRD §6). ──
 
@@ -204,9 +206,17 @@ function DependencyRowView(props: { row: DependencyRow }) {
 
 export function SettingsView() {
   useViewLifecycle("settings", {});
+  const active = useViewActive("settings");
   const desktop = isDesktop();
-  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
-  const { info: appInfo } = useSyncExternalStore(appInfoStore.subscribe, appInfoStore.getSnapshot);
+  const session = useActiveStoreSelector(
+    active,
+    sessionStore,
+    ({ running, sourceKind, simAddr, pcapPath, pcapPace, pcapStreamAddr, liveInterfaceId, liveFilter, lastError }) =>
+      ({ running, sourceKind, simAddr, pcapPath, pcapPace, pcapStreamAddr, liveInterfaceId, liveFilter, lastError }),
+    sessionStore.getSnapshot(),
+    shallowEqual,
+  );
+  const appInfo = useStoreSelector(appInfoStore, (snapshot) => snapshot.info);
   const controlsLocked = sourceControlsDisabled(session.running);
   const lockReason = interfaceLockedReason(session.running) ?? "";
   const simOk = simSourceAvailable(desktop);

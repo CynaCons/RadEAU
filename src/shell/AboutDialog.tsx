@@ -1,14 +1,14 @@
 import { Box, Dialog, DialogContent, Typography } from "@mui/material";
-import { useSyncExternalStore } from "react";
 import radeauMark from "../assets/radeau-mark.png";
 import { appInfoStore } from "../runtime/appInfoStore";
+import { useStoreSelector } from "../runtime/useStoreSelector";
 
 /**
  * About modal (SRS_visual_ui.md §4.4): product mark, name, one-line
  * description, and version / build profile / OS from `app_info`.
  */
 export function AboutDialog(props: { open: boolean; onClose: () => void }) {
-  const { info } = useSyncExternalStore(appInfoStore.subscribe, appInfoStore.getSnapshot);
+  const info = useStoreSelector(appInfoStore, (snapshot) => snapshot.info);
 
   return (
     <Dialog open={props.open} onClose={props.onClose} maxWidth="xs" data-testid="about-dialog">

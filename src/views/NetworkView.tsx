@@ -10,7 +10,7 @@ import FiberManualRecordIcon from "@mui/icons-material/FiberManualRecord";
 import HubIcon from "@mui/icons-material/Hub";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import SettingsEthernetIcon from "@mui/icons-material/SettingsEthernet";
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 import { EmptyState } from "../components/EmptyState";
 import { RaisedPanel } from "../components/RaisedPanel";
 import {
@@ -22,16 +22,65 @@ import {
   NETWORK_EMPTY,
 } from "../runtime/networkDisplay";
 import { sessionStore } from "../runtime/sessionStore";
-import { useViewLifecycle } from "../shell/viewLifecycle";
+import { shallowEqual } from "../runtime/useStoreSelector";
+import { useActiveStoreSelector } from "../components/useActiveStoreSelector";
+import { useViewActive, useViewLifecycle } from "../shell/viewLifecycle";
 
 const MONO = {
   fontFamily: "var(--font-mono)",
   fontVariantNumeric: "tabular-nums",
 } as const;
 
+function NetworkStatsChips(props: { active: boolean }) {
+  const rawStats = useActiveStoreSelector(props.active, sessionStore, (snapshot) => snapshot.stats, null);
+  if (!rawStats) return null;
+  const snapshot = sessionStore.getSnapshot();
+  const stats = connectionPanelModel({ ...snapshot, stats: rawStats }).stats;
+  if (!stats) return null;
+  const droppedWarning = stats.dropped > 0;
+  const droppedTooltip = droppedBreakdownTooltip(rawStats);
+  return (
+    <>
+      <Chip size="small" variant="outlined" label={`Received ${stats.received.toLocaleString("en-US")}`} data-testid="network-stat-received" />
+      <Chip size="small" variant="outlined" label={`Emitted ${stats.emitted.toLocaleString("en-US")}`} data-testid="network-stat-emitted" />
+      <Tooltip title={droppedTooltip}>
+        <Chip size="small" variant="outlined" label={`Dropped ${stats.dropped.toLocaleString("en-US")}`} data-testid="network-stat-dropped"
+          sx={droppedWarning ? { color: "var(--warning)", borderColor: "var(--warning)" } : undefined} />
+      </Tooltip>
+      <Chip size="small" variant="outlined" label={`Gaps ${stats.gaps.toLocaleString("en-US")}`} data-testid="network-stat-gaps" />
+      <Chip size="small" variant="outlined" label={`Malformed ${stats.malformed.toLocaleString("en-US")}`} data-testid="network-stat-malformed" />
+    </>
+  );
+}
+
+function NetworkStatsDetails(props: { active: boolean }) {
+  const rawStats = useActiveStoreSelector(props.active, sessionStore, (snapshot) => snapshot.stats, null);
+  if (!rawStats) return null;
+  const stats = connectionPanelModel({ ...sessionStore.getSnapshot(), stats: rawStats }).stats;
+  if (!stats) return null;
+  return (
+    <>
+      {stats.classLine ? (
+        <Typography sx={{ ...MONO, fontSize: 12, color: "text.secondary" }} data-testid="network-stat-classes">{stats.classLine}</Typography>
+      ) : null}
+      {stats.caption ? (
+        <Typography sx={{ fontSize: 12, color: "text.secondary" }} data-testid="network-stats-caption">{stats.caption}</Typography>
+      ) : null}
+    </>
+  );
+}
+
 export function NetworkView() {
   useViewLifecycle("network", {});
-  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
+  const active = useViewActive("network");
+  const session = useActiveStoreSelector(
+    active,
+    sessionStore,
+    ({ running, sourceKind, simAddr, pcapPath, pcapStreamAddr, liveInterfaceId, linkStatus, sessionInfo }) =>
+      ({ running, sourceKind, simAddr, pcapPath, pcapStreamAddr, liveInterfaceId, linkStatus, sessionInfo }),
+    sessionStore.getSnapshot(),
+    shallowEqual,
+  );
   const model = useMemo(
     () =>
       connectionPanelModel({
@@ -43,7 +92,7 @@ export function NetworkView() {
         liveInterfaceId: session.liveInterfaceId,
         linkStatus: session.linkStatus,
         sessionInfo: session.sessionInfo,
-        stats: session.stats,
+        stats: null,
       }),
     [session],
   );
@@ -51,12 +100,6 @@ export function NetworkView() {
   const linkColor = model.linkState
     ? linkChipColorVar(model.linkState)
     : "var(--text-secondary)";
-  const stats = model.stats;
-  const droppedWarning = stats !== null && stats.dropped > 0;
-  const droppedTooltip = session.stats
-    ? droppedBreakdownTooltip(session.stats)
-    : "";
-
   return (
     <Stack spacing={2}>
       <RaisedPanel
@@ -143,65 +186,10 @@ export function NetworkView() {
                 {model.linkDetail}
               </Typography>
             ) : null}
-            {stats ? (
-              <>
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`Received ${stats.received.toLocaleString("en-US")}`}
-                  data-testid="network-stat-received"
-                />
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`Emitted ${stats.emitted.toLocaleString("en-US")}`}
-                  data-testid="network-stat-emitted"
-                />
-                <Tooltip title={droppedTooltip}>
-                  <Chip
-                    size="small"
-                    variant="outlined"
-                    label={`Dropped ${stats.dropped.toLocaleString("en-US")}`}
-                    data-testid="network-stat-dropped"
-                    sx={
-                      droppedWarning
-                        ? { color: "var(--warning)", borderColor: "var(--warning)" }
-                        : undefined
-                    }
-                  />
-                </Tooltip>
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`Gaps ${stats.gaps.toLocaleString("en-US")}`}
-                  data-testid="network-stat-gaps"
-                />
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`Malformed ${stats.malformed.toLocaleString("en-US")}`}
-                  data-testid="network-stat-malformed"
-                />
-              </>
-            ) : null}
+            <NetworkStatsChips active={active} />
           </Stack>
 
-          {stats?.classLine ? (
-            <Typography
-              sx={{ ...MONO, fontSize: 12, color: "text.secondary" }}
-              data-testid="network-stat-classes"
-            >
-              {stats.classLine}
-            </Typography>
-          ) : null}
-          {stats?.caption ? (
-            <Typography
-              sx={{ fontSize: 12, color: "text.secondary" }}
-              data-testid="network-stats-caption"
-            >
-              {stats.caption}
-            </Typography>
-          ) : null}
+          <NetworkStatsDetails active={active} />
 
           <Box sx={{ position: "relative", height: 36 }}>
             <EmptyState
