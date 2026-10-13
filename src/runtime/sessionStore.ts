@@ -27,6 +27,7 @@ import {
   onCaptureLink,
   onCaptureSession,
   onCaptureStats,
+  onCaptureState,
   startCapture,
   stopCapture,
 } from "./desktop";
@@ -68,6 +69,7 @@ export class SessionStore {
   private startInFlight: Promise<void> | null = null;
   /** Invalidates a pending start when stop is requested before it settles. */
   private startGeneration = 0;
+  private stopCancelledStartGeneration: number | null = null;
   /** True until the startup default-source rule has applied (or the user picks). */
   private initialSourcePending = true;
 
@@ -96,6 +98,9 @@ export class SessionStore {
     onCaptureStats((stats) => {
       this.stats = stats;
       this.publish();
+    });
+    onCaptureState((state) => {
+      this.applyCaptureState(state.running, state.source);
     });
     void this.applyDefaultSource();
   }
@@ -243,13 +248,16 @@ export class SessionStore {
     const work = startCapture(source)
       .then(async () => {
         if (generation !== this.startGeneration) {
-          try {
-            await stopCapture();
-          } catch {
-            /* session already gone */
+          if (this.stopCancelledStartGeneration === this.startGeneration) {
+            try {
+              await stopCapture();
+            } catch {
+              /* session already gone */
+            }
           }
           return;
         }
+        this.stopCancelledStartGeneration = null;
         this.running = true;
         this.publish();
       })
@@ -270,6 +278,7 @@ export class SessionStore {
 
   async stop(): Promise<void> {
     if (!this.running && !this.startInFlight) return;
+    this.stopCancelledStartGeneration = this.startGeneration + 1;
     this.startGeneration += 1;
     // Flip UI immediately; halt the underlying session next.
     // Stats are retained so the last session's numbers stay readable.
@@ -294,6 +303,47 @@ export class SessionStore {
   async toggle(): Promise<void> {
     if (this.running) await this.stop();
     else await this.start();
+  }
+
+  /** AU-003: mirror agent-originated capture:state without calling commands. */
+  private applyCaptureState(running: boolean, source: CaptureSource | null): void {
+    if (this.startInFlight) {
+      this.startGeneration += 1;
+      this.stopCancelledStartGeneration = null;
+    }
+    this.running = running;
+    this.lastError = null;
+    if (source !== null) {
+      this.initialSourcePending = false;
+      this.applySource(source);
+    }
+    // Link status and session info belong to their own events: an
+    // end-of-source stop keeps the "closed · end of file" link (CP-005).
+    if (running) this.stats = null;
+    this.publish();
+  }
+
+  private applySource(source: CaptureSource): void {
+    this.sourceKind = source.kind;
+    switch (source.kind) {
+      case "devgen":
+        this.devgenProfile = source.profile;
+        break;
+      case "sim":
+        this.simAddr = source.addr;
+        break;
+      case "pcap":
+        this.pcapPath = source.path;
+        this.pcapPace = source.pace;
+        break;
+      case "pcapStream":
+        this.pcapStreamAddr = source.addr;
+        break;
+      case "live":
+        this.liveInterfaceId = source.interfaceId;
+        this.liveFilter = source.filter ?? "";
+        break;
+    }
   }
 
   private buildSnapshot(): SessionSnapshot {

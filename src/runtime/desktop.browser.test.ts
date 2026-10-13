@@ -20,6 +20,9 @@ import {
   onReplayPosition,
   onReplayPrepare,
   onReplaySeek,
+  onReplayOpened,
+  onAutomationClients,
+  onCaptureState,
   logPath,
   onRecordingState,
   pickArxmlFile,
@@ -99,7 +102,13 @@ describe("desktop browser fallbacks (v0.1.6)", () => {
       expect(onReplayPosition(() => {})()).toBeUndefined();
       expect(onReplaySeek(() => {})()).toBeUndefined();
       expect(onReplayPrepare(() => {})()).toBeUndefined();
+      expect(onReplayOpened(() => {})()).toBeUndefined();
     });
+  });
+
+  it("automation event listeners are browser no-ops (AU-003/AU-009)", () => {
+    expect(onCaptureState(() => {})()).toBeUndefined();
+    expect(onAutomationClients(() => {})()).toBeUndefined();
   });
 
   it("pickSavePath rejects honestly", async () => {

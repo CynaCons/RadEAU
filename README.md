@@ -15,8 +15,10 @@ built to grow a no-decimation chart engine at its core.
 v0.1.x is a **bench build**: capture from a NIC (Npcap/libpcap), a pcap file,
 a pcap stream or the simulator; read the trace like Wireshark (29 protocol
 classes with layered dissection); decode SOME/IP payloads against an AUTOSAR
-Ethernet communication extract; record and export pcap. The Signals chart
-engine, live topology, transmission and automation are planned and show
+Ethernet communication extract; record pcapng and replay it with a transport
+(play, pause, step, seek, 0.1×–10×); export the trace as decoded JSONL; and
+let an AI agent drive all of it through the bundled MCP server (below). The
+Signals chart engine, live topology and transmission are planned and show
 honest empty states until they land — see the
 [known limitations](CHANGELOG.md) for the current release.
 
@@ -98,6 +100,39 @@ double-clickable executable use `npm run tauri build` (release, canonical),
 `npm run build:debug` (debug profile with embedded assets, much faster —
 note it recompiles `target/debug/radeau.exe` into standalone mode until the
 next `tauri dev`).
+
+## Agent access (MCP)
+
+RadEAU is built to be driven by an AI agent as fully as by the operator: an
+agent can start and stop capture on any source, record to pcapng, open a
+recording and replay it (play, pause, step, seek, speed), and read the trace —
+query rows with filters, fetch any frame's full dissection, get per-protocol
+statistics, export decoded JSONL. Specification:
+[docs/SRS_automation.md](docs/SRS_automation.md).
+
+The running app serves a loopback automation endpoint (`127.0.0.1:5555`);
+`radeau-mcp` (shipped next to `radeau` in the release zip / tarball, built with
+`cargo build --release -p radeau-mcp`) is the MCP server an agent talks to over
+stdio. Start RadEAU first, then register the bridge with your agent:
+
+Claude Code:
+
+```
+claude mcp add radeau -- C:\path\to\RadEAU\radeau-mcp.exe
+```
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.radeau]
+command = 'C:\path\to\RadEAU\radeau-mcp.exe'
+```
+
+Any MCP client works the same way (`command` = the `radeau-mcp` binary, no
+arguments). `RADEAU_AUTOMATION_PORT` overrides the port. Everything an agent
+does shows up in the UI — the run control, the record switch and the replay
+bar follow it, an **Agent** chip appears in the app bar while a client is
+connected, and every call is written to `radeau.log`.
 
 ## Bench test on another machine
 

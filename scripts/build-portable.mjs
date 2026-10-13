@@ -56,9 +56,18 @@ required on the target machine.
 |---|---|
 | \`radeau.exe\` | RadEAU release app (embeds the UI; no vite / localhost:1420) |
 | \`ecu-netsim.exe\` | Companion ECU network simulator for a local demo |
+| \`radeau-mcp.exe\` | MCP server for AI agents — drives the running app (see below) |
 | \`sensor-fusion-5s.pcap\` | Short fixture for Settings › Interface › pcap file replay |
 | \`sensor-fusion.arxml\` | Sensor-fusion service catalog extract |
 | \`README-portable.md\` | This file |
+
+## Agent access (MCP)
+
+Start \`radeau.exe\`, then register \`radeau-mcp.exe\` with your AI agent as an
+MCP server (stdio, no arguments) — e.g. Claude Code:
+\`claude mcp add radeau -- <this folder>\\radeau-mcp.exe\`. The agent can then
+capture, record, replay and query the trace; the app shows an **Agent** chip
+while it is connected.
 
 ## Prerequisites
 
@@ -157,9 +166,9 @@ async function main() {
     await run("npx", ["tauri", "build", "--no-bundle"]);
   }
 
-  console.log("2/3 cargo build --release -p ecu-netsim…");
+  console.log("2/3 cargo build --release -p ecu-netsim -p radeau-mcp…");
   try {
-    await run("cargo", ["build", "--release", "-p", "ecu-netsim"]);
+    await run("cargo", ["build", "--release", "-p", "ecu-netsim", "-p", "radeau-mcp"]);
   } catch {
     console.warn("ecu-netsim build failed — stopping locked process and retrying once…");
     try {
@@ -171,14 +180,15 @@ async function main() {
     } catch {
       /* ignore */
     }
-    await run("cargo", ["build", "--release", "-p", "ecu-netsim"]);
+    await run("cargo", ["build", "--release", "-p", "ecu-netsim", "-p", "radeau-mcp"]);
   }
 
   const radeauExe = join(repoRoot, "target", "release", "radeau.exe");
   const netsimExe = join(repoRoot, "target", "release", "ecu-netsim.exe");
+  const mcpExe = join(repoRoot, "target", "release", "radeau-mcp.exe");
   const pcap = join(repoRoot, "fixtures", "pcap", "sensor-fusion-5s.pcap");
   const arxml = join(repoRoot, "catalog", "sensor-fusion.arxml");
-  for (const p of [radeauExe, netsimExe, pcap, arxml]) {
+  for (const p of [radeauExe, netsimExe, mcpExe, pcap, arxml]) {
     if (!existsSync(p)) throw new Error(`missing required artifact: ${p}`);
   }
 
@@ -189,6 +199,7 @@ async function main() {
 
   copyFileSync(radeauExe, join(outDir, "radeau.exe"));
   copyFileSync(netsimExe, join(outDir, "ecu-netsim.exe"));
+  copyFileSync(mcpExe, join(outDir, "radeau-mcp.exe"));
   copyFileSync(pcap, join(outDir, "sensor-fusion-5s.pcap"));
   copyFileSync(arxml, join(outDir, "sensor-fusion.arxml"));
   writeFileSync(join(outDir, "README-portable.md"), portableReadme(version), "utf-8");

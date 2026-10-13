@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const desktopState = vi.hoisted(() => ({
   positionCb: null as ((p: unknown) => void) | null,
   seekCb: null as ((s: unknown) => void) | null,
+  openedCb: null as ((s: unknown) => void) | null,
 }));
 
 vi.mock("../runtime/desktop", () => ({
@@ -36,11 +37,18 @@ vi.mock("../runtime/desktop", () => ({
       desktopState.seekCb = null;
     };
   }),
+  onReplayOpened: vi.fn((cb: (s: unknown) => void) => {
+    desktopState.openedCb = cb;
+    return () => {
+      desktopState.openedCb = null;
+    };
+  }),
   startCapture: vi.fn(async () => true),
   stopCapture: vi.fn(async () => {}),
   onCaptureSession: vi.fn(() => () => {}),
   onCaptureLink: vi.fn(() => () => {}),
   onCaptureStats: vi.fn(() => () => {}),
+  onCaptureState: vi.fn(() => () => {}),
   appInfo: vi.fn(async () => ({
     version: "0.1.0",
     buildProfile: "browser",
@@ -96,6 +104,31 @@ describe("ReplayTimeBar", () => {
 
     await act(async () => sessionStore.setPcapSource("C:\\trace\\fixture.pcapng"));
     expect(host.querySelector('[data-testid="replay-bar"]')).not.toBeNull();
+
+    await unmount(root, host);
+  });
+
+  it("AU-003 shows the replay bar after an agent replay:opened event", async () => {
+    const { host, root } = await renderBar();
+    expect(host.querySelector('[data-testid="replay-bar"]')).toBeNull();
+
+    await act(async () => {
+      desktopState.openedCb?.({
+        path: "C:\\agent\\opened.pcapng",
+        frames: 12,
+        firstTsNs: 0,
+        lastTsNs: 4_000_000_000,
+        durationNs: 4_000_000_000,
+        interfaces: ["pcap"],
+        comment: null,
+        cut: false,
+      });
+    });
+
+    expect(host.querySelector('[data-testid="replay-bar"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="replay-position"]')?.textContent).toBe(
+      "0.000s / 4.000s",
+    );
 
     await unmount(root, host);
   });

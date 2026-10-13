@@ -54,5 +54,6 @@ describe("ViewHost", () => {
 
     await act(async () => root.unmount());
     host.remove();
-  });
+    // Renders every view (MUI-heavy) — slow under a parallel full-suite run.
+  }, 20_000);
 });

@@ -1,4 +1,4 @@
-import { Box, Button, IconButton, Switch, TextField, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Chip, IconButton, Switch, TextField, Tooltip, Typography } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import SaveIcon from "@mui/icons-material/Save";
 import RadioButtonCheckedIcon from "@mui/icons-material/RadioButtonChecked";
@@ -13,8 +13,10 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   closeWindow,
   minimizeWindow,
+  onAutomationClients,
   onMaximizedChange,
   toggleMaximizeWindow,
+  type AutomationClientsEvent,
 } from "../runtime/desktop";
 import {
   recordIndicatorColor,
@@ -38,6 +40,51 @@ const WINDOW_BUTTON_SX = {
   borderRadius: "4px",
   color: "text.secondary",
 } as const;
+
+class AgentClientsStore {
+  private state: AutomationClientsEvent = { count: 0, lastMethod: null };
+  private listeners = new Set<() => void>();
+  private snapshot = this.state;
+
+  constructor() {
+    onAutomationClients((state) => {
+      this.state = state;
+      this.publish();
+    });
+  }
+
+  subscribe = (cb: () => void): (() => void) => {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  };
+
+  getSnapshot = (): AutomationClientsEvent => this.snapshot;
+
+  private publish(): void {
+    this.snapshot = this.state;
+    for (const cb of this.listeners) cb();
+  }
+}
+
+const agentClientsStore = new AgentClientsStore();
+
+function AgentChip() {
+  const { count, lastMethod } = useStoreSelector(agentClientsStore, (state) => state);
+  if (count <= 0) return null;
+  return (
+    <Tooltip title={`${count} agent client(s) · last: ${lastMethod ?? "none"}`}>
+      <Chip
+        {...noDrag}
+        label="Agent"
+        size="small"
+        color="info"
+        variant="outlined"
+        data-testid="appbar-agent-chip"
+        sx={{ mr: 1 }}
+      />
+    </Tooltip>
+  );
+}
 
 function RecordingControls(props: { disabled: boolean }) {
   const recording = useStoreSelector(
@@ -173,6 +220,8 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
       </Box>
 
       <RecordingControls disabled={recordDisabled} />
+
+      <AgentChip />
 
       <Button
         {...noDrag}

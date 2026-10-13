@@ -140,6 +140,7 @@ export function onMaximizedChange(cb: (maximized: boolean) => void): () => void 
 
 const FRAME_EVENT = "frames:batch";
 const SESSION_EVENT = "capture:session";
+const CAPTURE_STATE_EVENT = "capture:state";
 const LINK_EVENT = "capture:link";
 const STATS_EVENT = "capture:stats";
 const MIRROR_TICK_MS = 16;
@@ -366,6 +367,17 @@ export function onCaptureLink(cb: (status: CaptureLinkStatus) => void): () => vo
 export function onCaptureStats(cb: (stats: CaptureStats) => void): () => void {
   if (!isDesktop()) return mirror.subscribeStats(cb);
   return listenEvent<CaptureStats>(STATS_EVENT, cb);
+}
+
+// AU-003: agent-driven capture sessions mirror into the same app state without
+// issuing local capture_start / capture_stop commands.
+export interface CaptureStateEvent {
+  running: boolean;
+  source: CaptureSource | null;
+}
+
+export function onCaptureState(cb: (state: CaptureStateEvent) => void): () => void {
+  return listenEvent<CaptureStateEvent>(CAPTURE_STATE_EVENT, cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +631,8 @@ const EXPORT_JSONL_EVENT = "export:jsonl";
 const REPLAY_POSITION_EVENT = "replay:position";
 const REPLAY_SEEK_EVENT = "replay:seek";
 const REPLAY_PREPARE_EVENT = "replay:prepare";
+const REPLAY_OPENED_EVENT = "replay:opened";
+const AUTOMATION_CLIENTS_EVENT = "automation:clients";
 
 export interface ExportRingResult {
   frames: number;
@@ -663,6 +677,11 @@ export interface ReplaySeek {
 export interface ReplayPrepareProgress {
   done: number;
   total: number;
+}
+
+export interface AutomationClientsEvent {
+  count: number;
+  lastMethod: string | null;
 }
 
 export type ReplaySpeed = 0.1 | 0.25 | 0.5 | 1 | 2 | 5 | 10 | null;
@@ -799,6 +818,16 @@ export function onReplayPrepare(
   cb: (progress: ReplayPrepareProgress) => void,
 ): () => void {
   return listenEvent<ReplayPrepareProgress>(REPLAY_PREPARE_EVENT, cb);
+}
+
+export function onReplayOpened(cb: (info: ReplayInfo) => void): () => void {
+  return listenEvent<ReplayInfo>(REPLAY_OPENED_EVENT, cb);
+}
+
+export function onAutomationClients(
+  cb: (state: AutomationClientsEvent) => void,
+): () => void {
+  return listenEvent<AutomationClientsEvent>(AUTOMATION_CLIENTS_EVENT, cb);
 }
 
 /**

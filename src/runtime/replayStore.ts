@@ -5,6 +5,7 @@
 
 import {
   onReplayPosition,
+  onReplayOpened,
   onReplaySeek,
   replayOpen,
   replayPause,
@@ -50,6 +51,11 @@ export class ReplayStore {
     onReplaySeek(() => {
       traceStore.clear();
     });
+    onReplayOpened((info) => {
+      this.applyOpenedInfo(info);
+      // AU-003: replay_open from automation selects the same pcap source as local open().
+      sessionStore.setPcapSource(info.path, "realtime");
+    });
   }
 
   subscribe = (cb: () => void): (() => void) => {
@@ -66,15 +72,7 @@ export class ReplayStore {
     this.publish();
     try {
       const info = await replayOpen(path);
-      this.info = info;
-      this.position = {
-        state: "paused",
-        tNs: 0,
-        frame: 0,
-        frames: info.frames,
-        durationNs: info.durationNs,
-        speed: 1,
-      };
+      this.applyOpenedInfo(info);
       // A replay opens at 1x; the time bar changes the speed (CP-021).
       sessionStore.setPcapSource(path, "realtime");
       this.publish();
@@ -119,6 +117,20 @@ export class ReplayStore {
       this.error = errMessage(err);
       this.publish();
     }
+  }
+
+  private applyOpenedInfo(info: ReplayInfo): void {
+    this.info = info;
+    this.position = {
+      state: "paused",
+      tNs: 0,
+      frame: 0,
+      frames: info.frames,
+      durationNs: info.durationNs,
+      speed: 1,
+    };
+    this.error = null;
+    this.publish();
   }
 
   private buildSnapshot(): ReplaySnapshot {

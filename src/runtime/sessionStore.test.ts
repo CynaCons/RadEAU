@@ -4,6 +4,7 @@ const desktopState = vi.hoisted(() => ({
   sessionCb: null as ((s: unknown) => void) | null,
   linkCb: null as ((s: unknown) => void) | null,
   statsCb: null as ((s: unknown) => void) | null,
+  captureStateCb: null as ((s: unknown) => void) | null,
   mirrorRunning: false,
 }));
 
@@ -46,6 +47,12 @@ vi.mock("./desktop", () => ({
     desktopState.statsCb = cb;
     return () => {
       desktopState.statsCb = null;
+    };
+  }),
+  onCaptureState: vi.fn((cb: (s: unknown) => void) => {
+    desktopState.captureStateCb = cb;
+    return () => {
+      desktopState.captureStateCb = null;
     };
   }),
   appInfo: vi.fn(async () => ({
@@ -345,6 +352,25 @@ describe("SessionStore", () => {
     expect(snap.linkStatus?.detail).toBe("end of file · 42 frames");
     expect(snap.stats?.received).toBe(42);
     expect(snap.sessionInfo?.sourceKind).toBe("devgen");
+    expect(stopCapture).not.toHaveBeenCalled();
+  });
+
+  it("AU-003 mirrors agent capture:state without invoking capture commands", () => {
+    desktopState.captureStateCb?.({
+      running: true,
+      source: { kind: "pcap", path: "C:\\agent\\drive.pcapng", pace: "fast" },
+    });
+
+    const snap = store.getSnapshot();
+    expect(snap.running).toBe(true);
+    expect(snap.sourceKind).toBe("pcap");
+    expect(snap.pcapPath).toBe("C:\\agent\\drive.pcapng");
+    expect(snap.pcapPace).toBe("fast");
+    expect(startCapture).not.toHaveBeenCalled();
+    expect(stopCapture).not.toHaveBeenCalled();
+
+    desktopState.captureStateCb?.({ running: false, source: null });
+    expect(store.getSnapshot().running).toBe(false);
     expect(stopCapture).not.toHaveBeenCalled();
   });
 });

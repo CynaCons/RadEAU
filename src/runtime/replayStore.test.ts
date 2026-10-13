@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const desktopState = vi.hoisted(() => ({
   positionCb: null as ((p: unknown) => void) | null,
   seekCb: null as ((s: unknown) => void) | null,
+  openedCb: null as ((s: unknown) => void) | null,
 }));
 
 vi.mock("./desktop", () => ({
@@ -33,11 +34,18 @@ vi.mock("./desktop", () => ({
       desktopState.seekCb = null;
     };
   }),
+  onReplayOpened: vi.fn((cb: (s: unknown) => void) => {
+    desktopState.openedCb = cb;
+    return () => {
+      desktopState.openedCb = null;
+    };
+  }),
   startCapture: vi.fn(async () => true),
   stopCapture: vi.fn(async () => {}),
   onCaptureSession: vi.fn(() => () => {}),
   onCaptureLink: vi.fn(() => () => {}),
   onCaptureStats: vi.fn(() => () => {}),
+  onCaptureState: vi.fn(() => () => {}),
   appInfo: vi.fn(async () => ({
     version: "0.1.0",
     buildProfile: "browser",
@@ -114,5 +122,30 @@ describe("ReplayStore", () => {
 
     desktopState.seekCb?.({ tNs: 500, frame: 2 });
     expect(clear).toHaveBeenCalled();
+  });
+
+  it("AU-003 mirrors agent replay:opened into replay state and the pcap source", () => {
+    desktopState.openedCb?.({
+      path: "C:\\agent\\opened.pcapng",
+      frames: 7,
+      firstTsNs: 100,
+      lastTsNs: 2_100,
+      durationNs: 2_000,
+      interfaces: ["pcap"],
+      comment: "agent opened",
+      cut: false,
+    });
+
+    expect(store.getSnapshot().info?.path).toBe("C:\\agent\\opened.pcapng");
+    expect(store.getSnapshot().position).toMatchObject({
+      state: "paused",
+      tNs: 0,
+      frame: 0,
+      frames: 7,
+      durationNs: 2_000,
+      speed: 1,
+    });
+    expect(sessionStore.getSnapshot().sourceKind).toBe("pcap");
+    expect(sessionStore.getSnapshot().pcapPath).toBe("C:\\agent\\opened.pcapng");
   });
 });

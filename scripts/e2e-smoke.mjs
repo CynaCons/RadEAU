@@ -53,6 +53,10 @@ const EXE = join(repoRoot, "target", "debug", "radeau.exe");
 const NETSIM_EXE = join(repoRoot, "target", "debug", "ecu-netsim.exe");
 const CDP_PORT = 9300 + Math.floor(Math.random() * 4000);
 const SIM_PORT = 15560 + Math.floor(Math.random() * 2000);
+// AU-001: the app under test serves automation on a private port; radeau-mcp inherits it.
+const AUTOMATION_PORT = 25560 + Math.floor(Math.random() * 2000);
+process.env.RADEAU_AUTOMATION_PORT = String(AUTOMATION_PORT);
+const MCP_EXE = join(repoRoot, "target", "debug", "radeau-mcp.exe");
 
 async function ensureVite() {
   if (await reachable(VITE_URL, 1000)) return null;
@@ -96,6 +100,52 @@ function launchApp(userDataDir) {
 
 async function cdpPageTarget(timeoutMs) {
   return cdpPageTargetOnPort(CDP_PORT, timeoutMs);
+}
+
+/** Minimal MCP stdio client over the real radeau-mcp binary (AU-008). */
+function startMcp() {
+  const child = spawnHidden(`"${MCP_EXE}"`, {
+    cwd: repoRoot,
+    env: { ...process.env },
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  let buffer = "";
+  const waiters = new Map();
+  let nextId = 1;
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk.toString();
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      const msg = JSON.parse(line);
+      const waiter = waiters.get(msg.id);
+      if (waiter) {
+        waiters.delete(msg.id);
+        waiter(msg);
+      }
+    }
+  });
+  const request = (method, params) =>
+    new Promise((resolve, reject) => {
+      const id = nextId++;
+      const timer = setTimeout(() => reject(new Error(`mcp ${method} timed out`)), 30_000);
+      waiters.set(id, (msg) => {
+        clearTimeout(timer);
+        resolve(msg);
+      });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    });
+  /** tools/call → parsed JSON result; throws with the tool error text. */
+  const call = async (name, args = {}) => {
+    const msg = await request("tools/call", { name, arguments: args });
+    const result = msg.result;
+    const text = result?.content?.[0]?.text ?? "";
+    if (!result || result.isError) throw new Error(`${name}: ${text || JSON.stringify(msg.error)}`);
+    return JSON.parse(text);
+  };
+  return { child, request, call };
 }
 
 // --- page-side probes -------------------------------------------------------
@@ -2020,6 +2070,89 @@ async function main() {
         rmSync(recordingDir, { recursive: true, force: true });
       } catch {
         /* temp cleanup best-effort */
+      }
+    }
+
+    // Phase (h) — an agent drives the app through radeau-mcp: AU-001 AU-003 AU-004
+    // AU-005 AU-006 AU-007 AU-008 AU-009 (verbs, mirroring, trace visibility, chip).
+    let agentPass = null;
+    const agentDir = mkdtempSync(join(tmpdir(), "radeau-e2e-agent-"));
+    const mcp = startMcp();
+    try {
+      if (await session.eval(`window.__radeauSession.getSnapshot().running`)) {
+        await session.eval(clickProbe("appbar-run-btn"));
+        await waitFor(() => session.eval(`!window.__radeauSession.getSnapshot().running`), 10_000, "stopped before agent phase");
+      }
+      const init = await mcp.request("initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "radeau-e2e", version: "1" },
+      });
+      if (init.result?.serverInfo?.name !== "radeau-mcp") throw new Error(`initialize: ${JSON.stringify(init)}`);
+      mcp.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+      const tools = (await mcp.request("tools/list", {})).result.tools.map((t) => t.name);
+      if (tools.length < 19 || !tools.includes("trace_query")) throw new Error(`tools/list: ${tools.join(",")}`);
+      // AU-003: an agent-started session shows in the UI's run control.
+      await mcp.call("capture_start", { source: { kind: "sim", addr: `127.0.0.1:${SIM_PORT}` } });
+      await waitFor(async () => {
+        const s = await session.eval(APPBAR_RUN_LABEL_PROBE);
+        return s && /stop/i.test(s.label || "") ? s : null;
+      }, 5_000, "run control mirrors the agent's capture_start (AU-003)");
+      // AU-009: the Agent chip is up while the bridge is connected.
+      await waitFor(() => session.eval(`!!document.querySelector('[data-testid="appbar-agent-chip"]')`), 5_000, "Agent chip (AU-009)");
+      await sleep(2_500);
+      // AU-007 / AU-005 / AU-006: the agent sees the bus.
+      const stats = await mcp.call("trace_stats");
+      const someip = Object.entries(stats.ring?.byProtocol ?? stats.byProtocol ?? {}).find(([k]) => /some\/ip/i.test(k));
+      if (!someip || someip[1] <= 0) throw new Error(`trace_stats has no SOME/IP: ${JSON.stringify(stats).slice(0, 400)}`);
+      const page = await mcp.call("trace_query", { protocols: ["SOME/IP"], limit: 5 });
+      if (page.rows.length !== 5 || page.rows.some((r) => r.protocol !== "SOME/IP"))
+        throw new Error(`trace_query rows: ${JSON.stringify(page.rows).slice(0, 400)}`);
+      if (!(page.total >= 5) || page.nextIdx == null) throw new Error(`trace_query paging: total ${page.total}, nextIdx ${page.nextIdx}`);
+      const detail = await mcp.call("trace_frame", { idx: page.rows[0].idx });
+      if (!detail.layers?.some((l) => l.protocol === "SOME/IP")) throw new Error("trace_frame has no SOME/IP layer");
+      // Recording under agent control, then replay of that recording.
+      await mcp.call("recording_start");
+      await sleep(1_500);
+      const rec = await mcp.call("recording_stop");
+      await mcp.call("capture_stop");
+      await waitFor(async () => {
+        const s = await session.eval(APPBAR_RUN_LABEL_PROBE);
+        return s && /start/i.test(s.label || "") ? s : null;
+      }, 5_000, "run control mirrors the agent's capture_stop");
+      const recordings = await mcp.call("recording_list");
+      const recorded = recordings.find((r) => r.path.endsWith(".pcapng")) ?? (rec.path ? { path: rec.path } : null);
+      if (!recorded) throw new Error(`no pcapng recording listed: ${JSON.stringify(recordings).slice(0, 300)}`);
+      const info = await mcp.call("replay_open", { path: recorded.path });
+      if (!(info.frames > 0)) throw new Error(`replay_open: ${JSON.stringify(info)}`);
+      await mcp.call("replay_set_speed", { speed: null }).catch(() => {});
+      await mcp.call("replay_play");
+      await waitFor(() => session.eval(`!!document.querySelector('[data-testid="replay-bar"]')`), 5_000, "replay bar mirrors the agent's replay");
+      await waitFor(async () => {
+        const st = await mcp.call("replay_status");
+        return st.position?.state === "ended" ? st : null;
+      }, 20_000, "agent replay reaches the end");
+      // CP-024 through the agent: decoded JSONL of the replayed ring.
+      const out = join(agentDir, "trace.jsonl");
+      const exported = await mcp.call("export_jsonl", { path: out, from: { kind: "ring" } });
+      const lines = readFileSync(out, "utf8").trim().split("\n");
+      if (lines.length !== exported.frames || !JSON.parse(lines[0]).layers) throw new Error(`export_jsonl lines ${lines.length} vs ${exported.frames}`);
+      if (await session.eval(`window.__radeauSession.getSnapshot().running`)) await mcp.call("capture_stop");
+      // The chip goes away with the agent.
+      mcp.child.stdin.end();
+      await waitFor(() => session.eval(`!document.querySelector('[data-testid="appbar-agent-chip"]')`), 5_000, "Agent chip clears after disconnect");
+      agentPass = { tools: tools.length, someip: someip[1], queryTotal: page.total, replayed: info.frames, exported: exported.frames };
+      console.log("agent: PASS", JSON.stringify(agentPass));
+      await session.eval(`window.__radeauSession.setSourceKind("devgen")`);
+    } catch (err) {
+      fail(`agent phase: ${err?.message ?? err}`);
+      agentPass = false;
+    } finally {
+      killTree(mcp.child.pid);
+      try {
+        rmSync(agentDir, { recursive: true, force: true });
+      } catch {
+        /* best effort */
       }
     }
 

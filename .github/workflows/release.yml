@@ -62,11 +62,11 @@ jobs:
         run: npx tauri build --bundles appimage
       - name: Simulator + fixture tarball
         run: |
-          cargo build --release -p ecu-netsim
+          cargo build --release -p ecu-netsim -p radeau-mcp
           v=$(node -p "require('./src-tauri/tauri.conf.json').version")
           stage="RadEAU-$v-linux-x64"
           mkdir -p "$stage"
-          cp target/release/ecu-netsim "$stage/"
+          cp target/release/ecu-netsim target/release/radeau-mcp "$stage/"
           cp fixtures/pcap/sensor-fusion-5s.pcap catalog/sensor-fusion.arxml "$stage/"
           cp target/release/bundle/appimage/*.AppImage "$stage/"
           cat > "$stage/README-linux.md" <<'EOF'
@@ -78,7 +78,9 @@ jobs:
           the privileges your distribution requires for packet capture.
           `ecu-netsim` is the companion simulator (`./ecu-netsim --monitor-port 5560
           --udp-target 127.0.0.1`), `sensor-fusion-5s.pcap` a replay fixture and
-          `sensor-fusion.arxml` the matching catalog extract.
+          `sensor-fusion.arxml` the matching catalog extract. `radeau-mcp` is the
+          MCP server that lets an AI agent drive the running app (see the project
+          README, "Agent access").
           EOF
           tar -czf "$stage.tar.gz" "$stage"
           ls -l "$stage.tar.gz" target/release/bundle/appimage/
