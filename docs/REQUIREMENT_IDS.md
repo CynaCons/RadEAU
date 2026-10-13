@@ -25,6 +25,7 @@ deleted. `scripts/check-req-ids.mjs` fails CI on duplicate definitions.
 | NV- | Network view | SRS_ecu_netsim.md | 001–004 | 005 |
 | TR- | Trace view | SRS_trace_view.md | 001–017 | 018 |
 | CP- | Capture sources and backends | SRS_capture.md | 001–024 | 025 |
+| AU- | Automation server and agent access (MCP) | SRS_automation.md | 001–010 | 011 |
 
 ## E2E test numbers
 

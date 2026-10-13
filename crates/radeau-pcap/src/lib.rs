@@ -561,7 +561,7 @@ impl<W: Write> PcapngWriter<W> {
             inner,
             bytes_written: 0,
         };
-        // CP-017/CP-018/CP-019: pcapng recordings use ns timestamps, SHB metadata,
+        // CP-017/CP-018/CP-019/PT-008: pcapng recordings use ns timestamps, SHB metadata,
         // Ethernet IDB, and complete block lengths for standalone rotated files.
         writer.write_section_header(comment)?;
         writer.write_interface_description("radeau0")?;
@@ -837,7 +837,7 @@ mod tests {
 
     #[test]
     fn cp_017_pcapng_writer_roundtrip_preserves_ns_payload_and_direction() {
-        // CP-017/CP-019/CP-009: pcapng writer output is readable with ns-exact timestamps,
+        // CP-017/CP-019/CP-009/PT-008: pcapng writer output is readable with ns-exact timestamps,
         // byte-identical payloads, and EPB direction flags.
         let frames = [
             (1_700_000_000_123_456_789, DIR_RX, b"abc".as_slice()),

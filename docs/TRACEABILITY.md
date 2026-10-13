@@ -7,7 +7,22 @@ modules, `scripts/e2e-*.mjs`). CI runs it with `--check`: Implemented and
 Verified requirements need an implementation trace; Verified ones also a test
 trace. Implemented-without-test is the open verification gap listed below.
 
-**149 requirements** — Implemented 6 · Planned 51 · Superseded 7 · Verified 85
+**159 requirements** — Implemented 6 · Planned 60 · Superseded 7 · Verified 86
+
+## SRS_automation.md
+
+| ID | Status | Requirement | Implementation | Tests |
+|---|---|---|---|---|
+| AU-001 | Planned | The core listens on `127.0.0.1:5555` (Settings › Automation: port, enable) for newline-delimited JSON-RPC 2… | — | — |
+| AU-002 | Planned | Binding beyond loopback requires a token of at least 32 characters **and** a non-empty client address allow… | — | — |
+| AU-003 | Planned | Verb parity: every automation method calls the same core function as the corresponding UI command; state ch… | — | — |
+| AU-004 | Planned | The method catalog of §2 is complete: capture, recording, replay, export, trace query, frame detail, trace … | — | — |
+| AU-005 | Planned | `trace_query` answers from the core frame ring (independent of the UI): filters `protocols`, `nameContains`… | — | — |
+| AU-006 | Planned | `trace_frame {idx}` returns the full dissection (layers, fields, hex, decoded signals) identical to the UI'… | — | — |
+| AU-007 | Planned | `trace_stats` returns the session (`running`, source, epoch, timestamp source), the live counters of `captu… | — | — |
+| AU-008 | Planned | `radeau-mcp` speaks MCP over stdio (protocol `2025-06-18`: `initialize`, `tools/list`, `tools/call`, `ping`… | — | — |
+| AU-009 | Planned | Agent visibility: while at least one automation client is connected the app bar shows an `Agent` chip (tool… | — | — |
+| AU-010 | Planned | `radeau-mcp` ships in the portable Windows zip and the Linux tarball next to `radeau`; the README documents… | — | — |
 
 ## SRS_capture.md
 
@@ -78,7 +93,7 @@ trace. Implemented-without-test is the open verification gap listed below.
 | PT-005 | Verified | Direct-Ethernet two-step gPTP Sync/Follow_Up every 125 ms (EtherType 0x88F7, domain 0, static GM); codec su… | `crates/ecu-netsim/src/main.rs`<br>`crates/ecu-netsim/src/standard_traffic.rs`<br>`crates/radeau-proto/src/gptp.rs` | `crates/ecu-netsim/src/main.rs`<br>`crates/ecu-netsim/src/standard_traffic.rs`<br>`crates/radeau-proto/src/gptp.rs` |
 | PT-006 | Planned | Simulator Pdelay (1 s) and Announce (1 s) cadence on Ethernet with correction fields consumed | — | — |
 | PT-007 | Verified | Simulator monitor records carry a switch-time ns stamp; the accelerated pcap export persists epoch + switch… | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
-| PT-008 | Planned | RadEAU recordings persist the network (switch) timestamp and replay preserves it | — | — |
+| PT-008 | Verified | RadEAU recordings persist the network (switch) timestamp and replay preserves it | `crates/radeau-pcap/src/lib.rs` | `crates/radeau-pcap/src/lib.rs` |
 | NS-001 | Verified | Shipped simulator SOME/IP events, SD offers, and background IPv4/UDP traffic are serialized as Ethernet II … | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
 | NS-002 | Verified | Determinism: same seed in accelerated pcap/export mode → byte-identical monitor stream | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
 | NS-003 | Verified | Monitor-client queues are bounded; overflow emits explicit gap records instead of silently losing frames | `crates/ecu-netsim/src/main.rs` | `crates/ecu-netsim/src/main.rs` |
