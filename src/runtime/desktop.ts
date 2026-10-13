@@ -627,7 +627,6 @@ export function onCatalogState(cb: (state: CatalogStateEvent) => void): () => vo
 // ---------------------------------------------------------------------------
 
 const EXPORT_EVENT = "capture:export";
-const EXPORT_JSONL_EVENT = "export:jsonl";
 const REPLAY_POSITION_EVENT = "replay:position";
 const REPLAY_SEEK_EVENT = "replay:seek";
 const REPLAY_PREPARE_EVENT = "replay:prepare";
@@ -887,13 +886,6 @@ export function traceAnalyze(
   }
   const args = sections === undefined ? { from } : { from, sections };
   return invoke<AnalysisReport>("trace_analyze", args);
-}
-
-/** Progress while export_jsonl runs; no-op-safe in browser mode. */
-export function onExportJsonl(
-  cb: (progress: CaptureExportProgress) => void,
-): () => void {
-  return listenEvent<CaptureExportProgress>(EXPORT_JSONL_EVENT, cb);
 }
 
 /** Opens/prepares a replay file (CP-020). Browser mode rejects honestly. */
