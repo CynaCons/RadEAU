@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 /**
  * The suspend/resume contract every view implements from its first commit
@@ -14,6 +14,21 @@ export interface ViewLifecycle {
 
 const registry = new Map<string, ViewLifecycle>();
 const active = new Set<string>();
+const activeListeners = new Set<() => void>();
+
+function notifyActive(): void {
+  for (const cb of activeListeners) cb();
+}
+
+function subscribeActive(cb: () => void): () => void {
+  activeListeners.add(cb);
+  return () => activeListeners.delete(cb);
+}
+
+/** True while the view is resumed (visible). */
+export function isViewActive(viewId: string): boolean {
+  return active.has(viewId);
+}
 
 export function registerViewLifecycle(viewId: string, lifecycle: ViewLifecycle): () => void {
   registry.set(viewId, lifecycle);
@@ -26,15 +41,26 @@ export function resumeView(viewId: string): void {
   if (active.has(viewId)) return;
   active.add(viewId);
   registry.get(viewId)?.onResume?.();
+  notifyActive();
 }
 
 export function suspendView(viewId: string): void {
   if (!active.has(viewId)) return;
   active.delete(viewId);
   registry.get(viewId)?.onSuspend?.();
+  notifyActive();
 }
 
 /** React hook: register this view's lifecycle handlers for its whole mount. */
 export function useViewLifecycle(viewId: string, lifecycle: ViewLifecycle): void {
   useEffect(() => registerViewLifecycle(viewId, lifecycle), [viewId, lifecycle]);
+}
+
+/**
+ * React hook: whether this view is resumed. Hidden keep-alive views use it to
+ * do zero render work — subscriptions that only feed the screen are skipped
+ * while it is false and the view catches up from the store on resume.
+ */
+export function useViewActive(viewId: string): boolean {
+  return useSyncExternalStore(subscribeActive, () => active.has(viewId));
 }
