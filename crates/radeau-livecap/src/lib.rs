@@ -82,6 +82,7 @@ const NOT_INSTALLED: &str = "Npcap is not installed — install it from https://
 #[cfg(not(windows))]
 const NOT_INSTALLED: &str =
     "libpcap is not installed — install the libpcap package for this Linux distribution";
+#[cfg(windows)]
 const NPCAP_RESTRICTED: &str = "Npcap is restricted to administrators — reinstall Npcap without that option or run RadEAU as administrator";
 #[cfg(target_os = "linux")]
 const LINUX_CAPS: &str = "run: sudo setcap cap_net_raw,cap_net_admin+eip <path to radeau>";
