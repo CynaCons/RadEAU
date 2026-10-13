@@ -22,9 +22,11 @@ mod devgen;
 mod diag;
 mod dissect;
 mod endpoints;
+mod export;
 mod frame;
 mod log;
 mod recording;
+mod replay;
 mod simlink;
 
 fn main() {
@@ -37,6 +39,7 @@ fn main() {
         .manage(capture::CaptureState::default())
         .manage(catalog::CatalogState::default())
         .manage(recording::RecordingState::default())
+        .manage(replay::ReplayState::default())
         .setup(|app| {
             if let Ok(dir) = app.path().app_log_dir() {
                 log::init(dir);
@@ -69,7 +72,15 @@ fn main() {
             recording::recording_arm,
             recording::recording_dir_get,
             recording::recording_dir_set,
+            recording::recording_rotate_set,
             recording::recording_list,
+            replay::replay_open,
+            replay::replay_play,
+            replay::replay_pause,
+            replay::replay_step,
+            replay::replay_seek,
+            replay::replay_set_speed,
+            export::export_jsonl,
         ])
         .run(tauri::generate_context!())
         .expect("error while running RadEAU");

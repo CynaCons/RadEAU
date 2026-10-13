@@ -7,9 +7,9 @@ pub const DIR_TX: u8 = 0;
 pub const DIR_RX: u8 = 1;
 pub const DIR_UNKNOWN: u8 = 2;
 pub const MAX_RECORD_LEN: usize = 256 * 1024;
-// Enough for the largest supported packet plus its EPB fixed header/trailer.
-// Options are intentionally bounded by this same allowance.
-const BLOCK_HEADER_LEN: usize = 32;
+// Enough for the largest supported packet plus the EPB block header/trailer,
+// fixed body, direction option, and end option.
+const BLOCK_HEADER_LEN: usize = 44;
 const MAX_BUFFER_LEN: usize = MAX_RECORD_LEN + BLOCK_HEADER_LEN;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +72,6 @@ impl Endian {
 struct Interface {
     snaplen: u32,
     units_per_second: u64,
-    #[allow(dead_code)]
     name: Option<String>,
 }
 #[derive(Debug)]
@@ -98,6 +97,14 @@ pub struct PcapReader {
     last_ts: Option<u64>,
     skip_remaining: usize,
     input_cut: bool,
+    /// Stream bytes already consumed and dropped from `buf`.
+    drained: u64,
+    /// Stream offset of the block / record header the last packet came from.
+    last_record_start: u64,
+    /// The file header (classic) or every SHB / IDB block (pcapng), in stream
+    /// order — fed before a mid-file offset, it lets a fresh reader resume there.
+    header: Vec<u8>,
+    section_comment: Option<String>,
 }
 impl Default for PcapReader {
     fn default() -> Self {
@@ -114,13 +121,50 @@ impl PcapReader {
             last_ts: None,
             skip_remaining: 0,
             input_cut: false,
+            drained: 0,
+            last_record_start: 0,
+            header: Vec::new(),
+            section_comment: None,
+        }
+    }
+
+    /// Stream offset at which the last returned record's block starts. A fresh
+    /// reader fed `header_bytes()[..n]` and then the stream from this offset
+    /// (n = `header_bytes().len()` when the record was read) yields this record
+    /// next — the replay seek index is built from it.
+    pub fn last_record_offset(&self) -> u64 {
+        self.last_record_start
+    }
+
+    /// Header blocks seen so far (classic header, or pcapng SHB + IDBs).
+    pub fn header_bytes(&self) -> &[u8] {
+        &self.header
+    }
+
+    /// The pcapng section comment (`opt_comment` of the last SHB), if any.
+    pub fn section_comment(&self) -> Option<&str> {
+        self.section_comment.as_deref()
+    }
+
+    /// Interface names: pcapng `if_name` per IDB (or `if<n>`), `pcap` for classic.
+    pub fn interface_names(&self) -> Vec<String> {
+        match &self.format {
+            Format::Ng { interfaces, .. } => interfaces
+                .iter()
+                .enumerate()
+                .map(|(i, f)| f.name.clone().unwrap_or_else(|| format!("if{i}")))
+                .collect(),
+            Format::Classic { .. } => vec!["pcap".into()],
+            Format::Unknown => Vec::new(),
         }
     }
     pub fn push(&mut self, mut bytes: &[u8]) {
         let skipped = bytes.len().min(self.skip_remaining);
         self.skip_remaining -= skipped;
+        self.drained += skipped as u64;
         bytes = &bytes[skipped..];
         if self.offset > 0 {
+            self.drained += self.offset as u64;
             self.buf.drain(..self.offset);
             self.offset = 0;
         }
@@ -188,6 +232,9 @@ impl PcapReader {
                         if link != 1 {
                             return Err(PcapError::UnsupportedLinkType(link));
                         }
+                        let mut head = [0u8; 24];
+                        head.copy_from_slice(&h[..24]);
+                        self.header.extend_from_slice(&head);
                         self.offset += 24;
                         self.format = Format::Classic {
                             endian,
@@ -224,6 +271,7 @@ impl PcapReader {
                         frac.saturating_mul(1_000)
                     });
                     let wire = self.available()[16..16 + cap].to_vec();
+                    self.last_record_start = self.drained + self.offset as u64;
                     self.offset += 16 + cap;
                     self.last_ts = Some(ts_ns);
                     return Ok(Some(Record {
@@ -277,6 +325,7 @@ impl PcapReader {
                         return Err(PcapError::Invalid("pcapng trailing block length".into()));
                     }
                     let block = b[..len].to_vec();
+                    let block_start = self.drained + self.offset as u64;
                     self.offset += len;
                     match kind {
                         0x0a0d_0d0a => {
@@ -288,6 +337,13 @@ impl PcapReader {
                                 endian: next_endian,
                                 interfaces: Vec::new(),
                             };
+                            self.section_comment = options(&block[24..len - 4], endian)?
+                                .into_iter()
+                                .find(|(code, _)| *code == 1)
+                                .map(|(_, v)| String::from_utf8_lossy(v).into_owned());
+                            // A new section restarts the header a resume needs.
+                            self.header.clear();
+                            self.header.extend_from_slice(&block);
                         }
                         1 => {
                             if len < 20 {
@@ -322,6 +378,7 @@ impl PcapReader {
                                     name,
                                 });
                             }
+                            self.header.extend_from_slice(&block);
                         }
                         6 => {
                             if len < 32 {
@@ -369,6 +426,7 @@ impl PcapReader {
                                 as u64;
                             let wire = block[28..28 + cap].to_vec();
                             self.last_ts = Some(ts_ns);
+                            self.last_record_start = block_start;
                             return Ok(Some(Record {
                                 ts_ns,
                                 dir,
@@ -406,6 +464,7 @@ impl PcapReader {
                             if padded != data_area {
                                 return Err(PcapError::Ended { cut: true });
                             }
+                            self.last_record_start = block_start;
                             return Ok(Some(Record {
                                 ts_ns: self.last_ts.unwrap_or(0),
                                 dir: DIR_UNKNOWN,
@@ -485,6 +544,124 @@ impl<W: Write> PcapWriter<W> {
     pub fn into_inner(self) -> W {
         self.inner
     }
+}
+
+pub struct PcapngWriter<W: Write> {
+    inner: W,
+    bytes_written: u64,
+}
+
+impl<W: Write> PcapngWriter<W> {
+    pub fn new(inner: W) -> io::Result<Self> {
+        Self::with_comment(inner, None)
+    }
+
+    pub fn with_comment(inner: W, comment: Option<&str>) -> io::Result<Self> {
+        let mut writer = Self {
+            inner,
+            bytes_written: 0,
+        };
+        // CP-017/CP-018/CP-019: pcapng recordings use ns timestamps, SHB metadata,
+        // Ethernet IDB, and complete block lengths for standalone rotated files.
+        writer.write_section_header(comment)?;
+        writer.write_interface_description("radeau0")?;
+        Ok(writer)
+    }
+
+    pub fn write_record(&mut self, ts_ns: u64, dir: u8, wire: &[u8]) -> io::Result<()> {
+        if wire.len() > MAX_RECORD_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("record exceeds writer snaplen {MAX_RECORD_LEN}"),
+            ));
+        }
+        let mut body = Vec::with_capacity(28 + ((wire.len() + 3) & !3) + 12);
+        pcapng_put32(&mut body, 0);
+        pcapng_put32(&mut body, (ts_ns >> 32) as u32);
+        pcapng_put32(&mut body, ts_ns as u32);
+        pcapng_put32(&mut body, wire.len() as u32);
+        pcapng_put32(&mut body, wire.len() as u32);
+        body.extend_from_slice(wire);
+        pcapng_pad32(&mut body);
+        match dir {
+            DIR_RX => pcapng_option(&mut body, 2, &1u32.to_le_bytes()),
+            DIR_TX => pcapng_option(&mut body, 2, &2u32.to_le_bytes()),
+            _ => {}
+        }
+        pcapng_option(&mut body, 0, &[]);
+        self.write_block(6, &body)
+    }
+
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written
+    }
+
+    pub fn into_inner(self) -> W {
+        self.inner
+    }
+
+    fn write_section_header(&mut self, comment: Option<&str>) -> io::Result<()> {
+        let mut body = Vec::new();
+        pcapng_put32(&mut body, 0x1a2b_3c4d);
+        pcapng_put16(&mut body, 1);
+        pcapng_put16(&mut body, 0);
+        body.extend_from_slice(&(-1i64).to_le_bytes());
+        pcapng_option(&mut body, 4, b"RadEAU");
+        if let Some(comment) = comment.filter(|s| !s.is_empty()) {
+            pcapng_option(&mut body, 1, comment.as_bytes());
+        }
+        pcapng_option(&mut body, 0, &[]);
+        self.write_block(0x0a0d_0d0a, &body)
+    }
+
+    fn write_interface_description(&mut self, name: &str) -> io::Result<()> {
+        let mut body = Vec::new();
+        pcapng_put16(&mut body, 1);
+        pcapng_put16(&mut body, 0);
+        pcapng_put32(&mut body, MAX_RECORD_LEN as u32);
+        pcapng_option(&mut body, 2, name.as_bytes());
+        pcapng_option(&mut body, 9, &[9]);
+        pcapng_option(&mut body, 0, &[]);
+        self.write_block(1, &body)
+    }
+
+    fn write_block(&mut self, kind: u32, body: &[u8]) -> io::Result<()> {
+        debug_assert!(body.len().is_multiple_of(4));
+        let len = 12usize
+            .checked_add(body.len())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "pcapng block too large"))?;
+        let len_u32 = u32::try_from(len)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "pcapng block too large"))?;
+        self.inner.write_all(&kind.to_le_bytes())?;
+        self.inner.write_all(&len_u32.to_le_bytes())?;
+        self.inner.write_all(body)?;
+        self.inner.write_all(&len_u32.to_le_bytes())?;
+        self.bytes_written += len as u64;
+        Ok(())
+    }
+}
+
+fn pcapng_put16(out: &mut Vec<u8>, value: u16) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn pcapng_put32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn pcapng_pad32(out: &mut Vec<u8>) {
+    out.resize((out.len() + 3) & !3, 0);
+}
+
+fn pcapng_option(out: &mut Vec<u8>, code: u16, value: &[u8]) {
+    pcapng_put16(out, code);
+    pcapng_put16(out, value.len() as u16);
+    out.extend_from_slice(value);
+    pcapng_pad32(out);
 }
 
 #[cfg(test)]
@@ -659,6 +836,76 @@ mod tests {
     }
 
     #[test]
+    fn cp_017_pcapng_writer_roundtrip_preserves_ns_payload_and_direction() {
+        // CP-017/CP-019/CP-009: pcapng writer output is readable with ns-exact timestamps,
+        // byte-identical payloads, and EPB direction flags.
+        let frames = [
+            (1_700_000_000_123_456_789, DIR_RX, b"abc".as_slice()),
+            (1_700_000_001_000_000_007, DIR_TX, b"defgh".as_slice()),
+            (1_700_000_002_000_000_008, DIR_UNKNOWN, b"ijk".as_slice()),
+        ];
+        let mut w =
+            PcapngWriter::with_comment(Vec::new(), Some("source=test timestamp=network")).unwrap();
+        for (ts_ns, dir, wire) in frames {
+            w.write_record(ts_ns, dir, wire).unwrap();
+        }
+        let data = w.into_inner();
+        let r = read_all(&data).unwrap();
+        assert_eq!(r.len(), 3);
+        assert_eq!(
+            r.iter().map(|x| x.ts_ns).collect::<Vec<_>>(),
+            frames.iter().map(|x| x.0).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            r.iter().map(|x| x.dir).collect::<Vec<_>>(),
+            frames.iter().map(|x| x.1).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            r.iter().map(|x| x.wire.as_slice()).collect::<Vec<_>>(),
+            frames.iter().map(|x| x.2).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn cp_017_pcapng_writer_blocks_are_strictly_well_formed() {
+        // CP-017: every pcapng block total length is 32-bit aligned and repeated at tail.
+        let mut w = PcapngWriter::new(Vec::new()).unwrap();
+        w.write_record(1, DIR_RX, b"abcd").unwrap();
+        w.write_record(2, DIR_TX, b"efgh").unwrap();
+        let data = w.into_inner();
+        let mut offset = 0usize;
+        let mut blocks = 0;
+        while offset < data.len() {
+            assert!(offset + 12 <= data.len());
+            let len = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
+            assert!(len >= 12, "short block length {len}");
+            assert_eq!(len % 4, 0, "unaligned block length {len}");
+            assert!(offset + len <= data.len());
+            let trailing =
+                u32::from_le_bytes(data[offset + len - 4..offset + len].try_into().unwrap())
+                    as usize;
+            assert_eq!(trailing, len);
+            offset += len;
+            blocks += 1;
+        }
+        assert_eq!(blocks, 4);
+        assert_eq!(offset, data.len());
+    }
+
+    #[test]
+    fn cp_017_pcapng_writer_odd_payload_padding_is_not_payload() {
+        // CP-017: odd payload padding is present structurally but not returned as frame bytes.
+        let mut w = PcapngWriter::new(Vec::new()).unwrap();
+        w.write_record(9, DIR_RX, b"abcde").unwrap();
+        let data = w.into_inner();
+        let r = read_all(&data).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].wire, b"abcde");
+        assert_eq!(r[0].ts_ns, 9);
+        assert_eq!(r[0].dir, DIR_RX);
+    }
+
+    #[test]
     fn classic_all_magics_and_byte_orders() {
         // CP-002: classic pcap supports both byte orders and µs/ns magic values.
         for endian in [Endian::Little, Endian::Big] {
@@ -821,5 +1068,76 @@ mod tests {
                 .is_ok());
             }
         }
+    }
+
+    fn read_all_with_offsets(bytes: &[u8]) -> (Vec<(u64, usize, Record)>, Vec<u8>) {
+        let mut reader = PcapReader::new();
+        let mut out = Vec::new();
+        // Feed in small chunks so offsets cross buffer drains.
+        for chunk in bytes.chunks(37) {
+            reader.push(chunk);
+            while let Ok(Some(record)) = reader.next_record() {
+                out.push((
+                    reader.last_record_offset(),
+                    reader.header_bytes().len(),
+                    record,
+                ));
+            }
+        }
+        reader.finish();
+        while let Ok(Some(record)) = reader.next_record() {
+            out.push((
+                reader.last_record_offset(),
+                reader.header_bytes().len(),
+                record,
+            ));
+        }
+        (out, reader.header_bytes().to_vec())
+    }
+
+    fn resume_at(bytes: &[u8], header: &[u8], offset: u64) -> Record {
+        let mut reader = PcapReader::new();
+        reader.push(header);
+        reader.push(&bytes[offset as usize..]);
+        reader.finish();
+        reader
+            .next_record()
+            .unwrap()
+            .expect("record at the resume offset")
+    }
+
+    // CP-020 / CP-022: a fresh reader fed the header bytes and the stream from
+    // a record's offset yields that record next — the replay seek index relies on it.
+    #[test]
+    fn resume_from_record_offset_pcapng_and_classic() {
+        let mut ng = PcapngWriter::with_comment(Vec::new(), Some("session=test")).unwrap();
+        let mut classic = PcapWriter::new(Vec::new()).unwrap();
+        for i in 0..40u64 {
+            let wire = vec![i as u8; 20 + (i as usize % 7)];
+            ng.write_record(1_000 + i * 10, DIR_RX, &wire).unwrap();
+            classic.write_record(1_000 + i * 10, &wire).unwrap();
+        }
+        for bytes in [ng.into_inner(), classic.into_inner()] {
+            let (records, header) = read_all_with_offsets(&bytes);
+            assert_eq!(records.len(), 40);
+            for (offset, header_len, record) in &records {
+                let resumed = resume_at(&bytes, &header[..*header_len], *offset);
+                assert_eq!(resumed.ts_ns, record.ts_ns);
+                assert_eq!(resumed.wire, record.wire);
+            }
+        }
+    }
+
+    #[test]
+    fn pcapng_section_comment_and_interface_names() {
+        let mut ng = PcapngWriter::with_comment(Vec::new(), Some("source_kind=sim")).unwrap();
+        ng.write_record(5, DIR_TX, &[1, 2, 3]).unwrap();
+        let bytes = ng.into_inner();
+        let mut reader = PcapReader::new();
+        reader.push(&bytes);
+        reader.finish();
+        assert!(reader.next_record().unwrap().is_some());
+        assert_eq!(reader.section_comment(), Some("source_kind=sim"));
+        assert_eq!(reader.interface_names().len(), 1);
     }
 }

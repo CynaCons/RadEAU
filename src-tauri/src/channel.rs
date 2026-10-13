@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -46,6 +47,7 @@ pub enum SourceSpec {
 pub enum ChannelRead {
     Frame { ts_ns: u64, dir: u8, wire: Vec<u8> },
     Gap { dropped: u32, span_ns: u64 },
+    ReplaySeek { seek: crate::replay::ReplaySeek },
     Idle,
     Ended { detail: String },
 }
@@ -79,7 +81,18 @@ pub enum Source {
 }
 
 impl Source {
+    #[allow(dead_code)]
     pub fn open(spec: &SourceSpec) -> Result<Self, String> {
+        Self::open_with_replay(spec, None)
+    }
+
+    pub fn open_with_replay(
+        spec: &SourceSpec,
+        replay: Option<(
+            Arc<crate::replay::ReplayIndex>,
+            Arc<crate::replay::ReplayControl>,
+        )>,
+    ) -> Result<Self, String> {
         match spec {
             SourceSpec::Devgen { profile } => {
                 #[cfg(debug_assertions)]
@@ -98,7 +111,9 @@ impl Source {
                 Err("sim addr must not be empty".into())
             }
             SourceSpec::Sim { addr } => Ok(Self::Sim(SimSource::new(addr.clone()))),
-            SourceSpec::Pcap { path, pace } => Ok(Self::Pcap(PcapSource::open(path, pace)?)),
+            SourceSpec::Pcap { path, pace } => {
+                Ok(Self::Pcap(PcapSource::open(path, pace, replay)?))
+            }
             SourceSpec::PcapStream { addr } if addr.trim().is_empty() => {
                 Err("pcap stream addr must not be empty".into())
             }
@@ -227,6 +242,13 @@ impl Source {
         matches!(self, Self::Pcap(PcapSource { fast: true, .. }))
     }
 
+    pub fn replay_control(&self) -> Option<Arc<crate::replay::ReplayControl>> {
+        match self {
+            Self::Pcap(source) => Some(Arc::clone(&source.control)),
+            _ => None,
+        }
+    }
+
     pub fn kernel_drops(&mut self) -> Option<u64> {
         match self {
             Self::Live(source) => source.kernel_drops(),
@@ -242,6 +264,7 @@ fn now_ns() -> u64 {
         .as_nanos()
         .min(u64::MAX as u128) as u64
 }
+
 fn resolve(addr: &str) -> Result<SocketAddr, String> {
     addr.to_socket_addrs()
         .map_err(|e| format!("resolve {addr}: {e}"))?
@@ -259,11 +282,6 @@ fn configure(stream: &TcpStream) -> Result<(), String> {
     stream
         .set_nodelay(true)
         .map_err(|e| format!("set_nodelay: {e}"))
-}
-
-fn pacing_sleep(started: Instant, target: Duration) -> Option<Duration> {
-    let remaining = target.saturating_sub(started.elapsed());
-    (!remaining.is_zero()).then(|| Duration::from_millis(50).min(remaining))
 }
 
 #[cfg(debug_assertions)]
@@ -451,9 +469,12 @@ impl SimSource {
 }
 
 pub struct PcapSource {
+    path: String,
     file: File,
     reader: radeau_pcap::PcapReader,
     pending: Option<radeau_pcap::Record>,
+    index: Arc<crate::replay::ReplayIndex>,
+    control: Arc<crate::replay::ReplayControl>,
     first_ts: Option<u64>,
     previous_ts: Option<u64>,
     fast: bool,
@@ -464,16 +485,40 @@ pub struct PcapSource {
     status: ChannelStatus,
 }
 impl PcapSource {
-    fn open(path: &str, pace: &str) -> Result<Self, String> {
+    fn open(
+        path: &str,
+        pace: &str,
+        replay: Option<(
+            Arc<crate::replay::ReplayIndex>,
+            Arc<crate::replay::ReplayControl>,
+        )>,
+    ) -> Result<Self, String> {
         // CP-002 and CP-004: file replay uses the shared pcap parser and selected pacing mode.
         if !matches!(pace, "realtime" | "fast") {
             return Err(format!("unknown pcap pace '{pace}'"));
         }
+        let (index, control) = match replay {
+            Some(replay) => replay,
+            None => {
+                let (_, index) = crate::replay::prepare(path, None)?;
+                let index = Arc::new(index);
+                let speed = match pace {
+                    "realtime" => Some(1.0),
+                    "fast" => None,
+                    _ => unreachable!(),
+                };
+                let control = crate::replay::ReplayControl::new(index.info.clone(), speed);
+                (index, control)
+            }
+        };
         let file = File::open(Path::new(path)).map_err(|e| format!("open {path}: {e}"))?;
         let mut source = Self {
+            path: path.to_string(),
             file,
             reader: radeau_pcap::PcapReader::new(),
             pending: None,
+            index,
+            control,
             first_ts: None,
             previous_ts: None,
             fast: pace == "fast",
@@ -521,6 +566,26 @@ impl PcapSource {
         detail
     }
     fn read(&mut self, _timeout: Duration) -> ChannelRead {
+        if let Some(target) = self.control.take_seek() {
+            let (frame, landed_ts) = match self.seek_to(target) {
+                Ok(landed) => landed,
+                Err(detail) => {
+                    self.status = ChannelStatus::Ended;
+                    return ChannelRead::Ended { detail };
+                }
+            };
+            self.control.observe_frame(landed_ts, frame);
+            return ChannelRead::ReplaySeek {
+                seek: crate::replay::ReplaySeek {
+                    t_ns: landed_ts.saturating_sub(self.index.info.first_ts_ns),
+                    frame,
+                },
+            };
+        }
+        if self.control.is_paused_without_step() {
+            return ChannelRead::Idle;
+        }
+        let stepping = self.control.take_step();
         if self.pending.is_none() && !self.finished {
             if let Err(detail) = self.fill() {
                 self.status = ChannelStatus::Ended;
@@ -528,31 +593,66 @@ impl PcapSource {
             }
         }
         let Some(record) = self.pending.take() else {
+            self.control.mark_ended();
             return ChannelRead::Ended {
                 detail: self.end_detail(),
             };
         };
-        if !self.fast {
+        if let Some(sleep) = self
+            .control
+            .sleep_until_due(record.ts_ns.saturating_sub(self.index.info.first_ts_ns))
+        {
+            std::thread::sleep(sleep);
+            // CP-021: a pause (or seek) that arrived during the sleep wins —
+            // the frame stays pending instead of being emitted after pause.
+            if sleep == crate::replay::SLEEP_CAP
+                || (!stepping && self.control.is_paused_without_step())
+                || self.control.has_pending_seek()
+            {
+                self.pending = Some(record);
+                return ChannelRead::Idle;
+            }
+        } else if !self.fast && self.control.speed().is_some() {
             if let Some(previous) = self.previous_ts {
                 let raw_gap = record.ts_ns.saturating_sub(previous);
-                let delay = raw_gap.min(5_000_000_000);
                 if raw_gap > 5_000_000_000 {
                     self.collapsed_gaps += 1;
-                }
-                let started = Instant::now();
-                let target = Duration::from_nanos(delay);
-                while let Some(sleep) = pacing_sleep(started, target) {
-                    std::thread::sleep(sleep);
                 }
             }
         }
         self.previous_ts = Some(record.ts_ns);
         self.frames += 1;
+        self.control.observe_frame(record.ts_ns, self.frames - 1);
+        if stepping {
+            self.control.finish_step();
+        }
         ChannelRead::Frame {
             ts_ns: record.ts_ns,
             dir: record.dir,
             wire: record.wire,
         }
+    }
+
+    /// CP-022: repositions through the seek index; returns the landing frame
+    /// number and its absolute timestamp (the file end when past the last frame).
+    fn seek_to(&mut self, target_t_ns: u64) -> Result<(u64, u64), String> {
+        let seek = crate::replay::open_at(&self.path, &self.index, target_t_ns)?;
+        let landed_ts = seek
+            .pending
+            .as_ref()
+            .map_or(self.index.info.last_ts_ns, |record| record.ts_ns);
+        self.file = seek.file;
+        self.reader = seek.reader;
+        self.pending = seek.pending;
+        self.frames = seek.frame;
+        self.previous_ts = seek.previous_ts;
+        self.finished = self.pending.is_none();
+        self.status = if self.finished {
+            ChannelStatus::Ended
+        } else {
+            ChannelStatus::Up
+        };
+        Ok((seek.frame, landed_ts))
     }
 }
 
@@ -897,6 +997,7 @@ mod tests {
                     assert_eq!(detail, "end of file · 3 frames");
                     break;
                 }
+                ChannelRead::ReplaySeek { .. } => panic!("unexpected replay seek event"),
                 ChannelRead::Gap { .. } => panic!("pcap stream must not synthesize gaps"),
             }
         }
@@ -947,7 +1048,7 @@ mod tests {
         // CP-004: fast file replay delivers every record without source-side drops.
         const RECORDS: usize = 4_096;
         let path = temp_pcap("cp004-fast", &pcap_bytes(RECORDS));
-        let mut source = PcapSource::open(path.to_str().unwrap(), "fast").unwrap();
+        let mut source = PcapSource::open(path.to_str().unwrap(), "fast", None).unwrap();
         let mut count = 0usize;
         loop {
             match source.read(Duration::ZERO) {
@@ -957,6 +1058,7 @@ mod tests {
                     break;
                 }
                 ChannelRead::Idle => continue,
+                ChannelRead::ReplaySeek { .. } => panic!("unexpected replay seek event"),
                 ChannelRead::Gap { .. } => panic!("pcap file replay must not synthesize gaps"),
             }
         }
@@ -998,6 +1100,31 @@ mod tests {
             ChannelRead::Ended { detail } if detail == "end of file · 2 frames"
         ));
         assert_eq!(source.status(), ChannelStatus::Ended);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn cp_022_seek_skips_earlier_frames_before_emitting() {
+        let path = temp_pcap("cp022-seek", &pcap_bytes(5));
+        let mut source = PcapSource::open(path.to_str().unwrap(), "fast", None).unwrap();
+
+        source.control.seek(2_500_000);
+        match source.read(Duration::ZERO) {
+            ChannelRead::ReplaySeek { seek } => {
+                assert_eq!(seek.frame, 3);
+                assert_eq!(seek.t_ns, 3_000_000);
+            }
+            other => panic!("expected replay seek, got {other:?}"),
+        }
+        assert_eq!(source.frames, 3);
+
+        match source.read(Duration::ZERO) {
+            ChannelRead::Frame { ts_ns, .. } => {
+                assert_eq!(ts_ns, 1_700_000_000_003_000_000);
+            }
+            other => panic!("expected landing frame, got {other:?}"),
+        }
+        assert_eq!(source.frames, 4);
         let _ = std::fs::remove_file(path);
     }
 
@@ -1112,11 +1239,11 @@ mod tests {
     #[test]
     fn cp_004_realtime_pacing_sleep_is_capped_at_50_ms() {
         // CP-004: realtime replay sleeps in chunks capped at 50 ms.
-        let started = Instant::now();
+        let anchor = Instant::now();
         assert_eq!(
-            pacing_sleep(started, Duration::from_millis(250)),
+            crate::replay::schedule_sleep(anchor, 0, 250_000_000, 1.0, anchor,),
             Some(Duration::from_millis(50))
         );
-        assert!(pacing_sleep(started, Duration::ZERO).is_none());
+        assert!(crate::replay::schedule_sleep(anchor, 0, 0, 1.0, anchor).is_none());
     }
 }

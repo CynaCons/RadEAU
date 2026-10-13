@@ -103,6 +103,10 @@ impl FrameRing {
             .collect()
     }
 
+    pub(crate) fn snapshot_all(&self) -> Vec<BufferedFrame> {
+        self.frames.iter().cloned().collect()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.frames.len()
     }

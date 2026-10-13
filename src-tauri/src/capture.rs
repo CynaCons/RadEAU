@@ -40,6 +40,8 @@ const EVENT_CAPTURE_SESSION: &str = "capture:session";
 const EVENT_CAPTURE_LINK: &str = "capture:link";
 const EVENT_CAPTURE_STATS: &str = "capture:stats";
 const EVENT_CAPTURE_EXPORT: &str = "capture:export";
+const EVENT_REPLAY_POSITION: &str = "replay:position";
+const EVENT_REPLAY_SEEK: &str = "replay:seek";
 
 // PF-005: the perf gate drives the devgen stress profile through this same
 // native batch/credit pipeline before checking renderer budgets.
@@ -220,6 +222,8 @@ trait CaptureEvents {
     fn emit_session(&self, session: CaptureSessionEvent);
     fn emit_link(&self, link: CaptureLinkEvent);
     fn emit_export(&self, progress: ExportProgress);
+    fn emit_replay_position(&self, position: crate::replay::ReplayPosition);
+    fn emit_replay_seek(&self, seek: crate::replay::ReplaySeek);
 }
 
 trait CaptureRecording {
@@ -253,6 +257,14 @@ impl CaptureEvents for AppHandle {
     fn emit_export(&self, progress: ExportProgress) {
         let _ = self.emit(EVENT_CAPTURE_EXPORT, progress);
     }
+
+    fn emit_replay_position(&self, position: crate::replay::ReplayPosition) {
+        let _ = self.emit(EVENT_REPLAY_POSITION, position);
+    }
+
+    fn emit_replay_seek(&self, seek: crate::replay::ReplaySeek) {
+        let _ = self.emit(EVENT_REPLAY_SEEK, seek);
+    }
 }
 
 impl CaptureRecording for AppHandle {
@@ -271,6 +283,21 @@ impl CaptureRecording for AppHandle {
     fn tick(&self) {
         self.state::<crate::recording::RecordingState>().tick(self);
     }
+}
+
+fn emit_replay_position(events: &impl CaptureEvents, position: crate::replay::ReplayPosition) {
+    events.emit_replay_position(position);
+}
+
+fn emit_replay_seek(events: &impl CaptureEvents, seek: crate::replay::ReplaySeek) {
+    events.emit_replay_seek(seek);
+}
+
+pub(crate) fn emit_replay_position_from_app(
+    app: &AppHandle,
+    position: crate::replay::ReplayPosition,
+) {
+    app.emit_replay_position(position);
 }
 
 fn emit_link(events: &impl CaptureEvents, state: &'static str, detail: Option<String>) {
@@ -534,6 +561,13 @@ impl CaptureState {
             .map_err(|_| "frame buffer unavailable".to_string())?
             .detail(idx, catalog)
     }
+
+    pub(crate) fn frame_ring_snapshot(&self) -> Result<Vec<crate::dissect::BufferedFrame>, String> {
+        self.frame_ring
+            .lock()
+            .map_err(|_| "frame buffer unavailable".to_string())
+            .map(|guard| guard.snapshot_all())
+    }
 }
 
 fn retain_frame(ring: &Arc<Mutex<FrameRing>>, frame: &GenFrame, wire: Vec<u8>) {
@@ -591,6 +625,8 @@ fn reader_loop_core(
     let mut last_stats = Instant::now();
     let source_kind = source.source_kind();
     let caps = source.capabilities();
+    let replay_control = source.replay_control();
+    let mut last_replay_position = Instant::now() - crate::replay::POSITION_INTERVAL;
     let mut recording_handle: Option<crate::recording::RecordingHandle> = None;
 
     while !stop.load(Ordering::Relaxed) {
@@ -660,7 +696,7 @@ fn reader_loop_core(
                         // One copy, only while recording: the ring takes the
                         // frame by move (review R4a-4: an Arc for every frame
                         // would copy on the common, non-recording path).
-                        handle.push(ts_ns, wire.clone());
+                        handle.push_with_dir(ts_ns, dir, wire.clone());
                     }
                 } else if recording_handle.is_some() {
                     recording_handle = None;
@@ -679,6 +715,13 @@ fn reader_loop_core(
                         caps,
                     );
                 }
+                if let Some(control) = &replay_control {
+                    // CP-023: replay:position at ~10 Hz while playing.
+                    if last_replay_position.elapsed() >= crate::replay::POSITION_INTERVAL {
+                        emit_replay_position(events, control.position());
+                        last_replay_position = Instant::now();
+                    }
+                }
             }
             ChannelRead::Gap { dropped, span_ns } => {
                 stats.gap_records.fetch_add(1, Ordering::Relaxed);
@@ -691,6 +734,23 @@ fn reader_loop_core(
                     "gap record",
                     serde_json::json!({ "dropped": dropped, "spanNs": span_ns }),
                 );
+            }
+            ChannelRead::ReplaySeek { seek } => {
+                // CP-022: a seek clears retained/emission state before later frames arrive.
+                if let Ok(mut accumulator) = accumulator.lock() {
+                    accumulator.clear();
+                }
+                if let Ok(mut ring) = frame_ring.lock() {
+                    ring.clear();
+                    ring.set_session_epoch_ns(
+                        replay_control.as_ref().map(|c| c.info().first_ts_ns),
+                    );
+                }
+                emit_replay_seek(events, seek);
+                if let Some(control) = &replay_control {
+                    emit_replay_position(events, control.position());
+                    last_replay_position = Instant::now();
+                }
             }
             ChannelRead::Idle => {}
             ChannelRead::Ended { detail } => {
@@ -708,6 +768,9 @@ fn reader_loop_core(
                 );
                 recording.end();
                 emit_stats(events, &stats, start, &mut stats_seq);
+                if let Some(control) = &replay_control {
+                    emit_replay_position(events, control.position());
+                }
                 capture_log(
                     crate::log::Level::Info,
                     "link",
@@ -742,6 +805,9 @@ fn reader_loop_core(
     }
     recording.end();
     emit_stats(events, &stats, start, &mut stats_seq);
+    if let Some(control) = &replay_control {
+        emit_replay_position(events, control.position());
+    }
     capture_log(
         crate::log::Level::Info,
         "stats",
@@ -776,11 +842,36 @@ fn reader_loop(
     );
 }
 
+fn recording_source_detail(source: &SourceSpec) -> String {
+    match source {
+        SourceSpec::Devgen { profile } => format!("profile={profile}"),
+        SourceSpec::Sim { addr } => addr.clone(),
+        SourceSpec::Pcap { path, pace } => format!("path={path}; pace={pace}"),
+        SourceSpec::PcapStream { addr } => addr.clone(),
+        SourceSpec::Live {
+            interface_id,
+            filter,
+        } => format!(
+            "interfaceId={interface_id}; filter={}",
+            filter.as_deref().unwrap_or("")
+        ),
+        SourceSpec::Stub => "stub".into(),
+    }
+}
+
 fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Result<(), String> {
     if state.starting.swap(true, Ordering::AcqRel) {
         return Err("capture is starting".into());
     }
-    let source = match Source::open(&source) {
+    let recording_source_detail = recording_source_detail(&source);
+    let replay = match &source {
+        SourceSpec::Pcap { path, pace } => app
+            .try_state::<crate::replay::ReplayState>()
+            .map(|state| state.prepared_for_path(path, pace))
+            .transpose()?,
+        _ => None,
+    };
+    let source = match Source::open_with_replay(&source, replay) {
         Ok(source) => source,
         Err(error) => {
             capture_log(
@@ -805,9 +896,17 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     if let Ok(mut ring) = state.frame_ring.lock() {
         ring.clear();
     }
+    let recording_started = std::time::SystemTime::now();
+    let recording_meta = crate::recording::RecordingMeta {
+        source_kind: source.source_kind().into(),
+        source_detail: recording_source_detail,
+        timestamp_source: source.capabilities().timestamp_source.into(),
+        scenario: source.scenario(),
+        started: recording_started,
+    };
     if let Err(error) = app
         .state::<crate::recording::RecordingState>()
-        .begin(&app, std::time::SystemTime::now())
+        .begin_with_meta(&app, recording_meta)
     {
         capture_log(
             crate::log::Level::Error,
@@ -1063,6 +1162,8 @@ mod tests {
         stats: Mutex<Vec<CaptureStatsEvent>>,
         sessions: Mutex<Vec<&'static str>>,
         links: Mutex<Vec<(&'static str, Option<String>)>>,
+        replay_positions: Mutex<Vec<crate::replay::ReplayPosition>>,
+        replay_seeks: Mutex<Vec<crate::replay::ReplaySeek>>,
     }
 
     impl CaptureEvents for Arc<RecordedEvents> {
@@ -1087,6 +1188,14 @@ mod tests {
         }
 
         fn emit_export(&self, _progress: ExportProgress) {}
+
+        fn emit_replay_position(&self, position: crate::replay::ReplayPosition) {
+            self.replay_positions.lock().unwrap().push(position);
+        }
+
+        fn emit_replay_seek(&self, seek: crate::replay::ReplaySeek) {
+            self.replay_seeks.lock().unwrap().push(seek);
+        }
     }
 
     struct NoopRecording;
@@ -1544,6 +1653,44 @@ mod tests {
         assert_eq!(links.first().map(|(state, _)| *state), Some("connected"));
         assert_eq!(links.last().map(|(state, _)| *state), Some("closed"));
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn replay_seek_event_clears_and_positions_before_frames_resume() {
+        let path = temp_pcap("replay-seek", 5);
+        let source = Source::open(&SourceSpec::Pcap {
+            path: path.display().to_string(),
+            pace: "fast".into(),
+        })
+        .unwrap();
+        let control = source.replay_control().unwrap();
+        control.seek(2);
+
+        let (events, stats) = run_source_to_end(source, MAX_CREDITS);
+
+        assert_eq!(
+            events.replay_seeks.lock().unwrap().as_slice(),
+            &[crate::replay::ReplaySeek { t_ns: 2, frame: 2 }]
+        );
+        assert!(events
+            .replay_positions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|position| position.frame >= 2));
+        assert_eq!(stats.received.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            events
+                .batch_indexes
+                .lock()
+                .unwrap()
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
         let _ = std::fs::remove_file(path);
     }
 
