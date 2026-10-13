@@ -2479,6 +2479,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "radeau-mcp"
+version = "0.1.12"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "radeau-pcap"
 version = "0.1.12"
 

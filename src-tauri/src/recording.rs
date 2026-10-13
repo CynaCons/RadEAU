@@ -671,7 +671,7 @@ pub fn recording_arm(
     set_recording_armed(&state, capture.is_running(), &app, armed)
 }
 
-fn set_recording_armed(
+pub(crate) fn set_recording_armed(
     state: &RecordingState,
     capture_running: bool,
     app: &AppHandle,
@@ -786,7 +786,7 @@ pub fn recording_list(state: State<RecordingState>) -> Vec<RecordingInfo> {
     list_recordings(&state)
 }
 
-fn list_recordings(state: &RecordingState) -> Vec<RecordingInfo> {
+pub(crate) fn list_recordings(state: &RecordingState) -> Vec<RecordingInfo> {
     let dir = state.dir_path();
     let Ok(entries) = fs::read_dir(&dir) else {
         return Vec::new();

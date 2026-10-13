@@ -10,6 +10,8 @@ use radeau_proto::{
 use serde::Serialize;
 use tauri::State;
 
+use crate::frame::GenFrame;
+
 /// Maximum retained frames; byte capacity is enforced independently.
 pub const FRAME_RING_CAP: usize = 65_536;
 /// Maximum retained raw-wire bytes (96 MiB).
@@ -50,6 +52,7 @@ pub struct FrameDetail {
 pub(crate) struct BufferedFrame {
     pub(crate) idx: u64,
     pub(crate) t_s: f64,
+    pub(crate) frame: GenFrame,
     pub(crate) wire: Vec<u8>,
 }
 
@@ -112,10 +115,18 @@ impl FrameRing {
     }
 
     /// Appends a full frame and evicts oldest frames for either hard bound.
-    pub fn push(&mut self, idx: u64, t_s: f64, wire: Vec<u8>) {
-        self.greatest_seen = Some(self.greatest_seen.map_or(idx, |seen| seen.max(idx)));
+    pub fn push(&mut self, frame: GenFrame, wire: Vec<u8>) {
+        self.greatest_seen = Some(
+            self.greatest_seen
+                .map_or(frame.idx, |seen| seen.max(frame.idx)),
+        );
         self.total_bytes = self.total_bytes.saturating_add(wire.len());
-        self.frames.push_back(BufferedFrame { idx, t_s, wire });
+        self.frames.push_back(BufferedFrame {
+            idx: frame.idx,
+            t_s: frame.t_s,
+            frame,
+            wire,
+        });
         while self.frames.len() > self.frame_cap || self.total_bytes > self.byte_cap {
             if let Some(evicted) = self.frames.pop_front() {
                 self.total_bytes = self.total_bytes.saturating_sub(evicted.wire.len());
@@ -2384,6 +2395,27 @@ mod tests {
         udp::UdpDatagram,
     };
 
+    fn test_frame(idx: u64) -> GenFrame {
+        GenFrame {
+            idx,
+            t_s: 0.0,
+            dir: crate::codes::DIR_UNKNOWN,
+            src_ep: 0,
+            proto: crate::codes::PROTO_OTHER,
+            svc: 0,
+            method: 0,
+            msg_type: 0,
+            session: -1,
+            wire_len: 1,
+            snap: [0; crate::frame::SNAP_LEN],
+            src_ip: 0,
+            dst_ip: 0,
+            src_mac: 0,
+            vlan: -1,
+            payload_off: 0,
+        }
+    }
+
     fn ipv4_wire(protocol: u8, transport: &[u8]) -> Vec<u8> {
         let src = [10, 42, 0, 99];
         let dst = [10, 42, 0, 20];
@@ -3037,8 +3069,8 @@ mod tests {
     #[test]
     fn ring_distinguishes_evicted_and_unknown() {
         let mut ring = FrameRing::with_limits(1, 100);
-        ring.push(0, 0.0, vec![1]);
-        ring.push(1, 0.0, vec![2]);
+        ring.push(test_frame(0), vec![1]);
+        ring.push(test_frame(1), vec![2]);
         assert_eq!(
             ring.detail(0, None).unwrap_err(),
             "frame no longer buffered"
@@ -3049,8 +3081,8 @@ mod tests {
     #[test]
     fn ring_evicts_for_byte_cap() {
         let mut ring = FrameRing::with_limits(10, 3);
-        ring.push(0, 0.0, vec![1, 2]);
-        ring.push(1, 0.0, vec![3, 4]);
+        ring.push(test_frame(0), vec![1, 2]);
+        ring.push(test_frame(1), vec![3, 4]);
         assert_eq!(
             ring.detail(0, None).unwrap_err(),
             "frame no longer buffered"

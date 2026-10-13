@@ -11,6 +11,7 @@ use tauri::Manager;
 // The dev frame generator is a runtime-gated development data source
 // (PRD §3.8) — compiled in every profile, activated only by an explicit
 // capture profile, and superseded as the default source by ecu-netsim (v0.4).
+mod automation;
 mod capture;
 mod catalog;
 mod channel;
@@ -27,6 +28,7 @@ mod frame;
 mod log;
 mod recording;
 mod replay;
+mod rows;
 mod simlink;
 
 fn main() {
@@ -37,6 +39,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(capture::CaptureState::default())
+        .manage(automation::AutomationState::default())
         .manage(catalog::CatalogState::default())
         .manage(recording::RecordingState::default())
         .manage(replay::ReplayState::default())
@@ -48,6 +51,7 @@ fn main() {
             app.state::<recording::RecordingState>()
                 .init_dir(app.handle());
             catalog::emit_initial(app.state::<catalog::CatalogState>().inner(), app.handle());
+            automation::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -76,6 +80,7 @@ fn main() {
             recording::recording_list,
             replay::replay_open,
             replay::replay_play,
+            replay::replay_status,
             replay::replay_pause,
             replay::replay_step,
             replay::replay_seek,

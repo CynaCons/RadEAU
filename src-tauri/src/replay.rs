@@ -83,9 +83,11 @@ pub struct ReplayIndex {
 #[derive(Default)]
 pub struct ReplayState {
     prepared: Mutex<HashMap<String, Arc<ReplayIndex>>>,
+    last_opened: Mutex<Option<String>>,
     /// The running replay's control. Weak: it lapses by itself when the
     /// session's source (the only strong owner) is dropped at session end.
     live: Mutex<Option<Weak<ReplayControl>>>,
+    last_position: Mutex<Option<ReplayPosition>>,
 }
 
 impl ReplayState {
@@ -118,6 +120,41 @@ impl ReplayState {
             .and_then(Weak::upgrade)
             .ok_or_else(|| "no replay session".to_string())
     }
+
+    pub(crate) fn automation_status(&self) -> ReplayStatus {
+        let info = self
+            .last_opened
+            .lock()
+            .ok()
+            .and_then(|path| path.clone())
+            .and_then(|path| {
+                self.prepared
+                    .lock()
+                    .ok()
+                    .and_then(|prepared| prepared.get(&path).map(|index| index.info.clone()))
+            });
+        let position = self
+            .live()
+            .ok()
+            .map(|control| control.position())
+            .or_else(|| self.last_position.lock().ok().and_then(|p| p.clone()));
+        ReplayStatus { info, position }
+    }
+
+    /// Remembers the last emitted position so `replay_status` still answers
+    /// (e.g. `ended`) after the replay session and its control are gone.
+    pub(crate) fn remember_position(&self, position: &ReplayPosition) {
+        if let Ok(mut last) = self.last_position.lock() {
+            *last = Some(position.clone());
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayStatus {
+    pub info: Option<ReplayInfo>,
+    pub position: Option<ReplayPosition>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -489,40 +526,121 @@ pub async fn replay_open(
         .prepared
         .lock()
         .map_err(|_| "replay state poisoned")?
-        .insert(path, Arc::new(index));
+        .insert(path.clone(), Arc::new(index));
+    *state
+        .last_opened
+        .lock()
+        .map_err(|_| "replay state poisoned")? = Some(path);
+    crate::automation::emit_replay_opened(&app, &info);
+    Ok(info)
+}
+
+pub(crate) fn replay_open_blocking(
+    state: &ReplayState,
+    app: &AppHandle,
+    path: String,
+) -> Result<ReplayInfo, String> {
+    let (info, index) = prepare(&path, Some(app))?;
+    state
+        .prepared
+        .lock()
+        .map_err(|_| "replay state poisoned")?
+        .insert(path.clone(), Arc::new(index));
+    *state
+        .last_opened
+        .lock()
+        .map_err(|_| "replay state poisoned")? = Some(path);
+    crate::automation::emit_replay_opened(app, &info);
     Ok(info)
 }
 
 #[tauri::command]
-pub fn replay_play(state: State<ReplayState>, app: AppHandle) -> Result<(), String> {
-    let control = state.live()?;
+pub fn replay_play(
+    state: State<ReplayState>,
+    capture: State<crate::capture::CaptureState>,
+    app: AppHandle,
+) -> Result<ReplayPosition, String> {
+    replay_play_inner(&state, &capture, &app)
+}
+
+pub(crate) fn replay_play_inner(
+    state: &ReplayState,
+    capture: &crate::capture::CaptureState,
+    app: &AppHandle,
+) -> Result<ReplayPosition, String> {
+    let control = match state.live() {
+        Ok(control) => control,
+        Err(_) => {
+            let path = state
+                .last_opened
+                .lock()
+                .map_err(|_| "replay state poisoned")?
+                .clone()
+                .ok_or_else(|| "no replay file opened".to_string())?;
+            crate::capture::start_session(
+                capture,
+                app.clone(),
+                crate::capture::SourceSpec::Pcap {
+                    path,
+                    pace: "realtime".into(),
+                },
+            )?;
+            state.live()?
+        }
+    };
     control.play();
-    emit_position(&app, &control);
-    Ok(())
+    emit_position(app, &control);
+    Ok(control.position())
 }
 
 #[tauri::command]
-pub fn replay_pause(state: State<ReplayState>, app: AppHandle) -> Result<(), String> {
+pub fn replay_pause(state: State<ReplayState>, app: AppHandle) -> Result<ReplayPosition, String> {
+    replay_pause_inner(&state, &app)
+}
+
+pub(crate) fn replay_pause_inner(
+    state: &ReplayState,
+    app: &AppHandle,
+) -> Result<ReplayPosition, String> {
     let control = state.live()?;
     control.pause();
-    emit_position(&app, &control);
-    Ok(())
+    emit_position(app, &control);
+    Ok(control.position())
 }
 
 #[tauri::command]
-pub fn replay_step(state: State<ReplayState>, app: AppHandle) -> Result<(), String> {
+pub fn replay_step(state: State<ReplayState>, app: AppHandle) -> Result<ReplayPosition, String> {
+    replay_step_inner(&state, &app)
+}
+
+pub(crate) fn replay_step_inner(
+    state: &ReplayState,
+    app: &AppHandle,
+) -> Result<ReplayPosition, String> {
     let control = state.live()?;
     control.step();
-    emit_position(&app, &control);
-    Ok(())
+    emit_position(app, &control);
+    Ok(control.position())
 }
 
 #[tauri::command]
-pub fn replay_seek(state: State<ReplayState>, app: AppHandle, t_ns: u64) -> Result<(), String> {
+pub fn replay_seek(
+    state: State<ReplayState>,
+    app: AppHandle,
+    t_ns: u64,
+) -> Result<ReplayPosition, String> {
+    replay_seek_inner(&state, &app, t_ns)
+}
+
+pub(crate) fn replay_seek_inner(
+    state: &ReplayState,
+    app: &AppHandle,
+    t_ns: u64,
+) -> Result<ReplayPosition, String> {
     let control = state.live()?;
     control.seek(t_ns);
-    emit_position(&app, &control);
-    Ok(())
+    emit_position(app, &control);
+    Ok(control.position())
 }
 
 #[tauri::command]
@@ -530,11 +648,24 @@ pub fn replay_set_speed(
     state: State<ReplayState>,
     app: AppHandle,
     speed: Option<f64>,
-) -> Result<(), String> {
+) -> Result<ReplayPosition, String> {
+    replay_set_speed_inner(&state, &app, speed)
+}
+
+pub(crate) fn replay_set_speed_inner(
+    state: &ReplayState,
+    app: &AppHandle,
+    speed: Option<f64>,
+) -> Result<ReplayPosition, String> {
     let control = state.live()?;
     control.set_speed(speed)?;
-    emit_position(&app, &control);
-    Ok(())
+    emit_position(app, &control);
+    Ok(control.position())
+}
+
+#[tauri::command]
+pub fn replay_status(state: State<ReplayState>) -> ReplayStatus {
+    state.automation_status()
 }
 
 pub fn emit_position(app: &AppHandle, control: &ReplayControl) {

@@ -51,6 +51,15 @@ fn capture_log(level: crate::log::Level, area: &str, msg: &str, extra: serde_jso
     crate::log::log(level, area, msg, extra);
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CaptureStatusDto {
+    running: bool,
+    source: Option<SourceSpec>,
+    session_info: serde_json::Value,
+    stats: Option<CaptureStatsEvent>,
+}
+
 #[cfg(test)]
 fn capture_log(_level: crate::log::Level, _area: &str, _msg: &str, _extra: serde_json::Value) {}
 
@@ -243,6 +252,11 @@ impl CaptureEvents for AppHandle {
     }
 
     fn emit_stats(&self, stats: CaptureStatsEvent) {
+        if let Some(state) = self.try_state::<CaptureState>() {
+            if let Ok(mut last) = state.last_stats.lock() {
+                *last = Some(stats.clone());
+            }
+        }
         let _ = self.emit(EVENT_CAPTURE_STATS, stats);
     }
 
@@ -259,6 +273,9 @@ impl CaptureEvents for AppHandle {
     }
 
     fn emit_replay_position(&self, position: crate::replay::ReplayPosition) {
+        // The last position outlives the session (replay_status reports `ended`).
+        self.state::<crate::replay::ReplayState>()
+            .remember_position(&position);
         let _ = self.emit(EVENT_REPLAY_POSITION, position);
     }
 
@@ -350,7 +367,7 @@ impl Default for CaptureStats {
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CaptureStatsEvent {
+pub(crate) struct CaptureStatsEvent {
     seq: u64,
     elapsed_s: f64,
     received: u64,
@@ -526,6 +543,8 @@ fn ui_ready(attached: &AtomicBool, start: Instant) -> bool {
 pub struct CaptureState {
     session: Arc<Mutex<Option<Session>>>,
     frame_ring: Arc<Mutex<FrameRing>>,
+    current_source: Arc<Mutex<Option<SourceSpec>>>,
+    last_stats: Arc<Mutex<Option<CaptureStatsEvent>>>,
     next_session_id: AtomicU64,
     starting: AtomicBool,
 }
@@ -535,6 +554,8 @@ impl Default for CaptureState {
         Self {
             session: Arc::new(Mutex::new(None)),
             frame_ring: Arc::new(Mutex::new(FrameRing::default())),
+            current_source: Arc::new(Mutex::new(None)),
+            last_stats: Arc::new(Mutex::new(None)),
             next_session_id: AtomicU64::new(1),
             starting: AtomicBool::new(false),
         }
@@ -548,6 +569,19 @@ impl CaptureState {
 
     pub fn is_running(&self) -> bool {
         self.session.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    pub(crate) fn automation_status(&self) -> CaptureStatusDto {
+        CaptureStatusDto {
+            running: self.is_running(),
+            source: self
+                .current_source
+                .lock()
+                .ok()
+                .and_then(|source| source.clone()),
+            session_info: serde_json::Value::Null,
+            stats: self.last_stats.lock().ok().and_then(|stats| stats.clone()),
+        }
     }
 
     /// Reads a retained frame after capture has stopped as well as while live.
@@ -568,11 +602,16 @@ impl CaptureState {
             .map_err(|_| "frame buffer unavailable".to_string())
             .map(|guard| guard.snapshot_all())
     }
+
+    #[cfg(test)]
+    pub(crate) fn retain_frame_for_test(&self, frame: GenFrame, wire: Vec<u8>) {
+        retain_frame(&self.frame_ring, &frame, wire);
+    }
 }
 
 fn retain_frame(ring: &Arc<Mutex<FrameRing>>, frame: &GenFrame, wire: Vec<u8>) {
     if let Ok(mut guard) = ring.lock() {
-        guard.push(frame.idx, frame.t_s, wire);
+        guard.push(frame.clone(), wire);
     }
 }
 
@@ -859,7 +898,11 @@ fn recording_source_detail(source: &SourceSpec) -> String {
     }
 }
 
-fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Result<(), String> {
+pub(crate) fn start_session(
+    state: &CaptureState,
+    app: AppHandle,
+    source: SourceSpec,
+) -> Result<(), String> {
     if state.starting.swap(true, Ordering::AcqRel) {
         return Err("capture is starting".into());
     }
@@ -871,6 +914,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
             .transpose()?,
         _ => None,
     };
+    let source_spec = source.clone();
     let source = match Source::open_with_replay(&source, replay) {
         Ok(source) => source,
         Err(error) => {
@@ -895,6 +939,12 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     let stats = Arc::new(CaptureStats::default());
     if let Ok(mut ring) = state.frame_ring.lock() {
         ring.clear();
+    }
+    if let Ok(mut current) = state.current_source.lock() {
+        *current = Some(source_spec.clone());
+    }
+    if let Ok(mut last) = state.last_stats.lock() {
+        *last = None;
     }
     let recording_started = std::time::SystemTime::now();
     let recording_meta = crate::recording::RecordingMeta {
@@ -922,10 +972,13 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     let thread_stats = Arc::clone(&stats);
     let id = state.next_session_id.fetch_add(1, Ordering::Relaxed);
     let sessions = Arc::clone(&state.session);
+    let current_source = Arc::clone(&state.current_source);
     let installed = Arc::new(AtomicBool::new(false));
     let thread_installed = Arc::clone(&installed);
     let attached = Arc::new(AtomicBool::new(false));
     let thread_attached = Arc::clone(&attached);
+    let thread_app = app.clone();
+    let event_app = app.clone();
     let handle = std::thread::Builder::new()
         .name("capture-reader".into())
         .spawn(move || {
@@ -933,7 +986,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
                 std::thread::yield_now();
             }
             reader_loop(
-                app,
+                thread_app,
                 source,
                 thread_stop,
                 thread_credits,
@@ -947,6 +1000,10 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
                     *guard = None;
                 }
             }
+            if let Ok(mut current) = current_source.lock() {
+                *current = None;
+            }
+            crate::automation::emit_capture_state(&event_app, false, None);
         })
         .map_err(|e| format!("failed to spawn reader: {e}"))?;
 
@@ -960,10 +1017,11 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     });
     installed.store(true, Ordering::Release);
     state.starting.store(false, Ordering::Release);
+    crate::automation::emit_capture_state(&app, true, Some(source_spec));
     Ok(())
 }
 
-fn stop_session(state: &CaptureState) -> Result<(), String> {
+pub(crate) fn stop_session(state: &CaptureState) -> Result<(), String> {
     let mut session = state.take().ok_or("no active capture")?;
     session.stop.store(true, Ordering::Relaxed);
     if let Some(h) = session.thread.take() {
@@ -973,6 +1031,9 @@ fn stop_session(state: &CaptureState) -> Result<(), String> {
         acc.clear(); // cleared per stop (SRS §1); credits reset below
     }
     session.credits.store(MAX_CREDITS, Ordering::Relaxed);
+    if let Ok(mut current) = state.current_source.lock() {
+        *current = None;
+    }
     Ok(())
 }
 
@@ -1002,7 +1063,7 @@ pub fn capture_start(
 }
 
 #[tauri::command]
-pub fn capture_stop(state: State<CaptureState>) -> Result<(), String> {
+pub fn capture_stop(state: State<CaptureState>, app: AppHandle) -> Result<(), String> {
     let result = stop_session(&state);
     capture_log(
         crate::log::Level::Info,
@@ -1010,6 +1071,9 @@ pub fn capture_stop(state: State<CaptureState>) -> Result<(), String> {
         "capture stopped",
         serde_json::json!({ "error": result.as_ref().err() }),
     );
+    if result.is_ok() {
+        crate::automation::emit_capture_state(&app, false, None);
+    }
     result
 }
 
@@ -1024,8 +1088,7 @@ pub struct InterfaceInfo {
     loopback: bool,
 }
 
-#[tauri::command]
-pub fn capture_list_interfaces() -> Result<Vec<InterfaceInfo>, String> {
+pub(crate) fn list_interfaces() -> Result<Vec<InterfaceInfo>, String> {
     // CP-011: stable live-capture interface rows come from radeau-livecap.
     radeau_livecap::list_devices()
         .map(|devices| {
@@ -1042,6 +1105,11 @@ pub fn capture_list_interfaces() -> Result<Vec<InterfaceInfo>, String> {
                 .collect()
         })
         .map_err(|error| radeau_livecap::capture_error_remedy(&error))
+}
+
+#[tauri::command]
+pub fn capture_list_interfaces() -> Result<Vec<InterfaceInfo>, String> {
+    list_interfaces()
 }
 
 /// Exactly one ack per animation frame from the UI; each restores one credit

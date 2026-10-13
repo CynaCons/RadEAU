@@ -10,10 +10,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{
     classify::classify_frame,
-    codes::*,
     dissect::{dissect_with_catalog, FrameLayer},
     endpoints::EndpointTable,
     frame::GenFrame,
+    rows,
 };
 
 const EVENT_EXPORT_JSONL: &str = "export:jsonl";
@@ -97,6 +97,16 @@ fn export_jsonl_inner(
     }
 }
 
+pub(crate) fn export_jsonl_for_automation(
+    path: String,
+    from: ExportFrom,
+    state: &crate::capture::CaptureState,
+    catalog: Option<&radeau_catalog::Catalog>,
+) -> Result<ExportJsonlResult, String> {
+    let mut progress = JsonlProgress::new(|_, _| {});
+    export_jsonl_inner(path, from, state, catalog, &mut progress)
+}
+
 struct JsonlProgress<'a> {
     emit: Box<EmitProgress<'a>>,
     last_done: u64,
@@ -144,17 +154,9 @@ fn export_ring_jsonl(
     let frames = state.frame_ring_snapshot()?;
     let total = frames.len() as u64;
     let mut out = JsonlWriter::create(&path)?;
-    let mut endpoints = EndpointTable::default();
     progress.maybe_emit(0, total);
     for (done, retained) in frames.iter().enumerate() {
-        let frame = classify_frame(
-            &retained.wire,
-            retained.idx,
-            retained.t_s,
-            DIR_UNKNOWN,
-            &mut endpoints,
-        );
-        out.write_line(&line_from_frame(&frame, &retained.wire, catalog))?;
+        out.write_line(&line_from_frame(&retained.frame, &retained.wire, catalog))?;
         progress.maybe_emit(done as u64 + 1, total);
     }
     out.finish(total, path)
@@ -261,222 +263,19 @@ fn line_from_frame(
         .payload_offset
         .saturating_mul(2)
         .min(detail.bytes.len());
-    let (name, type_name) = display_name_and_type(frame);
+    let row = rows::frame_row(frame, None);
     ExportJsonlLine {
-        idx: frame.idx,
-        t_ns: seconds_to_ns(frame.t_s),
-        dir: dir_label(frame.dir),
-        len: frame.wire_len,
-        protocol: protocol_label(frame.proto),
-        name,
-        type_name,
-        key: frame_key(frame),
+        idx: row.idx,
+        t_ns: row.t_ns,
+        dir: row.dir,
+        len: row.len,
+        protocol: row.protocol,
+        name: row.name,
+        type_name: row.r#type,
+        key: row.key,
         layers: detail.layers,
         payload_hex: detail.bytes[payload_start..].to_string(),
         decoded: detail.decoded,
-    }
-}
-
-fn seconds_to_ns(t_s: f64) -> u64 {
-    if !t_s.is_finite() || t_s <= 0.0 {
-        0
-    } else {
-        (t_s * 1_000_000_000.0).round().min(u64::MAX as f64) as u64
-    }
-}
-
-fn dir_label(dir: u8) -> &'static str {
-    match dir {
-        DIR_RX => "rx",
-        DIR_TX => "tx",
-        _ => "unknown",
-    }
-}
-
-fn protocol_label(proto: u8) -> &'static str {
-    match proto {
-        PROTO_SOMEIP => "SOME/IP",
-        PROTO_SD => "SD",
-        PROTO_GPTP => "gPTP",
-        PROTO_ARP => "ARP",
-        PROTO_UDP => "UDP",
-        PROTO_TCP => "TCP",
-        PROTO_ICMP => "ICMP",
-        PROTO_IPV6 => "IPv6",
-        PROTO_IPV4_OTHER => "IPv4",
-        PROTO_OTHER => "Other",
-        PROTO_DOIP => "DoIP",
-        PROTO_MALFORMED => "Malformed",
-        PROTO_ICMPV6 => "ICMPv6",
-        PROTO_IGMP => "IGMP",
-        PROTO_DHCP => "DHCP",
-        PROTO_DNS => "DNS",
-        PROTO_NTP => "NTP",
-        PROTO_SSDP => "SSDP",
-        PROTO_PTP => "PTP",
-        PROTO_LLDP => "LLDP",
-        PROTO_AVTP => "AVTP",
-        PROTO_MACSEC => "MACsec",
-        PROTO_EAPOL => "EAPOL",
-        PROTO_HTTP => "HTTP",
-        PROTO_TLS => "TLS",
-        PROTO_SSH => "SSH",
-        PROTO_SCTP => "SCTP",
-        PROTO_TFTP => "TFTP",
-        PROTO_SNMP => "SNMP",
-        _ => "Unknown",
-    }
-}
-
-fn display_name_and_type(frame: &GenFrame) -> (String, String) {
-    match frame.proto {
-        PROTO_SOMEIP => (
-            format!("Service 0x{:04X}.0x{:04X}", frame.svc, frame.method),
-            someip_type(frame.msg_type).into(),
-        ),
-        PROTO_SD => {
-            let ty = sd_type(frame.msg_type);
-            (format!("{ty} · {}", source_key(frame)), ty.into())
-        }
-        PROTO_GPTP => {
-            let ty = gptp_type(frame.msg_type);
-            (format!("{ty} · {}", source_key(frame)), ty.into())
-        }
-        PROTO_ARP => {
-            let ty = arp_type(frame.msg_type);
-            (ty.into(), ty.into())
-        }
-        PROTO_UDP | PROTO_TCP => (
-            format!(
-                "{}:{} → {}:{}",
-                ipv4(frame.src_ip),
-                frame.svc,
-                ipv4(frame.dst_ip),
-                frame.method
-            ),
-            String::new(),
-        ),
-        PROTO_ICMP => (
-            format!("type {} code {}", frame.svc, frame.method),
-            String::new(),
-        ),
-        PROTO_IPV6 => (format!("next header {}", frame.svc), String::new()),
-        PROTO_IPV4_OTHER => (format!("protocol {}", frame.svc), String::new()),
-        PROTO_OTHER => (format!("EtherType 0x{:04X}", frame.svc), String::new()),
-        PROTO_MALFORMED => (format!("runt · {} bytes", frame.wire_len), String::new()),
-        PROTO_ICMPV6 | PROTO_IGMP | PROTO_AVTP | PROTO_MACSEC | PROTO_EAPOL => (
-            format!("{} Type {}", protocol_label(frame.proto), frame.msg_type),
-            frame.msg_type.to_string(),
-        ),
-        PROTO_DHCP | PROTO_DNS | PROTO_NTP | PROTO_SSDP | PROTO_PTP | PROTO_HTTP | PROTO_TLS
-        | PROTO_SSH | PROTO_SCTP | PROTO_TFTP | PROTO_SNMP | PROTO_DOIP => (
-            format!("{} Type {}", protocol_label(frame.proto), frame.msg_type),
-            frame.msg_type.to_string(),
-        ),
-        _ => (protocol_label(frame.proto).into(), String::new()),
-    }
-}
-
-fn frame_key(frame: &GenFrame) -> String {
-    let addr = source_addr_key(frame);
-    match frame.proto {
-        PROTO_SOMEIP => format!("0:{}:{}", frame.svc, frame.method),
-        PROTO_SD => format!("1:{addr}"),
-        PROTO_GPTP => format!("2:{addr}:{}", frame.msg_type),
-        PROTO_ARP => format!("3:{addr}"),
-        PROTO_UDP | PROTO_TCP => format!(
-            "{}:{}:{}>{}:{}",
-            frame.proto, frame.src_ip, frame.svc, frame.dst_ip, frame.method
-        ),
-        PROTO_ICMP => format!("6:{}>{}", frame.src_ip, frame.dst_ip),
-        PROTO_IPV6 | PROTO_IPV4_OTHER | PROTO_OTHER => {
-            format!("{}:{}:{}", frame.proto, frame.src_mac, frame.svc)
-        }
-        PROTO_MALFORMED => format!("11:{}", frame.src_mac),
-        PROTO_ICMPV6 | PROTO_IGMP | PROTO_PTP => {
-            format!("{}:{addr}:{}", frame.proto, frame.msg_type)
-        }
-        PROTO_LLDP | PROTO_MACSEC | PROTO_EAPOL => format!("{}:{}", frame.proto, frame.src_mac),
-        PROTO_AVTP => format!("{}:{}:{}", frame.proto, frame.src_mac, frame.msg_type),
-        _ => format!(
-            "{}:{}:{}>{}:{}",
-            frame.proto, frame.src_ip, frame.svc, frame.dst_ip, frame.method
-        ),
-    }
-}
-
-fn source_addr_key(frame: &GenFrame) -> u64 {
-    if frame.src_ip == 0 {
-        frame.src_mac
-    } else {
-        u64::from(frame.src_ip)
-    }
-}
-
-fn source_key(frame: &GenFrame) -> String {
-    if frame.src_ip == 0 {
-        mac(frame.src_mac)
-    } else {
-        ipv4(frame.src_ip)
-    }
-}
-
-fn ipv4(value: u32) -> String {
-    let b = value.to_be_bytes();
-    format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3])
-}
-
-fn mac(value: u64) -> String {
-    (0..6)
-        .rev()
-        .map(|n| format!("{:02x}", (value >> (n * 8)) & 0xff))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
-fn someip_type(ty: u8) -> &'static str {
-    match ty {
-        SOMEIP_TY_NOTIFICATION => "Notification",
-        SOMEIP_TY_REQUEST => "Request",
-        SOMEIP_TY_REQUEST_NO_RETURN => "RequestNoReturn",
-        SOMEIP_TY_RESPONSE => "Response",
-        SOMEIP_TY_ERROR => "Error",
-        _ => "Other",
-    }
-}
-
-fn sd_type(ty: u8) -> &'static str {
-    match ty {
-        SD_TY_OFFER => "Offer",
-        SD_TY_FIND => "Find",
-        SD_TY_STOP_OFFER => "StopOffer",
-        SD_TY_SUBSCRIBE => "Subscribe",
-        SD_TY_STOP_SUBSCRIBE => "StopSubscribe",
-        SD_TY_SUBSCRIBE_ACK => "SubscribeAck",
-        SD_TY_SUBSCRIBE_NACK => "SubscribeNack",
-        SD_TY_EMPTY => "Empty",
-        _ => "Other",
-    }
-}
-
-fn gptp_type(ty: u8) -> &'static str {
-    match ty {
-        GPTP_TY_SYNC => "Sync",
-        GPTP_TY_FOLLOW_UP => "FollowUp",
-        GPTP_TY_PDELAY_REQ => "PdelayReq",
-        GPTP_TY_PDELAY_RESP => "PdelayResp",
-        GPTP_TY_PDELAY_RESP_FOLLOW_UP => "PdelayRespFollowUp",
-        GPTP_TY_ANNOUNCE => "Announce",
-        GPTP_TY_SIGNALING => "Signaling",
-        _ => "Other",
-    }
-}
-
-fn arp_type(ty: u8) -> &'static str {
-    match ty {
-        ARP_TY_REQUEST => "Request",
-        ARP_TY_REPLY => "Reply",
-        _ => "Other",
     }
 }
 
