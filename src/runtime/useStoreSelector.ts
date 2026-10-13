@@ -30,24 +30,32 @@ export function shallowEqual<T>(a: T, b: T): boolean {
   return true;
 }
 
+const noopSubscribe = (): (() => void) => () => undefined;
+
 /**
  * Returns `selector(store.getSnapshot())`, stable across publishes for which
  * `isEqual(previous, next)` holds. The selector may be an inline closure: the
  * latest one is used, and the cached result is reused while the snapshot is
  * the same object.
+ *
+ * `active = false` freezes the selection at its last value and unsubscribes —
+ * a hidden keep-alive view keeps its state and does zero render work, then
+ * catches up in one render when it becomes active again.
  */
 export function useStoreSelector<S, T>(
   store: ExternalStore<S>,
   selector: (snapshot: S) => T,
   isEqual: (a: T, b: T) => boolean = Object.is,
+  active = true,
 ): T {
   const selectorRef = useRef(selector);
   selectorRef.current = selector;
   const cache = useRef<{ snap: S; value: T } | null>(null);
 
   const getSelection = (): T => {
-    const snap = store.getSnapshot();
     const prev = cache.current;
+    if (!active && prev !== null) return prev.value;
+    const snap = store.getSnapshot();
     if (prev !== null && prev.snap === snap) return prev.value;
     const next = selectorRef.current(snap);
     if (prev !== null && isEqual(prev.value, next)) {
@@ -58,5 +66,5 @@ export function useStoreSelector<S, T>(
     return next;
   };
 
-  return useSyncExternalStore(store.subscribe, getSelection);
+  return useSyncExternalStore(active ? store.subscribe : noopSubscribe, getSelection);
 }

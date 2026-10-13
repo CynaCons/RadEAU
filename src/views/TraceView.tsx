@@ -27,14 +27,14 @@ import PauseIcon from "@mui/icons-material/Pause";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import TuneIcon from "@mui/icons-material/Tune";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import type { TableComponents } from "react-virtuoso";
 import { EmptyState } from "../components/EmptyState";
 import { TraceDetailPanel } from "../components/TraceDetailPanel";
 import { TraceFilterPopover } from "../components/TraceFilterPopover";
-import { useViewLifecycle } from "../shell/viewLifecycle";
+import { useViewActive, useViewLifecycle } from "../shell/viewLifecycle";
 import {
   captureButtonLabel,
   linkChipColorVar,
@@ -68,7 +68,8 @@ import {
   DEFAULT_TRACE_MODE,
   fixedDisplayKey,
   HISTORY_WINDOW_OPTIONS,
-  projectDisplayRows,
+  IncrementalTraceProjection,
+  type DisplayRows,
   type HistoryWindow,
   type TraceDisplayMode,
 } from "../runtime/traceDisplay";
@@ -90,6 +91,7 @@ import {
 } from "../runtime/traceTime";
 import { traceStore } from "../runtime/traceStore";
 import { countRender } from "../runtime/perfProbe";
+import { shallowEqual, useStoreSelector } from "../runtime/useStoreSelector";
 import type { TraceFrame } from "../runtime/frameModel";
 
 // ---------------------------------------------------------------------------
@@ -180,6 +182,7 @@ const RAIL_SLOT_SX: SxProps = {
 
 const TABLE_WRAP_SX: SxProps = {
   height: "100%",
+  contain: "strict",
   "& th": {
     backgroundColor: "var(--surface-raised-2)",
     fontSize: 14,
@@ -239,6 +242,28 @@ const TABLE_WRAP_SX: SxProps = {
   "& button.trace-row-btn[aria-pressed='true']": { color: "var(--accent-primary)" },
 };
 
+const TRACE_ROOT_SX: SxProps = {
+  flex: 1,
+  minHeight: 0,
+  minWidth: 0,
+  display: "flex",
+  overflow: "hidden",
+  contain: "layout paint style",
+};
+const TABLE_REGION_SX: SxProps = {
+  flex: 1,
+  minWidth: 0,
+  position: "relative",
+  backgroundColor: "var(--surface-canvas)",
+  display: "flex",
+  flexDirection: "column",
+  contain: "layout paint style",
+};
+const TABLE_INNER_SX: SxProps = { flex: 1, minHeight: 0, position: "relative" };
+const TABLE_HOST_SX: SxProps = { height: "100%", position: "relative", contain: "strict" };
+const VIRTUOSO_STYLE: CSSProperties = { height: "100%" };
+const ROW_CENTER_STYLE: CSSProperties = { textAlign: "center", padding: 0 };
+
 // Material "ChevronRight" / "PushPin" glyphs inlined for the hot row cells.
 const CHEVRON_RIGHT_PATH = "M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z";
 const PUSH_PIN_PATH =
@@ -248,8 +273,9 @@ const PUSH_PIN_PATH =
 // Table pieces
 // ---------------------------------------------------------------------------
 
-interface TraceTableContext {
+export interface TraceTableContext {
   columns: ColumnDef[];
+  rows: DisplayRows;
   mode: TraceDisplayMode;
   pinned: ReadonlySet<string>;
   onTogglePin: (key: string) => void;
@@ -283,9 +309,11 @@ function makeTableComponents(columns: ColumnDef[]): TableComponents<TraceFrame, 
       </table>
     ),
     // Second <tr> for the dissection panel; omit fixedItemHeight so Virtuoso measures.
-    TableRow: ({ children, style, item, context, ...rest }) => {
+    TableRow: ({ children, style, context, ...rest }) => {
+      const itemIndex = Number(rest["data-item-index"]);
+      const item = itemIndex >= 0 && itemIndex < context.rows.length ? context.rows.get(itemIndex) : undefined;
       const expanded =
-        context.expansion !== null && rowMatchesExpansion(context.mode, item, context.expansion);
+        item !== undefined && context.expansion !== null && rowMatchesExpansion(context.mode, item, context.expansion);
       return (
         <>
           <tr {...rest} style={style}>
@@ -375,11 +403,7 @@ function committedKeys(
   }
 }
 
-function rowContent(
-  _index: number,
-  f: TraceFrame,
-  context: TraceTableContext | undefined,
-): ReactNode {
+function TraceRowCells({ f, context }: { f: TraceFrame; context: TraceTableContext }) {
   countRender("trace-row");
   const key = fixedDisplayKey(f);
   const pinned = context?.pinned.has(key) ?? false;
@@ -389,7 +413,7 @@ function rowContent(
   const expandLabel = expanded ? "Collapse row" : "Expand row";
   return (
     <>
-      <td style={{ textAlign: "center", padding: 0 }}>
+      <td style={ROW_CENTER_STYLE}>
         <button
           type="button"
           className="trace-row-btn"
@@ -441,7 +465,7 @@ function rowContent(
       <td style={MONO_RIGHT}>{f.deltaKey}</td>
       <td style={MONO_RIGHT}>{f.channel}</td>
       {context?.mode === "fixed" ? (
-        <td style={{ textAlign: "center", padding: 0 }}>
+        <td style={ROW_CENTER_STYLE}>
           <button
             type="button"
             className="trace-row-btn"
@@ -471,11 +495,195 @@ function rowContent(
 // View
 // ---------------------------------------------------------------------------
 
+const TRACE_LIFECYCLE = {};
+
+function TracePipeline() {
+  const capturing = useStoreSelector(sessionStore, (snapshot) => snapshot.running);
+  useEffect(() => {
+    if (!capturing) return;
+    const unsubscribe = onFrameBatch((batch) => {
+      if (sessionStore.getSnapshot().running) traceStore.ingest(batch);
+    });
+    let raf = 0;
+    if (isDesktop()) {
+      const loop = (): void => {
+        ackFrames(1);
+        raf = requestAnimationFrame(loop);
+      };
+      raf = requestAnimationFrame(loop);
+    }
+    return () => {
+      unsubscribe();
+      cancelAnimationFrame(raf);
+    };
+  }, [capturing]);
+  return null;
+}
+
+function DroppedChip({ capturing, active }: { capturing: boolean; active: boolean }) {
+  const stats = useStoreSelector(sessionStore, (snapshot) => snapshot.stats, Object.is, active);
+  const dropped = stats && capturing ? lossTotal(stats) : 0;
+  if (dropped <= 0 || !stats) return null;
+  return (
+    <Tooltip title={droppedBreakdownTooltip(stats)}>
+      <Chip
+        size="small"
+        variant="outlined"
+        label={`Dropped · ${dropped.toLocaleString("en-US")}`}
+        data-testid="trace-dropped-chip"
+        sx={{ height: 22, fontSize: 12, color: "var(--warning)", borderColor: "var(--warning)", backgroundColor: "var(--surface-raised-2)" }}
+      />
+    </Tooltip>
+  );
+}
+
+export const MemoTraceRowCells = memo(TraceRowCells, (prev, next) =>
+  prev.f === next.f &&
+  prev.context.mode === next.context.mode &&
+  prev.context.pinned === next.context.pinned &&
+  prev.context.expansion === next.context.expansion &&
+  prev.context.timeMode === next.context.timeMode &&
+  prev.context.sessionEpochMs === next.context.sessionEpochMs &&
+  prev.context.onTogglePin === next.context.onTogglePin &&
+  prev.context.onToggleExpand === next.context.onToggleExpand
+);
+
+function rowContent(
+  index: number,
+  _item: TraceFrame,
+  context: TraceTableContext | undefined,
+): ReactNode {
+  if (!context) return null;
+  if (index < 0 || index >= context.rows.length) return null;
+  return <MemoTraceRowCells f={context.rows.get(index)} context={context} />;
+}
+
+const FILTERED_EMPTY_SX = {
+  position: "absolute",
+  inset: 0,
+  zIndex: 2,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  pointerEvents: "none",
+  pt: "40px",
+} as const;
+
+const FILTERED_CHIP_SX = {
+  height: 22,
+  fontSize: 12,
+  color: "var(--info)",
+  borderColor: "var(--info)",
+  backgroundColor: "var(--surface-raised-2)",
+} as const;
+
+interface ProjectionProps {
+  active: boolean;
+  projection: IncrementalTraceProjection;
+  mode: TraceDisplayMode;
+  pinned: ReadonlySet<string>;
+  historyWindow: number;
+  filter: TraceFilter;
+}
+
+/** Follows the ring; projecting twice per flush is cheap (the second call visits no new rows). */
+function useProjectedRows(p: ProjectionProps): { rows: DisplayRows; total: number } {
+  const snap = useStoreSelector(traceStore, (snapshot) => snapshot, Object.is, p.active);
+  const rows = useMemo(
+    () => p.projection.project(snap.rows, p.mode, p.pinned, p.historyWindow, p.filter),
+    [p.projection, snap.rows, p.mode, p.pinned, p.historyWindow, p.filter],
+  );
+  return { rows, total: snap.rows.length };
+}
+
+function FilteredChip(props: ProjectionProps) {
+  const { rows, total } = useProjectedRows(props);
+  return (
+    <Chip
+      size="small"
+      variant="outlined"
+      label={`Filtered · ${rows.length.toLocaleString("en-US")} / ${total.toLocaleString("en-US")}`}
+      data-testid="trace-filtered-chip"
+      sx={FILTERED_CHIP_SX}
+    />
+  );
+}
+
+/** The only part of the Trace view that re-renders per flush (TR-015). */
+function TraceTableRegion(
+  props: ProjectionProps & {
+    filterActive: boolean;
+    tableBase: Omit<TraceTableContext, "rows">;
+    tableComponents: TableComponents<TraceFrame, TraceTableContext>;
+    fixedHeaderContent: () => ReactNode;
+  },
+) {
+  const { rows: displayRows } = useProjectedRows(props);
+  const { filterActive, mode, tableBase, tableComponents, fixedHeaderContent } = props;
+  const tableContext = useMemo<TraceTableContext>(
+    () => ({ ...tableBase, rows: displayRows }),
+    [tableBase, displayRows],
+  );
+  return (
+            <Box sx={TABLE_HOST_SX}>
+              {/* Keep the header (and filter glyphs) mounted when filters match
+                  nothing so the operator can clear them; overlay the empty copy. */}
+              {filterActive && displayRows.length === 0 ? (
+                <Box sx={FILTERED_EMPTY_SX}>
+                  <EmptyState
+                    text="No rows match the active filters"
+                    testId="trace-empty-filtered"
+                  />
+                </Box>
+              ) : null}
+              <Box
+                sx={TABLE_WRAP_SX}
+                data-testid="trace-table"
+                data-trace-mode={mode}
+                data-row-total={displayRows.length}
+              >
+                <TableVirtuoso
+                  totalCount={displayRows.length}
+                  context={tableContext}
+                  // Constant 32 px rows (VU-012) — no per-row measurement — except
+                  // while a dissection row is open and must grow.
+                  defaultItemHeight={32}
+                  fixedItemHeight={tableBase.expansion === null ? 32 : undefined}
+                  components={tableComponents}
+                  fixedHeaderContent={fixedHeaderContent}
+                  itemContent={rowContent}
+                  // Sequential mode auto-follows the tail while scrolled to the
+                  // bottom (SRS_visual_ui §5.2); Fixed rewrites in place — no follow.
+                  followOutput={mode === "sequential" ? "auto" : false}
+                  style={VIRTUOSO_STYLE}
+                />
+              </Box>
+            </Box>
+  );
+}
+
 export function TraceView() {
-  useViewLifecycle("trace", {});
-  const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.getSnapshot);
-  const recording = useSyncExternalStore(recordingStore.subscribe, recordingStore.getSnapshot);
-  const catalog = useSyncExternalStore(catalogStore.subscribe, catalogStore.getSnapshot);
+  useViewLifecycle("trace", TRACE_LIFECYCLE);
+  const active = useViewActive("trace");
+  // Stays mounted while hidden (keep-alive, D4: mode, filters, pins, expansion
+  // and scroll survive navigation); its subscriptions freeze so a hidden Trace
+  // performs zero commits (TR-016) and catches up in one render on return.
+  return <><TracePipeline /><ActiveTraceView active={active} /></>;
+}
+
+function ActiveTraceView({ active }: { active: boolean }) {
+  const session = useStoreSelector(sessionStore, (snapshot) => ({
+    running: snapshot.running,
+    sourceKind: snapshot.sourceKind,
+    linkStatus: snapshot.linkStatus,
+    sessionInfo: snapshot.sessionInfo,
+  }), shallowEqual, active);
+  const recording = useStoreSelector(recordingStore, (snapshot) => ({
+    active: snapshot.active,
+    path: snapshot.path,
+    frames: snapshot.frames,
+  }), shallowEqual, active);
+  const catalog = useStoreSelector(catalogStore, (snapshot) => snapshot, Object.is, active);
   const capturing = session.running;
   const sourceKind = session.sourceKind;
   const linkStatus = session.linkStatus;
@@ -499,18 +707,40 @@ export function TraceView() {
     message: string;
   } | null>(null);
 
-  const snap = useSyncExternalStore(traceStore.subscribe, traceStore.getSnapshot);
-  const displayRows = useMemo(
-    () => projectDisplayRows(snap.rows, mode, pinned, historyWindow, filter),
-    [snap.rows, mode, pinned, historyWindow, filter],
+  // Coarse trace slice: the view chrome re-renders only when emptiness or the
+  // paused count changes; the table region alone follows the ring (TR-015).
+  const traceSummary = useStoreSelector(
+    traceStore,
+    (snapshot) => ({ empty: snapshot.rows.length === 0, pausedBuffered: snapshot.pausedBuffered }),
+    shallowEqual,
+    active,
   );
+  const projectionRef = useRef<IncrementalTraceProjection | null>(null);
+  if (projectionRef.current === null) projectionRef.current = new IncrementalTraceProjection();
+  const projection = projectionRef.current;
   const filterActive = isFilterActive(filter);
   const columns = useMemo(() => columnsForMode(mode), [mode]);
   const tableComponents = useMemo(() => makeTableComponents(columns), [columns]);
   const sessionEpochMs = session.sessionInfo?.sessionEpochMs ?? null;
   const wallDisabledReason = wallTimeDisabledReason(sessionEpochMs);
 
-  const tableContext = useMemo<TraceTableContext>(
+  const togglePin = useCallback((key: string) => {
+    setPinned((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const toggleExpand = useCallback((frame: TraceFrame) => {
+    setExpansion((prev) => {
+      const next = captureTraceExpansion(mode, frame);
+      if (prev && prev.slotKey === next.slotKey) return null;
+      return next;
+    });
+  }, [mode]);
+
+  const tableBase = useMemo<Omit<TraceTableContext, "rows">>(
     () => ({
       columns,
       mode,
@@ -518,23 +748,10 @@ export function TraceView() {
       expansion,
       timeMode,
       sessionEpochMs,
-      onTogglePin: (key: string) => {
-        setPinned((prev) => {
-          const next = new Set(prev);
-          if (next.has(key)) next.delete(key);
-          else next.add(key);
-          return next;
-        });
-      },
-      onToggleExpand: (frame: TraceFrame) => {
-        setExpansion((prev) => {
-          const next = captureTraceExpansion(mode, frame);
-          if (prev && prev.slotKey === next.slotKey) return null;
-          return next;
-        });
-      },
+      onTogglePin: togglePin,
+      onToggleExpand: toggleExpand,
     }),
-    [columns, mode, pinned, expansion, timeMode, sessionEpochMs],
+    [columns, mode, pinned, expansion, timeMode, sessionEpochMs, togglePin, toggleExpand],
   );
 
   // Auto-dismiss the export result chip.
@@ -543,27 +760,6 @@ export function TraceView() {
     const t = setTimeout(() => setExportResult(null), 6_000);
     return () => clearTimeout(t);
   }, [exportResult]);
-
-  // Live pipeline: subscribe to batches while the shared session is running;
-  // restore exactly one backpressure credit per animation frame on desktop.
-  useEffect(() => {
-    if (!capturing) return;
-    const unsubscribe = onFrameBatch((batch) => {
-      if (sessionStore.getSnapshot().running) traceStore.ingest(batch);
-    });
-    let raf = 0;
-    if (isDesktop()) {
-      const loop = (): void => {
-        ackFrames(1);
-        raf = requestAnimationFrame(loop);
-      };
-      raf = requestAnimationFrame(loop);
-    }
-    return () => {
-      unsubscribe();
-      cancelAnimationFrame(raf);
-    };
-  }, [capturing]);
 
   const togglePause = (): void => {
     setPaused((v) => {
@@ -576,12 +772,16 @@ export function TraceView() {
     setSettingsAnchor(e.currentTarget);
   };
 
-  const openFilter = (column: TraceFilterColumn, el: HTMLElement): void => {
+  const openFilter = useCallback((column: TraceFilterColumn, el: HTMLElement): void => {
     // Option list from the ring snapshot at open — not live-updating under the popover.
-    setFilterOptions(distinctValues(snap.rows, column));
+    setFilterOptions(distinctValues(traceStore.getSnapshot().rows, column));
     setFilterColumn(column);
     setFilterAnchor(el);
-  };
+  }, []);
+  const fixedHeaderContent = useMemo(
+    () => () => renderHeader(columns, filter, openFilter),
+    [columns, filter, openFilter],
+  );
 
   const closeFilter = (): void => {
     setFilterAnchor(null);
@@ -631,28 +831,24 @@ export function TraceView() {
         ? "var(--warning)"
         : "var(--success)";
   const clearLabel =
-    snap.rows.length > 0 ? "Clear trace" : "Trace is already empty";
+    !traceSummary.empty ? "Clear trace" : "Trace is already empty";
   const exportLabel =
-    snap.rows.length === 0
+    traceSummary.empty
       ? "no frames buffered"
       : "Export buffered frames as pcap";
   const showLinkChip = showDegradedLinkChip(capturing, sourceKind, linkStatus?.state);
   const chipColor = linkStatus ? linkChipColorVar(linkStatus.state) : "var(--text-secondary)";
-  const stats = session.stats;
-  const dropped = stats && capturing ? lossTotal(stats) : 0;
-  const showDroppedChip = dropped > 0;
-  const droppedTooltip = stats ? droppedBreakdownTooltip(stats) : "";
   const showRecordingChip = recording.active;
   const showChipStack =
     paused ||
     showLinkChip ||
-    showDroppedChip ||
     showRecordingChip ||
+    capturing ||
     filterActive ||
     exportResult !== null;
 
   const onExport = (): void => {
-    if (exportBusy || snap.rows.length === 0) return;
+    if (exportBusy || traceSummary.empty) return;
     setExportBusy(true);
     void runExportRing().then((outcome) => {
       setExportBusy(false);
@@ -662,7 +858,7 @@ export function TraceView() {
   };
 
   return (
-    <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
+    <Box sx={TRACE_ROOT_SX}>
       {/* Vertical control rail (§5.2): 50 px, raised, 16 px top pad, 40 px pitch */}
       <Box
         sx={{
@@ -997,7 +1193,7 @@ export function TraceView() {
               <IconButton
                 size="small"
                 aria-label={clearLabel}
-                disabled={snap.rows.length === 0}
+                disabled={traceSummary.empty}
                 onClick={() => {
                   // Clear keeps the session-scoped filter (like pins surviving
                   // filter round-trips — filter itself is not cleared here).
@@ -1019,7 +1215,7 @@ export function TraceView() {
               <IconButton
                 size="small"
                 aria-label="Export buffered frames as pcap"
-                disabled={snap.rows.length === 0 || exportBusy}
+                disabled={traceSummary.empty || exportBusy}
                 onClick={onExport}
                 data-testid="trace-export-btn"
                 sx={{ color: "text.secondary" }}
@@ -1032,17 +1228,8 @@ export function TraceView() {
       </Box>
 
       {/* Table region — interface *choice* lives in Settings (§4.3 / §5.7). */}
-      <Box
-        sx={{
-          flex: 1,
-          minWidth: 0,
-          position: "relative",
-          backgroundColor: "var(--surface-canvas)",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <Box sx={{ flex: 1, minHeight: 0, position: "relative" }}>
+      <Box sx={TABLE_REGION_SX}>
+        <Box sx={TABLE_INNER_SX}>
           {paused ? (
             <Box
               data-testid="trace-paused-rule"
@@ -1066,25 +1253,20 @@ export function TraceView() {
               sx={{ position: "absolute", top: 10, right: 20, zIndex: 3 }}
             >
               {filterActive ? (
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`Filtered · ${displayRows.length.toLocaleString("en-US")} / ${snap.rows.length.toLocaleString("en-US")}`}
-                  data-testid="trace-filtered-chip"
-                  sx={{
-                    height: 22,
-                    fontSize: 12,
-                    color: "var(--info)",
-                    borderColor: "var(--info)",
-                    backgroundColor: "var(--surface-raised-2)",
-                  }}
+                <FilteredChip
+                  active={active}
+                  projection={projection}
+                  mode={mode}
+                  pinned={pinned}
+                  historyWindow={historyWindow}
+                  filter={filter}
                 />
               ) : null}
               {paused ? (
                 <Chip
                   size="small"
                   variant="outlined"
-                  label={`Paused · ${snap.pausedBuffered} buffered`}
+                  label={`Paused · ${traceSummary.pausedBuffered} buffered`}
                   data-testid="trace-paused-chip"
                   sx={{
                     height: 22,
@@ -1095,23 +1277,7 @@ export function TraceView() {
                   }}
                 />
               ) : null}
-              {showDroppedChip ? (
-                <Tooltip title={droppedTooltip}>
-                  <Chip
-                    size="small"
-                    variant="outlined"
-                    label={`Dropped · ${dropped.toLocaleString("en-US")}`}
-                    data-testid="trace-dropped-chip"
-                    sx={{
-                      height: 22,
-                      fontSize: 12,
-                      color: "var(--warning)",
-                      borderColor: "var(--warning)",
-                      backgroundColor: "var(--surface-raised-2)",
-                    }}
-                  />
-                </Tooltip>
-              ) : null}
+              <DroppedChip capturing={capturing} active={active} />
               {showRecordingChip ? (
                 <Tooltip title={recording.path ?? "Recording"}>
                   <Chip
@@ -1168,55 +1334,24 @@ export function TraceView() {
               ) : null}
             </Stack>
           ) : null}
-          {snap.rows.length === 0 ? (
+          {traceSummary.empty ? (
             <EmptyState
               text="No frames captured — start the capture or resume the trace"
               testId="trace-empty"
             />
           ) : (
-            <Box sx={{ height: "100%", position: "relative" }}>
-              {/* Keep the header (and filter glyphs) mounted when filters match
-                  nothing so the operator can clear them; overlay the empty copy. */}
-              {filterActive && displayRows.length === 0 ? (
-                <Box
-                  sx={{
-                    position: "absolute",
-                    inset: 0,
-                    zIndex: 2,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    pointerEvents: "none",
-                    pt: "40px",
-                  }}
-                >
-                  <EmptyState
-                    text="No rows match the active filters"
-                    testId="trace-empty-filtered"
-                  />
-                </Box>
-              ) : null}
-              <Box
-                sx={TABLE_WRAP_SX}
-                data-testid="trace-table"
-                data-trace-mode={mode}
-                data-row-total={displayRows.length}
-              >
-                <TableVirtuoso
-                  data={displayRows as TraceFrame[]}
-                  context={tableContext}
-                  // Default 32 px; drop fixed height so an open dissection row can grow.
-                  defaultItemHeight={32}
-                  components={tableComponents}
-                  fixedHeaderContent={() => renderHeader(columns, filter, openFilter)}
-                  itemContent={rowContent}
-                  // Sequential mode auto-follows the tail while scrolled to the
-                  // bottom (SRS_visual_ui §5.2); Fixed rewrites in place — no follow.
-                  followOutput={mode === "sequential" ? "auto" : false}
-                  style={{ height: "100%" }}
-                />
-              </Box>
-            </Box>
+            <TraceTableRegion
+              active={active}
+              projection={projection}
+              mode={mode}
+              pinned={pinned}
+              historyWindow={historyWindow}
+              filter={filter}
+              filterActive={filterActive}
+              tableBase={tableBase}
+              tableComponents={tableComponents}
+              fixedHeaderContent={fixedHeaderContent}
+            />
           )}
           {filterColumn !== null ? (
             <TraceFilterPopover

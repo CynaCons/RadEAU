@@ -3,10 +3,14 @@ import { describe, expect, it } from "vitest";
 import type { TraceFrame } from "./frameModel";
 import {
   collapseFixed,
+  IncrementalTraceProjection,
+  displayRowsToArray,
   fixedDisplayKey,
   projectDisplayRows,
   windowSequential,
 } from "./traceDisplay";
+import { EMPTY_FILTER, type TraceFilter } from "./traceFilter";
+import type { TraceRows } from "./traceStore";
 
 function row(
   partial: Partial<TraceFrame> & Pick<TraceFrame, "id" | "protocol" | "source" | "key">,
@@ -155,5 +159,94 @@ describe("windowSequential", () => {
     );
     expect(windowSequential(rows, 3).map((r) => r.id)).toEqual([3, 4, 5]);
     expect(windowSequential(rows, 10)).toBe(rows);
+  });
+});
+
+describe("IncrementalTraceProjection", () => {
+  function ringRows(all: readonly TraceFrame[], capacity: number, epoch = 0): TraceRows {
+    const visible = all.slice(-capacity);
+    return {
+      length: visible.length,
+      epoch,
+      startSequence: all.length - visible.length,
+      endSequence: all.length,
+      get: (index) => visible[index],
+    };
+  }
+
+  it("equals full Fixed collapse across randomized appends and evictions", () => {
+    const projection = new IncrementalTraceProjection();
+    const all: TraceFrame[] = [];
+    let seed = 0x51f15e;
+    const random = (): number => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed;
+    };
+    for (let step = 0; step < 80; step += 1) {
+      const batch = 1 + (random() % 7);
+      for (let i = 0; i < batch; i += 1) {
+        const id = all.length + 1;
+        const key = `k:${random() % 13}`;
+        all.push(row({ id, protocol: "SOME/IP", source: "a", key }));
+      }
+      const rows = ringRows(all, 37);
+      const pinned = new Set([`k:${random() % 13}`, `k:${random() % 13}`]);
+      expect(displayRowsToArray(projection.project(rows, "fixed", pinned, 20)).map((r) => r.id)).toEqual(
+        collapseFixed(all.slice(-37), pinned).map((r) => r.id),
+      );
+    }
+  });
+
+  it("equals full filtered projections and rebuilds when the filter changes", () => {
+    const projection = new IncrementalTraceProjection();
+    const all: TraceFrame[] = [];
+    const rx: TraceFilter = { ...EMPTY_FILTER, dirs: new Set(["rx"]) };
+    const tx: TraceFilter = { ...EMPTY_FILTER, dirs: new Set(["tx"]) };
+    for (let id = 1; id <= 75; id += 1) {
+      all.push(row({
+        id,
+        protocol: "SOME/IP",
+        source: "a",
+        key: `k:${id % 9}`,
+        dir: id % 3 === 0 ? "tx" : "rx",
+      }));
+      if (id % 5 !== 0) continue;
+      const rows = ringRows(all, 31);
+      for (const filter of [rx, tx]) {
+        for (const mode of ["fixed", "sequential"] as const) {
+          expect(displayRowsToArray(projection.project(rows, mode, new Set(), 11, filter)).map((r) => r.id)).toEqual(
+            projectDisplayRows(all.slice(-31), mode, new Set(), 11, filter).map((r) => r.id),
+          );
+        }
+      }
+    }
+  });
+
+  it("keeps filtered state bounded by the ring over a long session (TR-014)", () => {
+    const projection = new IncrementalTraceProjection();
+    const rx: TraceFilter = { ...EMPTY_FILTER, dirs: new Set(["rx"]) };
+    const capacity = 1_000;
+    const window: TraceFrame[] = [];
+    let total = 0;
+    for (let step = 0; step < 200; step += 1) {
+      for (let i = 0; i < 100; i += 1) {
+        total += 1;
+        window.push(row({ id: total, protocol: "SOME/IP", source: "a", key: `k:${total % 5}`, dir: "rx" }));
+      }
+      if (window.length > capacity) window.splice(0, window.length - capacity);
+      const rows: TraceRows = {
+        length: window.length,
+        epoch: 0,
+        startSequence: total - window.length,
+        endSequence: total,
+        get: (index) => window[index] as TraceFrame,
+      };
+      const view = projection.project(rows, step % 2 === 0 ? "fixed" : "sequential", new Set(), 200_000, rx);
+      expect(view.length).toBeGreaterThan(0);
+    }
+    const internal = projection as unknown as { matching: number[]; matchingHead: number };
+    // 20,000 matching rows went through a 1,000-row ring: retained state is O(ring), not O(total).
+    expect(internal.matching.length - internal.matchingHead).toBeLessThanOrEqual(capacity);
+    expect(internal.matching.length).toBeLessThanOrEqual(capacity + 4_096 + 100);
   });
 });

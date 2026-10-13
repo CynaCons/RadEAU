@@ -18,16 +18,48 @@ const FLUSH_FAST_MS = 50;
 const FLUSH_SLOW_MS = 100;
 
 export interface TraceSnapshot {
-  /** Rows in ring order; identity changes only when the row set changes. */
-  readonly rows: readonly TraceFrame[];
+  /** O(1) indexed view in chronological ring order. */
+  readonly rows: TraceRows;
   readonly pausedBuffered: number;
+}
+
+export interface TraceRows {
+  readonly length: number;
+  readonly epoch: number;
+  readonly startSequence: number;
+  readonly endSequence: number;
+  get(index: number): TraceFrame;
+}
+
+function ringView(
+  ring: readonly (TraceFrame | null)[],
+  head: number,
+  count: number,
+  epoch: number,
+  endSequence: number,
+): TraceRows {
+  const capacity = ring.length;
+  const start = count < capacity ? 0 : head;
+  return Object.freeze({
+    length: count,
+    epoch,
+    startSequence: endSequence - count,
+    endSequence,
+    get(index: number): TraceFrame {
+      if (!Number.isInteger(index) || index < 0 || index >= count) {
+        throw new RangeError(`Trace row index ${index} outside 0..${count - 1}`);
+      }
+      return ring[(start + index) % capacity] as TraceFrame;
+    },
+  });
 }
 
 export class TraceStore {
   private ring: (TraceFrame | null)[];
   private head = 0; // next write slot
   private rowCount = 0;
-  private rowsView: readonly TraceFrame[] = [];
+  private epoch = 0;
+  private endSequence = 0;
 
   private pending: FrameBatchRaw[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -43,7 +75,7 @@ export class TraceStore {
   pausedBuffered = 0;
 
   private listeners = new Set<() => void>();
-  private snapshot: TraceSnapshot = { rows: [], pausedBuffered: 0 };
+  private snapshot!: TraceSnapshot;
 
   constructor(
     capacity: number = TRACE_RING_CAP,
@@ -97,7 +129,8 @@ export class TraceStore {
     this.ring.fill(null);
     this.head = 0;
     this.rowCount = 0;
-    this.rowsView = [];
+    this.epoch += 1;
+    this.endSequence = 0;
     this.pending = [];
     this.staged.fill(null);
     this.stagedHead = 0;
@@ -119,7 +152,16 @@ export class TraceStore {
   }
 
   private publish(): void {
-    this.snapshot = { rows: this.rowsView, pausedBuffered: this.pausedBuffered };
+    this.snapshot = {
+      rows: ringView(
+        this.ring,
+        this.head,
+        this.rowCount,
+        this.epoch,
+        this.endSequence,
+      ),
+      pausedBuffered: this.pausedBuffered,
+    };
     for (const cb of this.listeners) cb();
   }
 
@@ -160,20 +202,15 @@ export class TraceStore {
     this.appendRows(decoded);
   };
 
-  /** Appends rows to the ring, evicting oldest; rebuilds the view array. */
+  /** Appends rows to the ring, evicting oldest; publishing stays O(1). */
   private appendRows(rows: readonly TraceFrame[]): void {
     const cap = this.ring.length;
     for (const row of rows) {
       this.ring[this.head] = row;
+      this.endSequence += 1;
       this.head = (this.head + 1) % cap;
       if (this.rowCount < cap) this.rowCount += 1;
     }
-    const view: TraceFrame[] = new Array(this.rowCount);
-    const start = this.rowCount < cap ? 0 : this.head;
-    for (let j = 0; j < this.rowCount; j += 1) {
-      view[j] = this.ring[(start + j) % cap] as TraceFrame;
-    }
-    this.rowsView = view;
     this.publish();
   }
 }

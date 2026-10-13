@@ -5,6 +5,7 @@
  */
 
 import type { TraceFrame } from "./frameModel";
+import type { TraceRows } from "./traceStore";
 import {
   PROTO_AVTP,
   PROTO_DHCP,
@@ -52,6 +53,10 @@ export const EMPTY_FILTER: TraceFilter = Object.freeze({
   protocols: null,
   dirs: null,
 });
+
+function isTraceRows(rows: readonly TraceFrame[] | TraceRows): rows is TraceRows {
+  return !Array.isArray(rows);
+}
 
 export interface TraceFilterOption {
   key: string;
@@ -148,12 +153,23 @@ export function matches(row: TraceFrame, f: TraceFilter): boolean {
  * Filters the ring. Zero-cost fast path when nothing is active: returns the
  * same array reference.
  */
+export function applyFilter(rows: readonly TraceFrame[], f: TraceFilter): readonly TraceFrame[];
+export function applyFilter(rows: TraceRows, f: TraceFilter): readonly TraceFrame[] | TraceRows;
 export function applyFilter(
-  rows: readonly TraceFrame[],
+  rows: readonly TraceFrame[] | TraceRows,
   f: TraceFilter,
-): readonly TraceFrame[] {
+): readonly TraceFrame[] | TraceRows;
+export function applyFilter(
+  rows: readonly TraceFrame[] | TraceRows,
+  f: TraceFilter,
+): readonly TraceFrame[] | TraceRows {
   if (!isFilterActive(f)) return rows;
-  return rows.filter((row) => matches(row, f));
+  const out: TraceFrame[] = [];
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = isTraceRows(rows) ? rows.get(i) : rows[i];
+    if (matches(row, f)) out.push(row);
+  }
+  return out;
 }
 
 const DIR_LABEL: Record<TraceFilterDir, string> = {
@@ -171,11 +187,12 @@ const DIR_ORDER: readonly TraceFilterDir[] = ["rx", "tx", "unknown"];
  * `doip:${ty}`, or `${p}:${ty}` / `${p}:${ty}:${se}` for §7 classes).
  */
 export function distinctValues(
-  rows: readonly TraceFrame[],
+  rows: readonly TraceFrame[] | TraceRows,
   column: TraceFilterColumn,
 ): TraceFilterOption[] {
   const counts = new Map<string, { label: string; count: number }>();
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = isTraceRows(rows) ? rows.get(i) : rows[i];
     let key: string;
     let label: string;
     switch (column) {
@@ -238,7 +255,7 @@ export interface FilterVisitOpts {
  * Visits at most `window + (non-matching rows in the scanned tail)`.
  */
 export function windowSequentialFiltered(
-  rows: readonly TraceFrame[],
+  rows: readonly TraceFrame[] | TraceRows,
   window: number,
   f: TraceFilter,
   opts?: FilterVisitOpts,
@@ -247,7 +264,7 @@ export function windowSequentialFiltered(
   const out: TraceFrame[] = [];
   const onVisit = opts?.onVisit;
   for (let i = rows.length - 1; i >= 0 && out.length < window; i -= 1) {
-    const row = rows[i];
+    const row = Array.isArray(rows) ? rows[i] : (rows as TraceRows).get(i);
     onVisit?.(row);
     if (matches(row, f)) out.push(row);
   }

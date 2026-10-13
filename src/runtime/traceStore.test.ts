@@ -95,13 +95,13 @@ describe("TraceStore", () => {
     );
     vi.advanceTimersByTime(100);
     const rows = store.getSnapshot().rows;
-    expect(rows[0].deltaGlobal).toBe("--");
-    expect(rows[0].deltaKey).toBe("--");
-    expect(rows[2].deltaGlobal).toBe("0.2500");
-    expect(rows[2].deltaKey).toBe("0.5000"); // vs the earlier 0x1101 frame
-    expect(rows[3].protocol).toBe("gPTP");
-    expect(rows[3].session).toBe("--");
-    expect(rows[0].payload.startsWith("DE AD BE EF")).toBe(true);
+    expect(rows.get(0).deltaGlobal).toBe("--");
+    expect(rows.get(0).deltaKey).toBe("--");
+    expect(rows.get(2).deltaGlobal).toBe("0.2500");
+    expect(rows.get(2).deltaKey).toBe("0.5000"); // vs the earlier 0x1101 frame
+    expect(rows.get(3).protocol).toBe("gPTP");
+    expect(rows.get(3).session).toBe("--");
+    expect(rows.get(0).payload.startsWith("DE AD BE EF")).toBe(true);
     store.dispose();
   });
 
@@ -113,7 +113,41 @@ describe("TraceStore", () => {
     vi.advanceTimersByTime(50);
     const snap = store.getSnapshot();
     expect(snap.rows).toHaveLength(5);
-    expect(snap.rows.map((r) => r.id)).toEqual([4, 5, 6, 7, 8]);
+    expect(Array.from({ length: snap.rows.length }, (_, i) => snap.rows.get(i).id)).toEqual([4, 5, 6, 7, 8]);
+    store.dispose();
+  });
+
+  it("indexes wrapped rows in chronological order", () => {
+    const store = new TraceStore(5);
+    store.ingest(
+      makeBatch(
+        0,
+        Array.from({ length: 8 }, (_, j) => ({ idx: j + 1, t: j / 10 })),
+      ),
+    );
+    vi.advanceTimersByTime(100);
+
+    const rows = store.getSnapshot().rows;
+    expect(Array.from({ length: rows.length }, (_, index) => rows.get(index).id)).toEqual([
+      4, 5, 6, 7, 8,
+    ]);
+    expect(() => rows.get(5)).toThrow(RangeError);
+    store.dispose();
+  });
+
+  it("publishes a new row-view identity without copying the full ring", () => {
+    const store = new TraceStore(5);
+    const emptyRows = store.getSnapshot().rows;
+    store.ingest(makeBatch(0, [{ idx: 1, t: 0.1 }]));
+    vi.advanceTimersByTime(100);
+    const firstRows = store.getSnapshot().rows;
+    store.ingest(makeBatch(1, [{ idx: 2, t: 0.2 }]));
+    vi.advanceTimersByTime(100);
+    const secondRows = store.getSnapshot().rows;
+
+    expect(firstRows).not.toBe(emptyRows);
+    expect(secondRows).not.toBe(firstRows);
+    expect(Array.from({ length: secondRows.length }, (_, i) => secondRows.get(i).id)).toEqual([1, 2]);
     store.dispose();
   });
 
@@ -135,7 +169,7 @@ describe("TraceStore", () => {
     snap = store.getSnapshot();
     expect(snap.rows).toHaveLength(2);
     expect(snap.pausedBuffered).toBe(0);
-    expect(snap.rows.map((r) => r.id)).toEqual([1, 2]);
+    expect(Array.from({ length: snap.rows.length }, (_, i) => snap.rows.get(i).id)).toEqual([1, 2]);
     store.dispose();
   });
 
@@ -148,7 +182,8 @@ describe("TraceStore", () => {
     const snap = store.getSnapshot();
     expect(snap.pausedBuffered).toBe(3);
     store.setPaused(false);
-    expect(store.getSnapshot().rows.map((r) => r.id)).toEqual([3, 4, 5]);
+    const resumed = store.getSnapshot().rows;
+    expect(Array.from({ length: resumed.length }, (_, i) => resumed.get(i).id)).toEqual([3, 4, 5]);
     store.dispose();
   });
 
@@ -168,8 +203,8 @@ describe("TraceStore", () => {
     store.ingest(makeBatch(2, [{ idx: 3, t: 9.9 }, { idx: 4, t: 10.0, sv: 0x1101 }]));
     vi.advanceTimersByTime(100);
     const rows = store.getSnapshot().rows;
-    expect(rows[0].deltaGlobal).toBe("--");
-    expect(rows[1].deltaKey).toBe("0.1000");
+    expect(rows.get(0).deltaGlobal).toBe("--");
+    expect(rows.get(1).deltaKey).toBe("0.1000");
     store.dispose();
   });
 
@@ -192,7 +227,7 @@ describe("TraceStore", () => {
       makeBatch(0, [{ idx: 9, t: 0.42, p: PROTO_SD, sv: 0xffff, m: 0x8100, ty: SD_TY_OFFER }]),
     );
     vi.advanceTimersByTime(100);
-    const row = store.getSnapshot().rows[0];
+    const row = store.getSnapshot().rows.get(0);
     expect(row.protocol).toBe("SD");
     expect(row.serviceMethod).toBe("0xFFFF:0x8100");
     expect(row.type).toBe("Offer");
@@ -213,11 +248,11 @@ describe("TraceStore", () => {
     );
     vi.advanceTimersByTime(100);
     const rows = store.getSnapshot().rows;
-    expect(rows[0].deltaKey).toBe("--");
-    expect(rows[1].deltaKey).toBe("--"); // different source node
-    expect(rows[2].deltaKey).toBe("0.5000"); // same SD node as rows[0]
-    expect(rows[3].deltaKey).toBe("--");
-    expect(rows[4].deltaKey).toBe("0.2500");
+    expect(rows.get(0).deltaKey).toBe("--");
+    expect(rows.get(1).deltaKey).toBe("--"); // different source node
+    expect(rows.get(2).deltaKey).toBe("0.5000"); // same SD node as rows[0]
+    expect(rows.get(3).deltaKey).toBe("--");
+    expect(rows.get(4).deltaKey).toBe("0.2500");
     store.dispose();
   });
 });
