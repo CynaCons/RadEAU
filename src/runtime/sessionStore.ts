@@ -66,6 +66,8 @@ export class SessionStore {
   private listeners = new Set<() => void>();
   private snapshot: SessionSnapshot;
   private startInFlight: Promise<void> | null = null;
+  /** Invalidates a pending start when stop is requested before it settles. */
+  private startGeneration = 0;
   /** True until the startup default-source rule has applied (or the user picks). */
   private initialSourcePending = true;
 
@@ -209,6 +211,7 @@ export class SessionStore {
 
   async start(): Promise<void> {
     if (this.running || this.startInFlight) return;
+    const generation = ++this.startGeneration;
     this.lastError = null;
     this.stats = null; // counters reset when a session starts
     const source = this.currentSource();
@@ -238,7 +241,15 @@ export class SessionStore {
       this.publish();
     }
     const work = startCapture(source)
-      .then(() => {
+      .then(async () => {
+        if (generation !== this.startGeneration) {
+          try {
+            await stopCapture();
+          } catch {
+            /* session already gone */
+          }
+          return;
+        }
         this.running = true;
         this.publish();
       })
@@ -259,6 +270,7 @@ export class SessionStore {
 
   async stop(): Promise<void> {
     if (!this.running && !this.startInFlight) return;
+    this.startGeneration += 1;
     // Flip UI immediately; halt the underlying session next.
     // Stats are retained so the last session's numbers stay readable.
     this.running = false;

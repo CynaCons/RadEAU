@@ -303,7 +303,9 @@ export function SettingsView() {
   }, [session.sourceKind, liveOk, loadInterfaces]);
 
   const copyReport = () => {
-    void navigator.clipboard?.writeText(diagReport);
+    void navigator.clipboard
+      ?.writeText(diagReport)
+      .catch((err: unknown) => console.warn("Failed to copy diagnostics report", err));
   };
 
   const browsePcap = async () => {

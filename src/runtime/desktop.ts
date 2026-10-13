@@ -74,17 +74,23 @@ export function isDesktop(): boolean {
 
 export function minimizeWindow(): void {
   if (!isDesktop()) return;
-  void getCurrentWindow().minimize();
+  void getCurrentWindow()
+    .minimize()
+    .catch((err: unknown) => console.warn("Failed to minimize window", err));
 }
 
 export function toggleMaximizeWindow(): void {
   if (!isDesktop()) return;
-  void getCurrentWindow().toggleMaximize();
+  void getCurrentWindow()
+    .toggleMaximize()
+    .catch((err: unknown) => console.warn("Failed to toggle maximize window", err));
 }
 
 export function closeWindow(): void {
   if (!isDesktop()) return;
-  void getCurrentWindow().close();
+  void getCurrentWindow()
+    .close()
+    .catch((err: unknown) => console.warn("Failed to close window", err));
 }
 
 /**
@@ -99,19 +105,26 @@ export function onMaximizedChange(cb: (maximized: boolean) => void): () => void 
   const win = getCurrentWindow();
   let disposed = false;
   let unlisten: (() => void) | null = null;
-  void win.isMaximized().then((m) => {
-    if (!disposed) cb(m);
-  });
+  void win
+    .isMaximized()
+    .then((m) => {
+      if (!disposed) cb(m);
+    })
+    .catch((err: unknown) => console.warn("Failed to read maximize state", err));
   void win
     .onResized(() => {
-      void win.isMaximized().then((m) => {
-        if (!disposed) cb(m);
-      });
+      void win
+        .isMaximized()
+        .then((m) => {
+          if (!disposed) cb(m);
+        })
+        .catch((err: unknown) => console.warn("Failed to read maximize state", err));
     })
     .then((u) => {
       if (disposed) u();
       else unlisten = u;
-    });
+    })
+    .catch((err: unknown) => console.warn("Failed to subscribe to window resize", err));
   return () => {
     disposed = true;
     unlisten?.();
@@ -870,4 +883,3 @@ export async function pickDirectory(): Promise<string | null> {
     return Promise.reject(new Error(msg || "directory dialog unavailable"));
   }
 }
-

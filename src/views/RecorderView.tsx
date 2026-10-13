@@ -155,7 +155,9 @@ export function RecorderView() {
 
   const onCopyPath = () => {
     if (!recording.path) return;
-    void navigator.clipboard?.writeText(recording.path);
+    void navigator.clipboard
+      ?.writeText(recording.path)
+      .catch((err: unknown) => console.warn("Failed to copy recording path", err));
   };
 
   const armTooltip = recordDisabled

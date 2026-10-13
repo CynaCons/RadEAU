@@ -430,23 +430,23 @@ fn registry_string_open(key: RegistryKey, name: &str) -> Option<String> {
     {
         return None;
     }
-    let mut bytes = vec![0u8; size as usize];
-    // SAFETY: byte buffer has exactly the size reported by the first query.
+    let mut words = vec![0u16; (size as usize).div_ceil(std::mem::size_of::<u16>())];
+    // SAFETY: the UTF-16 buffer has at least the byte capacity reported by the first query;
+    // RegQueryValueExW receives its pointer as bytes and its length remains measured in bytes.
     if unsafe {
         RegQueryValueExW(
             key,
             name.as_ptr(),
             std::ptr::null_mut(),
             &mut kind,
-            bytes.as_mut_ptr(),
+            words.as_mut_ptr().cast(),
             &mut size,
         )
     } != 0
     {
         return None;
     }
-    let words =
-        unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<u16>(), size as usize / 2) };
+    let words = &words[..size as usize / std::mem::size_of::<u16>()];
     let end = words
         .iter()
         .position(|word| *word == 0)

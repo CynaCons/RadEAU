@@ -242,9 +242,15 @@ describe("captureSource picker state", () => {
     expect(lossTotal(stats())).toBe(0);
     expect(
       lossTotal(
-        stats({ accumulatorDropped: 3, gapDropped: 5, kernelDropped: 7, gapRecords: 2 }),
+        stats({
+          accumulatorDropped: 3,
+          gapDropped: 5,
+          kernelDropped: 7,
+          recordingDropped: 2,
+          gapRecords: 2,
+        }),
       ),
-    ).toBe(15);
+    ).toBe(17);
     expect(
       droppedBreakdownTooltip(
         stats({

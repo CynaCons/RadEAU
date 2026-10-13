@@ -78,7 +78,12 @@ export interface CaptureStats {
 
 /** Sum of loss counters that drive the Trace `Dropped · n` chip. */
 export function lossTotal(stats: CaptureStats): number {
-  return stats.accumulatorDropped + stats.gapDropped + stats.kernelDropped;
+  return (
+    stats.accumulatorDropped +
+    stats.gapDropped +
+    stats.kernelDropped +
+    stats.recordingDropped
+  );
 }
 
 /** Empty per-class vector for browser-mirror / test fixtures. */

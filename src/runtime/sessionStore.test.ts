@@ -137,6 +137,25 @@ describe("SessionStore", () => {
     expect(store.getSnapshot().linkStatus).toBeNull();
   });
 
+  it("keeps a stop requested during start from being overwritten by start completion", async () => {
+    let resolveStart!: (started: boolean) => void;
+    vi.mocked(startCapture).mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolveStart = resolve;
+      }),
+    );
+
+    const starting = store.start();
+    const stopping = store.stop();
+    resolveStart(true);
+    await Promise.all([starting, stopping]);
+
+    // Once for the immediate stop request, then again after the core start
+    // resolves so a start that won the core-side race is also torn down.
+    expect(stopCapture).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().running).toBe(false);
+  });
+
   it("locks source edits while running and unlocks when stopped", async () => {
     await store.start();
     store.setSourceKind("sim");

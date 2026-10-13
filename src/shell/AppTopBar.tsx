@@ -165,6 +165,7 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
           inputProps={{ "aria-label": "Session title", "data-testid": "appbar-session-title" }}
           sx={{
             width: 300,
+            "& .MuiOutlinedInput-root": { backgroundColor: "var(--fill-subtle)" },
             "& input::placeholder": { opacity: 0.6 },
           }}
         />
@@ -176,7 +177,7 @@ export function AppTopBar(props: { onToggleRail: () => void }) {
         {...noDrag}
         variant="contained"
         size="small"
-        color={running ? "error" : "success"}
+        color={running ? "error" : sourceKind === "pcap" ? "info" : "success"}
         startIcon={running ? <StopIcon /> : <PlayArrowIcon />}
         onClick={() => {
           void sessionStore.toggle();

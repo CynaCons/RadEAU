@@ -144,6 +144,7 @@ struct Node {
     children: Vec<Node>,
     path: String,
 }
+const MAX_XML_DEPTH: usize = 256;
 fn local(b: &[u8]) -> String {
     String::from_utf8_lossy(b)
         .rsplit(':')
@@ -166,11 +167,12 @@ fn own_name(n: &Node) -> Option<String> {
     text(n, "SHORT-NAME")
 }
 fn all<'a>(n: &'a Node, name: &str, out: &mut Vec<&'a Node>) {
-    if n.name == name {
-        out.push(n)
-    }
-    for c in &n.children {
-        all(c, name, out)
+    let mut stack = vec![n];
+    while let Some(node) = stack.pop() {
+        if node.name == name {
+            out.push(node);
+        }
+        stack.extend(node.children.iter().rev());
     }
 }
 fn parse_num(s: &str) -> Option<u64> {
@@ -207,6 +209,11 @@ fn parse_tree(xml: &str) -> Result<Node, ImportError> {
     loop {
         match r.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(e)) => {
+                if stack.len() >= MAX_XML_DEPTH {
+                    return Err(ImportError::new(format!(
+                        "XML nesting exceeds {MAX_XML_DEPTH} element limit"
+                    )));
+                }
                 let mut n = Node {
                     name: local(e.name().as_ref()),
                     ..Default::default()
@@ -223,6 +230,11 @@ fn parse_tree(xml: &str) -> Result<Node, ImportError> {
                 stack.push(n)
             }
             Ok(XmlEvent::Empty(e)) => {
+                if stack.len() >= MAX_XML_DEPTH {
+                    return Err(ImportError::new(format!(
+                        "XML nesting exceeds {MAX_XML_DEPTH} element limit"
+                    )));
+                }
                 let mut n = Node {
                     name: local(e.name().as_ref()),
                     ..Default::default()
@@ -277,16 +289,22 @@ fn parse_tree(xml: &str) -> Result<Node, ImportError> {
     Ok(root)
 }
 fn assign_paths(n: &mut Node, parent: &str) {
-    let here = own_name(n)
-        .map(|x| format!("{parent}/{x}"))
-        .unwrap_or_else(|| parent.to_string());
-    n.path = if here.is_empty() {
-        n.name.clone()
-    } else {
-        here.clone()
-    };
-    for c in &mut n.children {
-        assign_paths(c, &here)
+    let mut stack = vec![(n, parent.to_string())];
+    while let Some((node, parent)) = stack.pop() {
+        let here = own_name(node)
+            .map(|x| format!("{parent}/{x}"))
+            .unwrap_or(parent);
+        node.path = if here.is_empty() {
+            node.name.clone()
+        } else {
+            here.clone()
+        };
+        stack.extend(
+            node.children
+                .iter_mut()
+                .rev()
+                .map(|child| (child, here.clone())),
+        );
     }
 }
 
@@ -884,6 +902,20 @@ mod tests {
     use std::time::{Duration, Instant};
 
     const XML: &str = include_str!("../../../catalog/sensor-fusion.arxml");
+
+    #[test]
+    fn rejects_excessive_xml_nesting_without_building_the_tree() {
+        let depth = 10_000;
+        let mut xml = String::with_capacity(depth * 7);
+        xml.push_str(&"<N>".repeat(depth));
+        xml.push_str(&"</N>".repeat(depth));
+
+        let err = from_arxml(&xml).unwrap_err();
+        assert_eq!(
+            err.message,
+            format!("XML nesting exceeds {MAX_XML_DEPTH} element limit")
+        );
+    }
 
     fn snapshot(catalog: &Catalog) -> String {
         catalog
