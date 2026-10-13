@@ -37,3 +37,4 @@ design-reference/
 .mcp.json
 perf/last-run.json
 coverage/
+docs/agents/context/
