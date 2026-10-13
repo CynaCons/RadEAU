@@ -839,3 +839,4 @@ afford it.
 | VU-024 | Show keyboard focus as a 2 px accent outline at 2 px offset on every interactive element | Must | Planned | Tabbing through each view shows a ring at every stop |
 | VU-025 | Paint a startup overlay before framework mount and fade it over 220 ms after mount | Should | Planned | No frame between window creation and mount shows a blank window |
 | VU-026 | Meet 4.5:1 contrast for text and 3:1 for series colors against their surfaces | Must | Planned | Automated contrast check over the token set and all 16 series colors passes |
+| VU-027 | A hidden keep-alive view performs zero React commits; a visible view and the app bar re-render only when a value they display changes — live counters re-render as isolated leaves at the stats rate | Must | Planned | Render-count unit test (stats republish does not re-render a non-stats component); perf: hidden views 0 commits/s, app bar ≤ 2/s |
