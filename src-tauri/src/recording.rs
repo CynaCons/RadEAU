@@ -260,16 +260,23 @@ impl RecordingState {
     /// Opens the session's file when armed; a no-op otherwise or while one
     /// is already open.
     pub fn begin(&self, app: &AppHandle, started: SystemTime) -> Result<(), String> {
+        if self.begin_inner(started)? {
+            self.emit(app);
+        }
+        Ok(())
+    }
+
+    fn begin_inner(&self, started: SystemTime) -> Result<bool, String> {
         // CP-015: arming while stopped stores intent; begin opens when the next session starts.
         if !self.is_armed() {
-            return Ok(());
+            return Ok(false);
         }
         let mut active = self
             .active
             .lock()
             .map_err(|_| "recording state poisoned".to_string())?;
         if active.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         let dir = self.dir_path();
         fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -314,12 +321,16 @@ impl RecordingState {
             "recording started",
             serde_json::json!({ "path": path.display().to_string() }),
         );
-        self.emit(app);
-        Ok(())
+        Ok(true)
     }
 
     /// Closes the active file (session end or disarm) and keeps its facts.
     pub fn end(&self, app: &AppHandle) {
+        self.end_inner();
+        self.emit(app);
+    }
+
+    fn end_inner(&self) {
         let taken = self.active.lock().ok().and_then(|mut a| a.take());
         self.active_flag.store(false, Ordering::Release);
         if let Some(mut active) = taken {
@@ -358,23 +369,27 @@ impl RecordingState {
                 self.armed.store(false, Ordering::Release);
             }
         }
-        self.emit(app);
     }
 
     /// 1 Hz from the reader: surfaces writer failures and refreshes the UI.
     pub fn tick(&self, app: &AppHandle) {
+        if self.tick_inner() {
+            self.emit(app);
+        }
+    }
+
+    fn tick_inner(&self) -> bool {
         if !self.is_active() {
-            return;
+            return false;
         }
         let failed = self.active.lock().ok().and_then(|a| {
             a.as_ref()
                 .and_then(|a| a.error.lock().ok().and_then(|e| e.clone()))
         });
         if failed.is_some() {
-            self.end(app);
-        } else {
-            self.emit(app);
+            self.end_inner();
         }
+        true
     }
 
     pub fn snapshot(&self) -> RecordingStateDto {
@@ -454,24 +469,46 @@ pub fn recording_arm(
     app: AppHandle,
     armed: bool,
 ) -> Result<RecordingStateDto, String> {
+    set_recording_armed(&state, capture.is_running(), &app, armed)
+}
+
+fn set_recording_armed(
+    state: &RecordingState,
+    capture_running: bool,
+    app: &AppHandle,
+    armed: bool,
+) -> Result<RecordingStateDto, String> {
+    let (dto, should_emit) = set_recording_armed_inner(state, capture_running, armed)?;
+    if should_emit {
+        state.emit(app);
+    }
+    Ok(dto)
+}
+
+fn set_recording_armed_inner(
+    state: &RecordingState,
+    capture_running: bool,
+    armed: bool,
+) -> Result<(RecordingStateDto, bool), String> {
     // CP-015: recording is a sub-state of the running capture session.
     state.armed.store(armed, Ordering::Release);
-    if armed {
-        if capture.is_running() {
-            state.begin(&app, SystemTime::now())?;
+    let should_emit = if armed {
+        if capture_running {
+            state.begin_inner(SystemTime::now())?
         } else {
-            state.emit(&app);
+            true
         }
     } else {
-        state.end(&app);
-    }
+        state.end_inner();
+        true
+    };
     log::log(
         Level::Info,
         "recording",
         if armed { "armed" } else { "disarmed" },
         serde_json::Value::Null,
     );
-    Ok(state.snapshot())
+    Ok((state.snapshot(), should_emit))
 }
 
 #[tauri::command]
@@ -485,6 +522,20 @@ pub fn recording_dir_set(
     app: AppHandle,
     path: String,
 ) -> Result<String, String> {
+    set_recording_dir(&state, &app, path)
+}
+
+fn set_recording_dir(
+    state: &RecordingState,
+    app: &AppHandle,
+    path: String,
+) -> Result<String, String> {
+    let dir = set_recording_dir_inner(state, path)?;
+    state.emit(app);
+    Ok(dir)
+}
+
+fn set_recording_dir_inner(state: &RecordingState, path: String) -> Result<String, String> {
     if state.is_active() {
         return Err("cannot change the directory while a recording is active".into());
     }
@@ -496,12 +547,15 @@ pub fn recording_dir_set(
     if let Ok(mut current) = state.dir.lock() {
         *current = dir.clone();
     }
-    state.emit(&app);
     Ok(dir.display().to_string())
 }
 
 #[tauri::command]
 pub fn recording_list(state: State<RecordingState>) -> Vec<RecordingInfo> {
+    list_recordings(&state)
+}
+
+fn list_recordings(state: &RecordingState) -> Vec<RecordingInfo> {
     let dir = state.dir_path();
     let Ok(entries) = fs::read_dir(&dir) else {
         return Vec::new();
@@ -664,6 +718,157 @@ mod tests {
         let blocker = dir.join("radeau-blocked.pcap");
         fs::create_dir_all(&blocker).unwrap();
         assert!(File::create(&blocker).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cp_015_arm_begin_write_end_records_to_temp_dir() {
+        // CP-015/CP-016: an armed session opens a pcap writer and reports final counters.
+        let dir = temp_dir("begin-end");
+        let state = RecordingState::default();
+        *state.dir.lock().unwrap() = dir.clone();
+
+        let (armed, emitted) = set_recording_armed_inner(&state, true, true).unwrap();
+        assert!(armed.armed);
+        assert!(armed.active);
+        assert!(emitted);
+        assert!(state.is_active());
+        let handle = state.handle().expect("active handle");
+        handle.push(1_700_000_000_000_000_000, vec![0x11; 60]);
+        handle.push(1_700_000_000_001_000_000, vec![0x22; 64]);
+        state.end_inner();
+
+        let snapshot = state.snapshot();
+        assert!(snapshot.armed);
+        assert!(!snapshot.active);
+        assert_eq!(snapshot.frames, 2);
+        assert_eq!(snapshot.dropped, 0);
+        assert_eq!(snapshot.bytes, 16 + 60 + 16 + 64);
+        let path = PathBuf::from(snapshot.path.unwrap());
+        assert_eq!(path.parent(), Some(dir.as_path()));
+        assert_eq!(count_frames(&path), Some(2));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cp_015_disarm_closes_active_recording() {
+        // CP-015: disarming while active closes the writer and clears the armed flag.
+        let dir = temp_dir("disarm");
+        let state = RecordingState::default();
+        *state.dir.lock().unwrap() = dir.clone();
+        set_recording_armed_inner(&state, true, true).unwrap();
+        let handle = state.handle().unwrap();
+        handle.push(1, vec![0x44; 60]);
+
+        let (dto, emitted) = set_recording_armed_inner(&state, true, false).unwrap();
+        assert!(emitted);
+        assert!(!dto.armed);
+        assert!(!dto.active);
+        assert_eq!(dto.frames, 1);
+        assert_eq!(state.counters(), (0, 0, 0));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cp_016_dir_set_validates_empty_active_and_create_errors() {
+        let state = RecordingState::default();
+        assert_eq!(
+            set_recording_dir_inner(&state, "   ".into()).unwrap_err(),
+            "directory path is empty"
+        );
+        state.active_flag.store(true, Ordering::Release);
+        assert_eq!(
+            set_recording_dir_inner(&state, temp_dir("active").display().to_string()).unwrap_err(),
+            "cannot change the directory while a recording is active"
+        );
+        state.active_flag.store(false, Ordering::Release);
+
+        let dir = temp_dir("dir-errors");
+        let file = dir.join("not-a-dir");
+        fs::write(&file, b"blocker").unwrap();
+        let blocked_child = file.join("child");
+        let err = set_recording_dir_inner(&state, blocked_child.display().to_string()).unwrap_err();
+        assert!(err.starts_with("create "));
+        assert!(err.contains("not-a-dir"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cp_016_snapshot_surfaces_writer_failure_and_disarms() {
+        // CP-016: writer-thread errors are surfaced through tick/end and stop recording.
+        let dir = temp_dir("write-failure");
+        let state = RecordingState::default();
+        *state.dir.lock().unwrap() = dir.clone();
+        state.armed.store(true, Ordering::Release);
+        state.begin_inner(SystemTime::now()).unwrap();
+        state.handle().unwrap().push(1, vec![0; 70_000]);
+
+        for _ in 0..100 {
+            state.tick_inner();
+            if !state.is_active() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let snapshot = state.snapshot();
+        assert!(!snapshot.armed);
+        assert!(!snapshot.active);
+        let error = snapshot.error.expect("writer error");
+        assert!(error.starts_with("write pcap record:"));
+        assert_eq!(snapshot.frames, 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn writer_reports_oversized_record_write_failure() {
+        let dir = temp_dir("oversized");
+        let path = dir.join("radeau-oversized.pcap");
+        let (handle, writer, error) = spawn_writer(&path, QUEUE_CAPACITY);
+        handle.push(1, vec![0; 70_000]);
+        handle.close();
+        writer.join().unwrap();
+        assert!(error
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|e| e.starts_with("write pcap record:")));
+        assert_eq!(handle.counters.snapshot(), (0, 0, 0));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cp_016_recording_list_filters_basenames_counts_and_sorts() {
+        // CP-016: the UI list only exposes radeau-*.pcap basenames with metadata.
+        let dir = temp_dir("list");
+        let ignored = dir.join("other.pcap");
+        fs::write(&ignored, b"ignored").unwrap();
+        let newest = dir.join("radeau-newest.pcap");
+        let oldest = dir.join("radeau-oldest.pcap");
+        for (path, frames) in [(&oldest, 1_u64), (&newest, 3_u64)] {
+            let file = File::create(path).unwrap();
+            let mut writer = radeau_pcap::PcapWriter::new(BufWriter::new(file)).unwrap();
+            for n in 0..frames {
+                writer.write_record(n, &[n as u8; 60]).unwrap();
+            }
+            writer.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let state = RecordingState::default();
+        *state.dir.lock().unwrap() = dir.clone();
+        let list = list_recordings(&state);
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().all(|info| {
+            PathBuf::from(&info.path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("radeau-") && name.ends_with(".pcap"))
+        }));
+        assert_eq!(
+            list.iter().map(|info| info.frames).sum::<Option<u64>>(),
+            Some(4)
+        );
         let _ = fs::remove_dir_all(dir);
     }
 }

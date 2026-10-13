@@ -357,8 +357,14 @@ mod tests {
             serde_json::json!({"services": 3}),
         );
         wait_for_lines(&dir.join("radeau.log"), 1);
-        let line = fs::read_to_string(dir.join("radeau.log")).unwrap();
-        let value: Value = serde_json::from_str(line.trim()).unwrap();
+        // Tests in other modules log through the same global writer while this
+        // one runs, so read this test's own line rather than the whole file.
+        let text = fs::read_to_string(dir.join("radeau.log")).unwrap();
+        let value: Value = text
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|value| value["area"] == "catalog")
+            .expect("catalog line");
         assert_eq!(value["level"], "info");
         assert_eq!(value["area"], "catalog");
         assert_eq!(value["msg"], "loaded");

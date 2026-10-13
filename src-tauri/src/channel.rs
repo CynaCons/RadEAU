@@ -744,6 +744,7 @@ impl LiveSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simlink::{encode_frame_record, encode_gap_record};
     use std::io::Write;
     use std::net::TcpListener;
     use std::thread;
@@ -770,6 +771,107 @@ mod tests {
         ));
         std::fs::write(&path, bytes).unwrap();
         path
+    }
+
+    fn ethernet(seed: u8) -> Vec<u8> {
+        let mut wire = vec![0u8; 60];
+        wire[0..6].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, seed]);
+        wire[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x01, seed]);
+        wire[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+        wire
+    }
+
+    fn sim_handshake() -> &'static str {
+        r#"{"link":"ecu-netsim-monitor","version":1,"scenario":"sensor-fusion","ports":[{"id":2,"name":"radar","ip":"10.42.0.12"},{"id":1,"name":"camera","ip":"10.42.0.11"},{"id":9,"name":"bad","ip":"not-an-ip"}]}"#
+    }
+
+    fn serve_once(payload: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(&payload).unwrap();
+        });
+        addr
+    }
+
+    fn read_until_non_idle(source: &mut Source) -> ChannelRead {
+        for _ in 0..100 {
+            let read = source.read(Duration::from_millis(1));
+            if !matches!(read, ChannelRead::Idle) {
+                return read;
+            }
+        }
+        panic!("source stayed idle");
+    }
+
+    fn source_open_err(spec: SourceSpec) -> String {
+        match Source::open(&spec) {
+            Ok(_) => panic!("source unexpectedly opened"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn source_open_rejects_invalid_specs() {
+        assert_eq!(
+            source_open_err(SourceSpec::Sim { addr: " ".into() }),
+            "sim addr must not be empty"
+        );
+        assert_eq!(
+            source_open_err(SourceSpec::PcapStream { addr: "".into() }),
+            "pcap stream addr must not be empty"
+        );
+        assert_eq!(
+            source_open_err(SourceSpec::Live {
+                interface_id: "\t".into(),
+                filter: None,
+            }),
+            "live interfaceId must not be empty"
+        );
+        assert_eq!(source_open_err(SourceSpec::Stub), "no link available");
+        assert!(source_open_err(SourceSpec::Pcap {
+            path: "missing.pcap".into(),
+            pace: "warp".into(),
+        })
+        .contains("unknown pcap pace"));
+    }
+
+    #[test]
+    fn devgen_profiles_open_read_and_report_metadata() {
+        // PF-002/PF-003: every development profile opens through Source and reports host metadata.
+        for profile in ["idle", "normal", "stress", "burst"] {
+            let mut source = Source::open(&SourceSpec::Devgen {
+                profile: profile.into(),
+            })
+            .unwrap();
+            assert_eq!(source.source_kind(), "devgen");
+            assert_eq!(source.status(), ChannelStatus::Up);
+            let caps = source.capabilities();
+            assert!(caps.direction);
+            assert_eq!(caps.timestamp_source, "host");
+            assert!(!caps.transmit);
+            assert!(source.metadata_ready());
+            assert!(source.session_epoch_ns().is_some());
+            assert_eq!(source.endpoint_hints().len(), 5);
+            let mut produced = false;
+            for _ in 0..100 {
+                match source.read(Duration::from_millis(1)) {
+                    ChannelRead::Frame { wire, .. } => {
+                        assert!(wire.len() >= 60);
+                        produced = true;
+                        break;
+                    }
+                    ChannelRead::Idle => continue,
+                    other => panic!("unexpected devgen read: {other:?}"),
+                }
+            }
+            assert!(produced, "{profile} should produce at least one frame");
+        }
+        assert!(source_open_err(SourceSpec::Devgen {
+            profile: "unknown".into(),
+        })
+        .contains("unknown profile"));
     }
 
     #[test]
@@ -811,6 +913,36 @@ mod tests {
     }
 
     #[test]
+    fn cp_003_stream_source_connects_through_source_and_reports_failures() {
+        assert!(source_open_err(SourceSpec::PcapStream {
+            addr: "127.0.0.1:9".into(),
+        })
+        .contains("connect 127.0.0.1:9"));
+
+        let bytes = pcap_bytes(1);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(&bytes).unwrap();
+        });
+        let mut source = Source::open(&SourceSpec::PcapStream {
+            addr: addr.to_string(),
+        })
+        .unwrap();
+        assert_eq!(source.source_kind(), "pcapStream");
+        assert_eq!(source.status(), ChannelStatus::Up);
+        assert!(source.capabilities().direction);
+        assert!(!source.metadata_ready());
+        assert!(matches!(
+            read_until_non_idle(&mut source),
+            ChannelRead::Frame { .. }
+        ));
+        assert!(source.metadata_ready());
+        server.join().unwrap();
+    }
+
+    #[test]
     fn cp_004_fast_file_replay_reads_every_fixture_record() {
         // CP-004: fast file replay delivers every record without source-side drops.
         const RECORDS: usize = 4_096;
@@ -832,6 +964,149 @@ mod tests {
         assert_eq!(count, RECORDS);
         assert_eq!(source.frames, RECORDS as u64);
         assert_eq!(source.status, ChannelStatus::Ended);
+    }
+
+    #[test]
+    fn cp_004_realtime_file_replay_reads_and_reports_status() {
+        // CP-004: paced file replay uses file timestamps and ends with a frame count.
+        let path = temp_pcap("cp004-realtime", &pcap_bytes(2));
+        let mut source = Source::open(&SourceSpec::Pcap {
+            path: path.display().to_string(),
+            pace: "realtime".into(),
+        })
+        .unwrap();
+        assert_eq!(source.source_kind(), "pcap");
+        assert!(!source.fast_replay());
+        assert!(source.metadata_ready());
+        assert!(source.session_epoch_ns().is_some());
+        assert_eq!(source.status(), ChannelStatus::Up);
+        assert_eq!(source.capabilities().timestamp_source, "file");
+        assert!(matches!(
+            source.read(Duration::ZERO),
+            ChannelRead::Frame {
+                ts_ns: 1_700_000_000_000_000_000,
+                dir: crate::codes::DIR_UNKNOWN,
+                ..
+            }
+        ));
+        assert!(matches!(
+            source.read(Duration::ZERO),
+            ChannelRead::Frame { .. }
+        ));
+        assert!(matches!(
+            source.read(Duration::ZERO),
+            ChannelRead::Ended { detail } if detail == "end of file · 2 frames"
+        ));
+        assert_eq!(source.status(), ChannelStatus::Ended);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn simlink_handshake_success_frames_gaps_and_metadata() {
+        // CP-001: simulator source handshakes, sorts endpoint hints, and deframes records.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(sim_handshake().as_bytes());
+        payload.push(b'\n');
+        encode_frame_record(10_000, 1, 1, &ethernet(1), &mut payload);
+        encode_gap_record(11_000, 3, 250, &mut payload);
+        let addr = serve_once(payload);
+        let mut source = Source::open(&SourceSpec::Sim { addr }).unwrap();
+        assert_eq!(source.source_kind(), "sim");
+        assert!(!source.metadata_ready());
+
+        match read_until_non_idle(&mut source) {
+            ChannelRead::Frame { ts_ns, dir, wire } => {
+                assert_eq!(ts_ns, source.session_epoch_ns().unwrap());
+                assert_eq!(dir, crate::codes::DIR_RX);
+                assert_eq!(wire.len(), 60);
+            }
+            other => panic!("expected sim frame, got {other:?}"),
+        }
+        assert!(matches!(
+            source.status(),
+            ChannelStatus::Up | ChannelStatus::Down(_)
+        ));
+        assert_eq!(source.scenario().as_deref(), Some("sensor-fusion"));
+        assert_eq!(
+            source.endpoint_hints(),
+            vec![
+                (
+                    u32::from(std::net::Ipv4Addr::new(10, 42, 0, 11)),
+                    "camera".into()
+                ),
+                (
+                    u32::from(std::net::Ipv4Addr::new(10, 42, 0, 12)),
+                    "radar".into()
+                ),
+            ]
+        );
+        assert!(source.metadata_ready());
+
+        match source.read(Duration::ZERO) {
+            ChannelRead::Gap { dropped, span_ns } => {
+                assert_eq!((dropped, span_ns), (3, 250));
+            }
+            other => panic!("expected sim gap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn simlink_handshake_rejections_surface_as_down_status() {
+        for (name, bytes, needle) in [
+            ("json", b"not-json\n".to_vec(), "handshake JSON"),
+            (
+                "link",
+                br#"{"link":"wrong","version":1,"scenario":"x","ports":[]}"#.to_vec(),
+                "handshake link",
+            ),
+            (
+                "version",
+                br#"{"link":"ecu-netsim-monitor","version":2,"scenario":"x","ports":[]}"#.to_vec(),
+                "handshake version",
+            ),
+            ("eof", b"".to_vec(), "EOF before handshake newline"),
+            (
+                "long",
+                vec![b'a'; 64 * 1024 + 1],
+                "handshake line exceeds 64 KiB",
+            ),
+        ] {
+            let mut payload = bytes;
+            if !matches!(name, "json" | "eof" | "long") {
+                payload.push(b'\n');
+            }
+            let addr = serve_once(payload);
+            let mut source = Source::open(&SourceSpec::Sim { addr }).unwrap();
+            assert!(matches!(
+                source.read(Duration::from_millis(1)),
+                ChannelRead::Idle
+            ));
+            match source.status() {
+                ChannelStatus::Down(detail) => assert!(
+                    detail.contains(needle),
+                    "{name} detail {detail:?} did not contain {needle:?}"
+                ),
+                other => panic!("{name} expected down, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn live_source_open_failure_returns_operator_diagnostic() {
+        // CP-010/CP-012: live open errors are mapped to actionable diagnostics.
+        let err = Source::open(&SourceSpec::Live {
+            interface_id: "radeau-device-that-does-not-exist".into(),
+            filter: None,
+        })
+        .err()
+        .expect("live source should not open a bogus device");
+        assert!(
+            err.contains("Npcap is not installed")
+                || err.contains("interface not found")
+                || err.contains("live capture could not be opened")
+                || err.contains("libpcap is not installed"),
+            "unexpected live diagnostic: {err}"
+        );
     }
 
     #[test]
