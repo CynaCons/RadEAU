@@ -86,18 +86,18 @@ and every view — reproduced with static mock data before any protocol work.
 - [x] E2E: netsim capture recorded → replayed at 1× and max speed → seek → row-for-row match with the live session; the file opens in Wireshark (tshark check when available) [agent: claude]
 - [x] Network timestamp (ns) carried per frame in the pcapng recording (packet-block option), populated from switch time where the source has it (decision D3, PT-004) [agent: claude]
 
-### v0.1.15 — Agent access — automation core + radeau-mcp (current) (ACTIVE)
+### v0.1.15 — Agent access — automation core + radeau-mcp (2026-10-13 — E2E agent phase via radeau-mcp green; release bundle ships radeau-mcp) (COMPLETE)
 **Goal:** RadEAU becomes AI-first: an agent sees and controls everything — capture, recording, replay, and the full trace — through an MCP server. The running GUI app hosts a loopback automation server (PRD §8.1); a radeau-mcp stdio binary bridges agents (Claude Code, Codex, …) to it, and the UI shows what the agent is doing. Pulled forward from v0.7.1.
-- [ ] Spec first: SRS_automation.md (AU-) — command set, MCP tool catalog, paging/size bounds, error model, security posture
-- [ ] One command layer in the core shared by Tauri commands and the automation server (UI-verb parity: anything the UI can do, an agent can do)
-- [ ] Loopback JSON-RPC automation server (TCP 5555): connection cap, request size limits; external bind rejected at startup unless token + allowlist (PRD §8.1)
-- [ ] radeau-mcp stdio binary bridging MCP to the automation server, shipped in the portable zip and AppImage tarball, with a Claude Code / Codex config snippet in the README
-- [ ] MCP control tools: capture_list_sources, capture_start/stop, capture_status; recording_start/stop, recording_list, recording_export_jsonl; replay_open, replay_play/pause/seek/set_speed, replay_status
-- [ ] MCP trace visibility tools: trace_query (protocol/endpoint/name/time-window filters, paging, compact row summaries), frame_detail (full dissection + hex), trace_stats — bounded, agent-sized responses
-- [ ] Agent mirroring in the UI: agent-connected indicator, actions reflected in session/recorder state, agent commands in the event log
-- [ ] E2E: scripted MCP client captures from netsim, records, replays, seeks and queries; answers checked against the trace
+- [x] Spec first: SRS_automation.md (AU-) — command set, MCP tool catalog, paging/size bounds, error model, security posture [agent: claude]
+- [x] One command layer in the core shared by Tauri commands and the automation server (UI-verb parity: anything the UI can do, an agent can do) [agent: claude]
+- [x] Loopback JSON-RPC automation server (TCP 5555): connection cap, request size limits; external bind rejected at startup unless token + allowlist (PRD §8.1) [agent: claude]
+- [x] radeau-mcp stdio binary bridging MCP to the automation server, shipped in the portable zip and AppImage tarball, with a Claude Code / Codex config snippet in the README [agent: claude]
+- [x] MCP control tools: capture_list_sources, capture_start/stop, capture_status; recording_start/stop, recording_list, recording_export_jsonl; replay_open, replay_play/pause/seek/set_speed, replay_status [agent: claude]
+- [x] MCP trace visibility tools: trace_query (protocol/endpoint/name/time-window filters, paging, compact row summaries), frame_detail (full dissection + hex), trace_stats — bounded, agent-sized responses [agent: claude]
+- [x] Agent mirroring in the UI: agent-connected indicator, actions reflected in session/recorder state, agent commands in the event log [agent: claude]
+- [x] E2E: scripted MCP client captures from netsim, records, replays, seeks and queries; answers checked against the trace [agent: claude]
 
-### v0.1.16 — Trace analysis — for agents and the UI
+### v0.1.16 — Trace analysis — for agents and the UI (current) (ACTIVE)
 **Goal:** Give agents answers, not just rows: one-pass analytics over the live ring or a recording file, exposed as MCP tools and in the UI. The signal-array analysis mode for charts (PRD §6) stays with graphing.
 - [ ] One-pass analytics engine over the ring or a recording file (blocking pool, bounded memory): per-protocol and per-endpoint statistics, conversations
 - [ ] SOME/IP service/method summaries, request/response latency, cyclic event period + jitter, gaps and bursts
