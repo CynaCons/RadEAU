@@ -26,5 +26,12 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}", "src/main.tsx", "src/devPerfTracks.ts"],
+      reporter: ["text-summary", "json-summary", "html"],
+      reportsDirectory: "coverage/ui",
+    },
   },
 });
