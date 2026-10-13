@@ -1,6 +1,7 @@
 //! Static-dispatch capture channels. Network and file parsing live here;
 //! classification, retention, batching, and statistics stay in `capture`.
 
+#[cfg(debug_assertions)]
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read};

@@ -16,7 +16,7 @@ use crate::codes::{
 use crate::frame::{GenFrame, SNAP_LEN};
 use radeau_proto::ethernet::{self, EthernetFrame};
 use radeau_proto::ipv4::{self, Ipv4Packet};
-use radeau_proto::udp::{self, UdpDatagram};
+use radeau_proto::udp::UdpDatagram;
 use radeau_proto::{gptp, sd, someip};
 
 const UDP_PORT_SOMEIP: u16 = 30490;
@@ -151,6 +151,31 @@ pub struct DevGen {
     ip_ident: u16,
 }
 
+struct FrameScratch {
+    body: Vec<u8>,
+    payload: Vec<u8>,
+    l3: Vec<u8>,
+    full: Vec<u8>,
+}
+
+impl FrameScratch {
+    fn new() -> Self {
+        Self {
+            body: Vec::with_capacity(192),
+            payload: Vec::with_capacity(256),
+            l3: Vec::with_capacity(256),
+            full: Vec::with_capacity(256),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.body.clear();
+        self.payload.clear();
+        self.l3.clear();
+        self.full.clear();
+    }
+}
+
 impl DevGen {
     pub fn new(seed: u64) -> Self {
         Self {
@@ -167,10 +192,11 @@ impl DevGen {
     /// appending to `out`. One reusable scratch buffer across all frames.
     #[cfg(test)]
     pub fn gen_frames(&mut self, n: usize, rate: f64, out: &mut Vec<GenFrame>) {
-        let mut scratch = Vec::with_capacity(256);
+        let mut wire = Vec::with_capacity(256);
+        let mut scratch = FrameScratch::new();
         for _ in 0..n {
             self.t_s += (1.0 / rate) * (0.5 + self.rng.below(1000) as f64 / 1000.0);
-            let frame = self.gen_one(&mut scratch);
+            let frame = self.gen_one(&mut wire, &mut scratch);
             out.push(frame);
         }
     }
@@ -183,31 +209,39 @@ impl DevGen {
         rate: f64,
         out: &mut Vec<(GenFrame, Vec<u8>)>,
     ) {
-        let mut scratch = Vec::with_capacity(256);
+        let mut wire = Vec::with_capacity(256);
+        let mut scratch = FrameScratch::new();
         for _ in 0..n {
             self.t_s += (1.0 / rate) * (0.5 + self.rng.below(1000) as f64 / 1000.0);
-            scratch.clear();
-            let frame = self.gen_one(&mut scratch);
-            out.push((frame, scratch.clone()));
+            wire.clear();
+            let frame = self.gen_one(&mut wire, &mut scratch);
+            out.push((frame, wire.clone()));
         }
     }
 
-    fn gen_one(&mut self, wire: &mut Vec<u8>) -> GenFrame {
+    fn gen_one(&mut self, wire: &mut Vec<u8>, scratch: &mut FrameScratch) -> GenFrame {
         let roll = self.rng.below(1000);
         let idx = self.idx;
         let t_s = self.t_s;
         self.idx += 1;
         wire.clear();
         if roll < 40 {
-            self.gen_sd_offer(idx, t_s, wire)
+            self.gen_sd_offer(idx, t_s, wire, scratch)
         } else if roll < 80 {
-            self.gen_gptp_sync(idx, t_s, wire)
+            self.gen_gptp_sync(idx, t_s, wire, scratch)
         } else {
-            self.gen_someip_event(idx, t_s, wire)
+            self.gen_someip_event(idx, t_s, wire, scratch)
         }
     }
 
-    fn gen_someip_event(&mut self, idx: u64, t_s: f64, wire: &mut Vec<u8>) -> GenFrame {
+    fn gen_someip_event(
+        &mut self,
+        idx: u64,
+        t_s: f64,
+        wire: &mut Vec<u8>,
+        scratch: &mut FrameScratch,
+    ) -> GenFrame {
+        scratch.clear();
         let k = (idx % SERVICES.len() as u64) as usize;
         let s = &SERVICES[k];
         let payload_len = s.base_len + ((self.rng.below(4) * 8) as usize);
@@ -215,12 +249,11 @@ impl DevGen {
         let dst_ip = endpoint_ip(4); // events flow toward the fusion ECU
 
         self.sessions[k] = self.sessions[k].wrapping_add(1);
-        let body: Vec<u8> = (0..payload_len)
-            .map(|_| (self.rng.next() & 0xff) as u8)
-            .collect();
+        scratch
+            .body
+            .extend((0..payload_len).map(|_| (self.rng.next() & 0xff) as u8));
         // A real SOME/IP header in front of the random body so the frame
         // classifies by plausibility like live traffic does.
-        let mut payload = Vec::with_capacity(someip::HEADER_LEN + payload_len);
         someip::build(
             &someip::SomeIpHeader {
                 service_id: s.svc,
@@ -233,22 +266,19 @@ impl DevGen {
                 message_type: someip::MSG_NOTIFICATION,
                 return_code: 0,
             },
-            &body,
-            &mut payload,
+            &scratch.body,
+            &mut scratch.payload,
         );
         // UDP datagram, then IPv4 packet around it, then Ethernet II around
         // that — one clean inside-out pass, exactly how the live path builds.
         wire.clear();
-        let mut l3 = Vec::with_capacity(ipv4::Ipv4Packet::encoded_len(
-            udp::UdpDatagram::encoded_len(payload.len()),
-        ));
         UdpDatagram::build(
             src_ip,
             dst_ip,
             UDP_PORT_SOMEIP,
             UDP_PORT_SOMEIP,
-            &payload,
-            &mut l3,
+            &scratch.payload,
+            &mut scratch.l3,
         );
         Ipv4Packet::build(
             src_ip,
@@ -257,18 +287,17 @@ impl DevGen {
             self.ip_ident,
             64,
             0,
-            &l3,
+            &scratch.l3,
             wire,
         );
-        let mut full = Vec::with_capacity(EthernetFrame::encoded_len(wire.len()));
         EthernetFrame::build(
             endpoint_mac(s.src_ep),
             SWITCH_MAC,
             ethernet::ETHERTYPE_IPV4,
             wire,
-            &mut full,
+            &mut scratch.full,
         );
-        *wire = full;
+        std::mem::swap(wire, &mut scratch.full);
         self.ip_ident = (self.ip_ident.wrapping_add(7)) & IP_IDENT_MASK | 1;
 
         let parsed = project_from_wire(wire);
@@ -292,29 +321,32 @@ impl DevGen {
         }
     }
 
-    fn gen_sd_offer(&mut self, idx: u64, t_s: f64, wire: &mut Vec<u8>) -> GenFrame {
+    fn gen_sd_offer(
+        &mut self,
+        idx: u64,
+        t_s: f64,
+        wire: &mut Vec<u8>,
+        scratch: &mut FrameScratch,
+    ) -> GenFrame {
+        scratch.clear();
         let s = &SERVICES[self.sd_cycle % SERVICES.len()];
         self.sd_cycle = self.sd_cycle.wrapping_add(1);
         let src_ep = s.src_ep;
         let src_ip = endpoint_ip(src_ep);
         // A real SD OfferService message (SOME/IP 0xFFFF/0x8100 + one
         // entry) so the frame classifies as SD like live traffic does.
-        let mut sd_payload = Vec::with_capacity(32);
-        sd::build(
-            &sd::SdMessage {
-                flags: 0xc0,
-                entries: vec![sd::SdEntry {
-                    entry_type: sd::ENTRY_OFFER_SERVICE,
-                    service_id: s.svc,
-                    instance_id: 1,
-                    major_version: 1,
-                    ttl: 3,
-                    minor_version: 0,
-                }],
-            },
-            &mut sd_payload,
+        sd::build_entries(
+            0xc0,
+            &[sd::SdEntry {
+                entry_type: sd::ENTRY_OFFER_SERVICE,
+                service_id: s.svc,
+                instance_id: 1,
+                major_version: 1,
+                ttl: 3,
+                minor_version: 0,
+            }],
+            &mut scratch.body,
         );
-        let mut payload = Vec::with_capacity(someip::HEADER_LEN + sd_payload.len());
         someip::build(
             &someip::SomeIpHeader {
                 service_id: someip::SD_SERVICE_ID,
@@ -327,17 +359,16 @@ impl DevGen {
                 message_type: someip::MSG_NOTIFICATION,
                 return_code: 0,
             },
-            &sd_payload,
-            &mut payload,
+            &scratch.body,
+            &mut scratch.payload,
         );
-        let mut l3 = Vec::with_capacity(64);
         UdpDatagram::build(
             src_ip,
             SD_MCAST_IP,
             UDP_PORT_SOMEIP,
             UDP_PORT_SOMEIP,
-            &payload,
-            &mut l3,
+            &scratch.payload,
+            &mut scratch.l3,
         );
         Ipv4Packet::build(
             src_ip,
@@ -346,19 +377,18 @@ impl DevGen {
             self.ip_ident,
             64,
             0,
-            &l3,
+            &scratch.l3,
             wire,
         );
         self.ip_ident = (self.ip_ident.wrapping_add(7)) & IP_IDENT_MASK | 1;
-        let mut full = Vec::with_capacity(EthernetFrame::encoded_len(wire.len()));
         EthernetFrame::build(
             SD_MCAST_MAC,
             endpoint_mac(src_ep),
             ethernet::ETHERTYPE_IPV4,
             wire,
-            &mut full,
+            &mut scratch.full,
         );
-        *wire = full;
+        std::mem::swap(wire, &mut scratch.full);
         let parsed = project_from_wire(wire);
         GenFrame {
             idx,
@@ -380,11 +410,17 @@ impl DevGen {
         }
     }
 
-    fn gen_gptp_sync(&mut self, idx: u64, t_s: f64, wire: &mut Vec<u8>) -> GenFrame {
+    fn gen_gptp_sync(
+        &mut self,
+        idx: u64,
+        t_s: f64,
+        wire: &mut Vec<u8>,
+        scratch: &mut FrameScratch,
+    ) -> GenFrame {
+        scratch.clear();
         // gPTP rides directly on Ethernet (EtherType 0x88F7), no IP/UDP. A
         // real Sync header so the frame parses like live traffic does.
         let gm_ep = 0;
-        let mut payload = Vec::with_capacity(gptp::HEADER_LEN + 10);
         gptp::build(
             &gptp::GptpMessage {
                 msg_type: gptp::MSG_SYNC,
@@ -393,14 +429,14 @@ impl DevGen {
                 correction_ns: 0,
                 origin_timestamp_ns: Some((t_s * 1e9) as u128),
             },
-            &mut payload,
+            &mut scratch.payload,
         );
         wire.clear();
         EthernetFrame::build(
             SWITCH_MAC,
             endpoint_mac(gm_ep),
             ethernet::ETHERTYPE_GPTP,
-            &payload,
+            &scratch.payload,
             wire,
         );
         GenFrame {
@@ -414,7 +450,7 @@ impl DevGen {
             msg_type: GPTP_TY_SYNC,
             session: -1,
             wire_len: wire.len() as u32,
-            snap: snap_from(&payload),
+            snap: snap_from(&scratch.payload),
             src_ip: 0,
             dst_ip: 0,
             src_mac: mac_u64(endpoint_mac(gm_ep)),

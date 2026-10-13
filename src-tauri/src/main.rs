@@ -5,7 +5,7 @@
 // Windowed subsystem unconditionally: launching the executable (even a debug
 // build) must never pop a console window. Diagnostics flow through the
 // automation/event surfaces and the E2E CDP harness instead of stdout.
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 use tauri::Manager;
 
 // The dev frame generator is a runtime-gated development data source
@@ -17,7 +17,7 @@ mod channel;
 mod classify;
 mod codes;
 mod deps;
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 mod devgen;
 mod diag;
 mod dissect;

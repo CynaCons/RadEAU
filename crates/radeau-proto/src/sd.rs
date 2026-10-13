@@ -96,10 +96,16 @@ pub fn parse(payload: &[u8]) -> Result<SdMessage, ParseError> {
 /// Serialize an SD message as a SOME/IP payload (entries only, empty options
 /// array). The result goes through `someip::build` with the SD identity.
 pub fn build(msg: &SdMessage, out: &mut Vec<u8>) {
-    out.push(msg.flags);
+    build_entries(msg.flags, &msg.entries, out);
+}
+
+/// Serialize an SD message from a borrowed entry slice, avoiding a temporary
+/// `Vec` for producers that already have a fixed set of entries.
+pub fn build_entries(flags: u8, entries: &[SdEntry], out: &mut Vec<u8>) {
+    out.push(flags);
     out.extend_from_slice(&[0, 0, 0]);
-    out.extend_from_slice(&((msg.entries.len() * 16) as u32).to_be_bytes());
-    for entry in &msg.entries {
+    out.extend_from_slice(&((entries.len() * 16) as u32).to_be_bytes());
+    for entry in entries {
         out.push(entry.entry_type);
         out.extend_from_slice(&[0, 0, 0]); // option indices and option count
         out.extend_from_slice(&entry.service_id.to_be_bytes());

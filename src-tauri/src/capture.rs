@@ -80,6 +80,53 @@ struct FrameBatch {
     po: Vec<u16>,
 }
 
+struct FrameAccumulator {
+    pending: VecDeque<GenFrame>,
+    spare: VecDeque<GenFrame>,
+}
+
+impl FrameAccumulator {
+    fn new() -> Self {
+        Self {
+            pending: VecDeque::with_capacity(ACCUMULATOR_CAP),
+            spare: VecDeque::with_capacity(ACCUMULATOR_CAP),
+        }
+    }
+
+    fn push(&mut self, frame: GenFrame) -> bool {
+        let dropped = if self.pending.len() >= ACCUMULATOR_CAP {
+            self.pending.pop_front();
+            true
+        } else {
+            false
+        };
+        self.pending.push_back(frame);
+        dropped
+    }
+
+    fn take_pending(&mut self) -> Option<VecDeque<GenFrame>> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        std::mem::swap(&mut self.pending, &mut self.spare);
+        Some(std::mem::take(&mut self.spare))
+    }
+
+    fn recycle(&mut self, mut frames: VecDeque<GenFrame>) {
+        frames.clear();
+        self.spare = frames;
+    }
+
+    fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    fn clear(&mut self) {
+        self.pending.clear();
+        self.spare.clear();
+    }
+}
+
 impl FrameBatch {
     fn with_capacity(cap: usize) -> Self {
         Self {
@@ -258,20 +305,49 @@ fn emit_stats(app: &AppHandle, stats: &CaptureStats, start: Instant, seq: &mut u
     let _ = app.emit(EVENT_CAPTURE_STATS, event);
 }
 
-fn push_frame(acc: &Arc<Mutex<VecDeque<GenFrame>>>, f: GenFrame, stats: &CaptureStats) {
+fn push_frame(acc: &Arc<Mutex<FrameAccumulator>>, f: GenFrame, stats: &CaptureStats) {
     if let Ok(mut guard) = acc.lock() {
-        if guard.len() >= ACCUMULATOR_CAP {
-            guard.pop_front();
+        if guard.push(f) {
             stats.accumulator_dropped.fetch_add(1, Ordering::Relaxed);
         }
-        guard.push_back(f);
     }
+}
+
+fn emit_pending_batch(
+    app: &AppHandle,
+    accumulator: &Arc<Mutex<FrameAccumulator>>,
+    seq: &mut u64,
+    stats: &CaptureStats,
+) -> bool {
+    let Some(mut frames) = accumulator
+        .lock()
+        .ok()
+        .and_then(|mut accumulator| accumulator.take_pending())
+    else {
+        return false;
+    };
+
+    let mut batch = FrameBatch::with_capacity(frames.len());
+    for frame in &frames {
+        batch.push(frame);
+    }
+    stats
+        .emitted
+        .fetch_add(batch.i.len() as u64, Ordering::Relaxed);
+    batch.seq = *seq;
+    *seq += 1;
+    let _ = app.emit(EVENT_FRAMES_BATCH, &batch);
+
+    if let Ok(mut accumulator) = accumulator.lock() {
+        accumulator.recycle(std::mem::take(&mut frames));
+    }
+    true
 }
 
 fn try_emit_batch(
     app: &AppHandle,
     credits: &Arc<AtomicU32>,
-    accumulator: &Arc<Mutex<VecDeque<GenFrame>>>,
+    accumulator: &Arc<Mutex<FrameAccumulator>>,
     start: Instant,
     last_emit_ms: &mut u64,
     seq: &mut u64,
@@ -282,22 +358,12 @@ fn try_emit_batch(
         return;
     }
     let elapsed_ms = Instant::now().duration_since(start).as_millis() as u64;
-    let pending = accumulator.lock().map(|a| !a.is_empty()).unwrap_or(false);
+    let pending = accumulator.lock().map(|a| a.len() != 0).unwrap_or(false);
     if pending && deadline_due(elapsed_ms, BATCH_INTERVAL_MS, *last_emit_ms) && take_credit(credits)
     {
-        let mut batch = FrameBatch::with_capacity(ACCUMULATOR_CAP.min(256));
-        if let Ok(mut acc) = accumulator.lock() {
-            for f in acc.drain(..) {
-                batch.push(&f);
-            }
+        if emit_pending_batch(app, accumulator, seq, stats) {
+            *last_emit_ms = elapsed_ms;
         }
-        stats
-            .emitted
-            .fetch_add(batch.i.len() as u64, Ordering::Relaxed);
-        batch.seq = *seq;
-        *seq += 1;
-        *last_emit_ms = elapsed_ms;
-        let _ = app.emit(EVENT_FRAMES_BATCH, &batch);
     }
 }
 
@@ -307,14 +373,14 @@ fn try_emit_batch(
 fn flush_remaining(
     app: &AppHandle,
     credits: &Arc<AtomicU32>,
-    accumulator: &Arc<Mutex<VecDeque<GenFrame>>>,
+    accumulator: &Arc<Mutex<FrameAccumulator>>,
     seq: &mut u64,
     stats: &CaptureStats,
 ) {
     const CREDIT_WAIT: Duration = Duration::from_millis(10);
     const CREDIT_ATTEMPTS: u32 = 100;
     loop {
-        let pending = accumulator.lock().map(|a| !a.is_empty()).unwrap_or(false);
+        let pending = accumulator.lock().map(|a| a.len() != 0).unwrap_or(false);
         if !pending {
             return;
         }
@@ -326,18 +392,7 @@ fn flush_remaining(
             }
             std::thread::sleep(CREDIT_WAIT);
         }
-        let mut batch = FrameBatch::with_capacity(ACCUMULATOR_CAP.min(256));
-        if let Ok(mut acc) = accumulator.lock() {
-            for f in acc.drain(..) {
-                batch.push(&f);
-            }
-        }
-        stats
-            .emitted
-            .fetch_add(batch.i.len() as u64, Ordering::Relaxed);
-        batch.seq = *seq;
-        *seq += 1;
-        let _ = app.emit(EVENT_FRAMES_BATCH, &batch);
+        emit_pending_batch(app, accumulator, seq, stats);
     }
 }
 
@@ -345,7 +400,7 @@ struct Session {
     id: u64,
     stop: Arc<AtomicBool>,
     credits: Arc<AtomicU32>,
-    accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
+    accumulator: Arc<Mutex<FrameAccumulator>>,
     /// Set by the UI's first ack: batches and the end-of-source transition
     /// wait for it (bounded by `ATTACH_GRACE`), so a source that finishes in
     /// milliseconds cannot end before the UI is listening.
@@ -422,7 +477,7 @@ fn reader_loop(
     mut source: Source,
     stop: Arc<AtomicBool>,
     credits: Arc<AtomicU32>,
-    accumulator: Arc<Mutex<VecDeque<GenFrame>>>,
+    accumulator: Arc<Mutex<FrameAccumulator>>,
     frame_ring: Arc<Mutex<FrameRing>>,
     stats: Arc<CaptureStats>,
     attached: Arc<AtomicBool>,
@@ -616,7 +671,7 @@ fn start_session(state: &CaptureState, app: AppHandle, source: SourceSpec) -> Re
     }
     let stop = Arc::new(AtomicBool::new(false));
     let credits = Arc::new(AtomicU32::new(MAX_CREDITS));
-    let accumulator = Arc::new(Mutex::new(VecDeque::with_capacity(ACCUMULATOR_CAP)));
+    let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
     let stats = Arc::new(CaptureStats::default());
     if let Ok(mut ring) = state.frame_ring.lock() {
         ring.clear();
@@ -871,6 +926,124 @@ mod tests {
     };
 
     #[test]
+    #[ignore = "manual release-mode pipeline throughput benchmark"]
+    fn pipeline_benchmark() {
+        const FRAME_COUNT: usize = 500_000;
+        const BATCH_FRAMES: usize = 80;
+
+        let started = Instant::now();
+        let mut generator = DevGen::new(0x5eed_2026_0001);
+        let mut endpoints = EndpointTable::default();
+        let stats = CaptureStats::default();
+        let accumulator = Arc::new(Mutex::new(FrameAccumulator::new()));
+        let mut generated = Vec::with_capacity(BATCH_FRAMES);
+        let mut total_bytes = 0usize;
+        let mut seq = 0u64;
+
+        for _ in 0..(FRAME_COUNT / BATCH_FRAMES) {
+            generated.clear();
+            generator.gen_frames_with_wire(BATCH_FRAMES, 5_000.0, &mut generated);
+            for (_, wire) in generated.drain(..) {
+                let idx = stats.received.load(Ordering::Relaxed);
+                let frame = classify_frame(
+                    &wire,
+                    idx,
+                    idx as f64 / 5_000.0,
+                    crate::codes::DIR_RX,
+                    &mut endpoints,
+                );
+                stats.observe(&frame);
+                push_frame(&accumulator, frame, &stats);
+            }
+            let mut frames = accumulator.lock().unwrap().take_pending().unwrap();
+            let mut batch = FrameBatch::with_capacity(frames.len());
+            for frame in &frames {
+                batch.push(frame);
+            }
+            batch.seq = seq;
+            seq += 1;
+            total_bytes += serde_json::to_string(&batch).unwrap().len();
+            accumulator
+                .lock()
+                .unwrap()
+                .recycle(std::mem::take(&mut frames));
+        }
+
+        let elapsed = started.elapsed().as_secs_f64();
+        println!(
+            "pipeline_bench: frames={} seconds={elapsed:.6} frames/s={:.0} bytes/frame={:.2}",
+            FRAME_COUNT,
+            FRAME_COUNT as f64 / elapsed,
+            total_bytes as f64 / FRAME_COUNT as f64
+        );
+    }
+
+    #[test]
+    fn frame_batch_wire_format_matches_pre_optimization_fixture() {
+        let frames = vec![
+            GenFrame {
+                idx: 7,
+                t_s: 1.25,
+                dir: 1,
+                src_ep: 2,
+                proto: crate::codes::PROTO_SOMEIP,
+                svc: 0x1101,
+                method: 0x8001,
+                msg_type: crate::codes::SOMEIP_TY_NOTIFICATION,
+                session: 42,
+                wire_len: 128,
+                snap: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+                src_ip: 0x0a2a000b,
+                dst_ip: 0x0a2a0014,
+                src_mac: 0x02004200000b,
+                vlan: -1,
+                payload_off: 42,
+            },
+            GenFrame {
+                idx: 8,
+                t_s: 1.5,
+                dir: 0,
+                src_ep: 3,
+                proto: crate::codes::PROTO_SD,
+                svc: 0xffff,
+                method: 0x8100,
+                msg_type: crate::codes::SD_TY_OFFER,
+                session: -1,
+                wire_len: 90,
+                snap: [255; SNAP_LEN],
+                src_ip: 0x0a2a000c,
+                dst_ip: 0xeffffffa,
+                src_mac: 0x02004200000c,
+                vlan: 17,
+                payload_off: 42,
+            },
+            GenFrame {
+                idx: 9,
+                t_s: 2.0,
+                dir: 1,
+                src_ep: 0,
+                proto: crate::codes::PROTO_GPTP,
+                svc: 0,
+                method: 99,
+                msg_type: crate::codes::GPTP_TY_SYNC,
+                session: -1,
+                wire_len: 58,
+                snap: [0; SNAP_LEN],
+                src_ip: 0,
+                dst_ip: 0,
+                src_mac: 0x020042000001,
+                vlan: -1,
+                payload_off: 14,
+            },
+        ];
+        const EXPECTED: &str = r#"{"seq":12,"i":[7,8,9],"t":[1.25,1.5,2.0],"d":[1,0,1],"s":[2,3,0],"p":[0,1,2],"sv":[4353,65535,0],"m":[32769,33024,99],"ty":[0,0,0],"se":[42,-1,-1],"l":[128,90,58],"pb":[[0,1,2,3,4,5,6,7,8,9,10,11],[255,255,255,255,255,255,255,255,255,255,255,255],[0,0,0,0,0,0,0,0,0,0,0,0]],"sa":[170524683,170524684,0],"da":[170524692,4026531834,0],"sm":[2200130551819,2200130551820,2200130551809],"vl":[-1,17,-1],"po":[42,42,14]}"#;
+        assert_eq!(
+            serde_json::to_string(&FrameBatch::from_frames(12, &frames)).unwrap(),
+            EXPECTED
+        );
+    }
+
+    #[test]
     fn cadence_ceilings_sparse_and_bursty() {
         // Simulate arrivals at 100/33/17 ms intervals over 10 s of elapsed
         // time; emitted events must stay within the SRS ceilings.
@@ -925,18 +1098,15 @@ mod tests {
 
     #[test]
     fn accumulator_evicts_oldest_at_cap() {
-        let mut acc: VecDeque<GenFrame> = VecDeque::new();
+        let mut acc = FrameAccumulator::new();
         let mut gen = DevGen::new(3);
         let mut frames = Vec::new();
         gen.gen_frames(ACCUMULATOR_CAP + 500, 800.0, &mut frames);
         for f in frames {
-            if acc.len() >= ACCUMULATOR_CAP {
-                acc.pop_front();
-            }
-            acc.push_back(f);
+            acc.push(f);
         }
         assert_eq!(acc.len(), ACCUMULATOR_CAP);
-        assert_eq!(acc.front().unwrap().idx as usize, 500); // oldest 500 dropped
+        assert_eq!(acc.pending.front().unwrap().idx as usize, 500); // oldest 500 dropped
     }
 
     #[test]

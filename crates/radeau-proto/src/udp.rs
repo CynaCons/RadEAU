@@ -44,18 +44,16 @@ impl<'a> UdpDatagram<'a> {
         out: &mut Vec<u8>,
     ) {
         let length = (HEADER_LEN + payload.len()) as u16;
-        let mut hdr = Vec::with_capacity(HEADER_LEN);
-        hdr.extend_from_slice(&src_port.to_be_bytes());
-        hdr.extend_from_slice(&dst_port.to_be_bytes());
-        hdr.extend_from_slice(&length.to_be_bytes());
-        hdr.extend_from_slice(&[0, 0]); // checksum placeholder
+        let mut hdr = [0u8; HEADER_LEN];
+        hdr[0..2].copy_from_slice(&src_port.to_be_bytes());
+        hdr[2..4].copy_from_slice(&dst_port.to_be_bytes());
+        hdr[4..6].copy_from_slice(&length.to_be_bytes());
 
-        let mut pseudo = Vec::with_capacity(12);
-        pseudo.extend_from_slice(&src_ip);
-        pseudo.extend_from_slice(&dst_ip);
-        pseudo.push(0);
-        pseudo.push(ipv4::PROTOCOL_UDP);
-        pseudo.extend_from_slice(&length.to_be_bytes());
+        let mut pseudo = [0u8; 12];
+        pseudo[0..4].copy_from_slice(&src_ip);
+        pseudo[4..8].copy_from_slice(&dst_ip);
+        pseudo[9] = ipv4::PROTOCOL_UDP;
+        pseudo[10..12].copy_from_slice(&length.to_be_bytes());
 
         let sum = internet_checksum(&[&pseudo, &hdr, payload]);
         hdr[6..8].copy_from_slice(&sum.to_be_bytes());

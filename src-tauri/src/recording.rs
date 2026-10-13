@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 use std::fs::{self, File};
-use std::io::BufWriter;
+use std::io::{BufWriter, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -417,18 +417,21 @@ fn set_error_opt(slot: &Mutex<Option<String>>, value: Option<String>) {
 }
 
 fn count_frames(path: &std::path::Path) -> Option<u64> {
-    let bytes = fs::read(path).ok()?;
-    // The reader's input buffer is bounded — feed it in chunks and drain
-    // between pushes, exactly as the pcap source does.
+    let mut file = File::open(path).ok()?;
     let mut reader = radeau_pcap::PcapReader::new();
     let mut count = 0;
+    let mut buffer = [0_u8; 64 * 1024];
     let mut drain = |reader: &mut radeau_pcap::PcapReader| {
         while let Ok(Some(_)) = reader.next() {
             count += 1;
         }
     };
-    for chunk in bytes.chunks(64 * 1024) {
-        reader.push(chunk);
+    loop {
+        let read = file.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        reader.push(&buffer[..read]);
         drain(&mut reader);
     }
     reader.finish();
@@ -593,6 +596,22 @@ mod tests {
         let first = reader.next().unwrap().unwrap();
         assert_eq!(first.ts_ns, 1_700_000_000_000_000_000);
         assert_eq!(first.wire, vec![0u8; 60]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn count_frames_streams_a_multi_chunk_file() {
+        let dir = temp_dir("count-multi-chunk");
+        let path = dir.join("radeau-multi-chunk.pcap");
+        let file = File::create(&path).unwrap();
+        let mut writer = radeau_pcap::PcapWriter::new(BufWriter::new(file)).unwrap();
+        for n in 0..2_000u64 {
+            writer.write_record(n, &[n as u8; 60]).unwrap();
+        }
+        writer.flush().unwrap();
+
+        assert!(fs::metadata(&path).unwrap().len() > 2 * 64 * 1024);
+        assert_eq!(count_frames(&path), Some(2_000));
         let _ = fs::remove_dir_all(dir);
     }
 
