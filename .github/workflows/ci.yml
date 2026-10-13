@@ -25,6 +25,8 @@ jobs:
         run: npm run lint:colors
       - name: Duplicate requirement-ID check
         run: npm run lint:ids
+      - name: Requirement traceability (SRS -> code -> tests)
+        run: npm run lint:trace
       - name: Unused-dependency check
         run: npm run lint:deps
       - name: ESLint
