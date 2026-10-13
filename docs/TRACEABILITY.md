@@ -7,21 +7,21 @@ modules, `scripts/e2e-*.mjs`). CI runs it with `--check`: Implemented and
 Verified requirements need an implementation trace; Verified ones also a test
 trace. Implemented-without-test is the open verification gap listed below.
 
-**168 requirements** — Implemented 7 · Planned 59 · Superseded 7 · Verified 95
+**168 requirements** — Implemented 6 · Planned 59 · Superseded 7 · Verified 96
 
 ## SRS_analysis.md
 
 | ID | Status | Requirement | Implementation | Tests |
 |---|---|---|---|---|
-| AN-001 | Planned | Analysis is one pass over either the core frame ring (a snapshot) or a pcap/pcapng file (streamed through t… | — | — |
-| AN-002 | Planned | Overview: frames, bytes, duration; per protocol frames, bytes and share; endpoints (IPv4 address, else sour… | — | — |
-| AN-003 | Planned | SOME/IP per (service, method): message counts by type, catalog names when a catalog is loaded; for notifica… | — | — |
-| AN-004 | Planned | SOME/IP-SD per offered service instance (service, instance, sender): offers, stop-offers, first and last se… | — | — |
-| AN-005 | Planned | gPTP per sender (source MAC): Sync, Follow_Up, Pdelay_Req, Pdelay_Resp, Announce counts, Sync period statis… | — | — |
-| AN-006 | Planned | Bursts: the maximum frame count in any 10 ms window and the top 5 windows (start time, frames) | — | — |
+| AN-001 | Planned | Analysis is one pass over either the core frame ring (a snapshot) or a pcap/pcapng file (streamed through t… | `src-tauri/src/analysis.rs` | — |
+| AN-002 | Planned | Overview: frames, bytes, duration; per protocol frames, bytes and share; endpoints (IPv4 address, else sour… | — | `src-tauri/src/analysis.rs` |
+| AN-003 | Planned | SOME/IP per (service, method): message counts by type, catalog names when a catalog is loaded; for notifica… | — | `src-tauri/src/analysis.rs` |
+| AN-004 | Planned | SOME/IP-SD per offered service instance (service, instance, sender): offers, stop-offers, first and last se… | — | `src-tauri/src/analysis.rs` |
+| AN-005 | Planned | gPTP per sender (source MAC): Sync, Follow_Up, Pdelay_Req, Pdelay_Resp, Announce counts, Sync period statis… | — | `src-tauri/src/analysis.rs` |
+| AN-006 | Planned | Bursts: the maximum frame count in any 10 ms window and the top 5 windows (start time, frames) | — | `src-tauri/src/analysis.rs` |
 | AN-007 | Planned | Automation methods (SRS_automation §2): `trace_analyze {from: {kind:"ring"} \| {kind:"file", path}, sections… | — | — |
-| AN-008 | Planned | UI: the Network view's **Analyze buffered trace** action runs the analysis on the ring and shows a snapshot… | — | — |
-| AN-009 | Planned | Accuracy against the simulator's seeded schedules (fixture `sensor-fusion-5s.pcap`): event periods 0x1101 3… | — | — |
+| AN-008 | Planned | UI: the Network view's **Analyze buffered trace** action runs the analysis on the ring and shows a snapshot… | — | `src/views/NetworkView.render.test.tsx` |
+| AN-009 | Planned | Accuracy against the simulator's seeded schedules (fixture `sensor-fusion-5s.pcap`): event periods 0x1101 3… | — | `src-tauri/src/analysis.rs` |
 
 ## SRS_automation.md
 
@@ -36,7 +36,7 @@ trace. Implemented-without-test is the open verification gap listed below.
 | AU-007 | Verified | `trace_stats` returns the session (`running`, source, epoch, timestamp source), the live counters of `captu… | `src-tauri/src/rows.rs` | `scripts/e2e-smoke.mjs` |
 | AU-008 | Verified | `radeau-mcp` speaks MCP over stdio (protocol `2025-06-18`: `initialize`, `tools/list`, `tools/call`, `ping`… | `crates/radeau-mcp/src/lib.rs`<br>`crates/radeau-mcp/src/main.rs` | `scripts/e2e-smoke.mjs` |
 | AU-009 | Verified | Agent visibility: while at least one automation client is connected the app bar shows an `Agent` chip (tool… | `crates/radeau-mcp/src/lib.rs`<br>`src-tauri/src/automation/mod.rs`<br>`src-tauri/src/automation/server.rs` | `scripts/e2e-smoke.mjs`<br>`src/runtime/desktop.browser.test.ts`<br>`src/shell/AppTopBar.agent.test.tsx` |
-| AU-010 | Implemented | `radeau-mcp` ships in the portable Windows zip and the Linux tarball next to `radeau`; the README documents… | `crates/radeau-mcp/src/main.rs` | `scripts/e2e-release.mjs` |
+| AU-010 | Verified | `radeau-mcp` ships in the portable Windows zip and the Linux tarball next to `radeau`; the README documents… | `crates/radeau-mcp/src/main.rs` | `scripts/e2e-release.mjs` |
 
 ## SRS_capture.md
 
@@ -223,7 +223,7 @@ Implemented requirements with no test trace yet (4): NS-004, VU-007, VU-012, VU-
 
 ## Untraced source files
 
-Implementation files that reference no requirement (51). Each is either covered by a requirement that should name it, or is infrastructure.
+Implementation files that reference no requirement (52). Each is either covered by a requirement that should name it, or is infrastructure.
 
 - `crates/radeau-proto/src/arp.rs`
 - `crates/radeau-proto/src/avtp.rs`
@@ -259,6 +259,7 @@ Implementation files that reference no requirement (51). Each is either covered 
 - `src/components/RaisedPanel.tsx`
 - `src/components/TraceFilterPopover.tsx`
 - `src/devPerfTracks.ts`
+- `src/runtime/analysisStore.ts`
 - `src/runtime/appInfoStore.ts`
 - `src/runtime/automationDisplay.ts`
 - `src/runtime/catalogDisplay.ts`

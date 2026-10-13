@@ -8,6 +8,7 @@
  * Run: npm run test:e2e:release
  */
 
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -87,6 +88,20 @@ async function main() {
   if (!existsSync(pcapFixture)) {
     throw new Error(`portable pcap fixture missing at ${pcapFixture}`);
   }
+
+  // AU-010: the MCP bridge ships in the bundle and answers MCP initialize.
+  const mcpExe = join(dir, "radeau-mcp.exe");
+  if (!existsSync(mcpExe)) throw new Error(`radeau-mcp.exe missing from the bundle at ${mcpExe}`);
+  const init = spawnSync(mcpExe, [], {
+    input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "release-e2e", version: "1" } } })}\n`,
+    encoding: "utf8",
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  const initLine = (init.stdout || "").split("\n").find((l) => l.trim());
+  if (!initLine || JSON.parse(initLine).result?.serverInfo?.name !== "radeau-mcp")
+    throw new Error(`radeau-mcp initialize failed: ${init.stdout} ${init.stderr}`);
+  console.log("radeau-mcp in bundle: initialize OK");
 
   // Release exe embeds dist — vite must not be required (and should stay down).
   if (await reachable(VITE_URL, 800)) {
