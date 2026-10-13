@@ -28,7 +28,9 @@
     "lint:ids": "node scripts/check-req-ids.mjs",
     "lint:deps": "knip",
     "ci": "npm run typecheck && npm run test && npm run gen:tokens -- --check && npm run lint:colors && npm run lint:ids && npm run lint:deps",
-    "test:perf": "node scripts/e2e-perf.mjs"
+    "test:perf": "node scripts/e2e-perf.mjs",
+    "lint": "eslint .",
+    "lint:trace": "node scripts/trace-matrix.mjs --check"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -44,13 +46,18 @@
     "react-virtuoso": "^4.12.6"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@tauri-apps/cli": "^2.5.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.4.1",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^17.13.0",
     "happy-dom": "^15.11.7",
     "knip": "^5.50.0",
     "typescript": "^5.8.3",
+    "typescript-eslint": "^8.71.2",
     "vite": "^6.3.5",
     "vitest": "^3.1.3"
   }
