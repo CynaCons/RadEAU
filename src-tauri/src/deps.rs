@@ -4,7 +4,9 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 const NPCAP_URL: &str = "https://npcap.com/#download";
 const LIBPCAP_URL: &str = "https://www.tcpdump.org/";
