@@ -31,7 +31,8 @@
     "test:perf": "node scripts/e2e-perf.mjs",
     "lint": "eslint .",
     "lint:trace": "node scripts/trace-matrix.mjs --check",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "capture:views": "node scripts/capture-views.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

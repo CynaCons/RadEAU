@@ -2074,7 +2074,8 @@ async function main() {
     }
 
     // Phase (h) — an agent drives the app through radeau-mcp: AU-001 AU-003 AU-004
-    // AU-005 AU-006 AU-007 AU-008 AU-009 (verbs, mirroring, trace visibility, chip).
+    // AU-005 AU-006 AU-007 AU-008 AU-009 (verbs, mirroring, trace visibility, chip),
+    // AN-007 AN-008 (analysis through the agent and in the Network view).
     let agentPass = null;
     const agentDir = mkdtempSync(join(tmpdir(), "radeau-e2e-agent-"));
     const mcp = startMcp();
@@ -2111,6 +2112,23 @@ async function main() {
       if (!(page.total >= 5) || page.nextIdx == null) throw new Error(`trace_query paging: total ${page.total}, nextIdx ${page.nextIdx}`);
       const detail = await mcp.call("trace_frame", { idx: page.rows[0].idx });
       if (!detail.layers?.some((l) => l.protocol === "SOME/IP")) throw new Error("trace_frame has no SOME/IP layer");
+      // AN-007: the agent's analysis finds the simulator's 33 ms camera service.
+      const report = await mcp.call("trace_analyze", { from: { kind: "ring" } });
+      const camera = (report.someip?.services ?? []).find((sv) => sv.service === 0x1101 && sv.method === 0x8001);
+      const cameraPeriod = camera?.senders?.[0]?.period?.meanNs;
+      if (!cameraPeriod || Math.abs(cameraPeriod - 33_000_000) > 33_000_000 * 0.05)
+        throw new Error(`trace_analyze 0x1101 period ${cameraPeriod} (expected ~33 ms)`);
+      const timing = await mcp.call("timing_report", { service: 0x1101, method: 0x8001 });
+      if (!timing) throw new Error("timing_report empty");
+      // AN-008: the Network view's snapshot shows the same service.
+      await session.eval(clickProbe("nav-network"));
+      await waitFor(() => session.eval(clickProbe("network-analyze-btn")), 5_000, "Analyze buffered trace");
+      await waitFor(
+        () => session.eval(`!!document.querySelector('[data-testid^="network-someip-row-0x1101-0x8001"]')`),
+        15_000,
+        "Network SOME/IP services panel lists 0x1101 (AN-008)",
+      );
+      await session.eval(clickProbe("nav-trace"));
       // Recording under agent control, then replay of that recording.
       await mcp.call("recording_start");
       await sleep(1_500);
@@ -2141,7 +2159,14 @@ async function main() {
       // The chip goes away with the agent.
       mcp.child.stdin.end();
       await waitFor(() => session.eval(`!document.querySelector('[data-testid="appbar-agent-chip"]')`), 5_000, "Agent chip clears after disconnect");
-      agentPass = { tools: tools.length, someip: someip[1], queryTotal: page.total, replayed: info.frames, exported: exported.frames };
+      agentPass = {
+        tools: tools.length,
+        someip: someip[1],
+        queryTotal: page.total,
+        cameraPeriodMs: Math.round(cameraPeriod / 1e4) / 100,
+        replayed: info.frames,
+        exported: exported.frames,
+      };
       console.log("agent: PASS", JSON.stringify(agentPass));
       await session.eval(`window.__radeauSession.setSourceKind("devgen")`);
     } catch (err) {

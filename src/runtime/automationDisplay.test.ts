@@ -15,7 +15,7 @@ const FABRICATED = [
 
 describe("automationDisplay honesty", () => {
   it("uses the pinned empty-state copy", () => {
-    expect(AUTOMATION_EMPTY).toBe("no scripts — automation surface arrives v0.7");
+    expect(AUTOMATION_EMPTY).toBe("no scripts — the script runner arrives later; agents drive RadEAU through radeau-mcp");
   });
 
   it("never embeds fabricated script names or console output", () => {

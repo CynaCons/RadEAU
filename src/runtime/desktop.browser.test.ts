@@ -40,6 +40,7 @@ import {
   replaySeek,
   replaySetSpeed,
   replayStep,
+  traceAnalyze,
 } from "./desktop";
 
 describe("desktop browser fallbacks (v0.1.6)", () => {
@@ -82,6 +83,12 @@ describe("desktop browser fallbacks (v0.1.6)", () => {
 
   it("exportJsonl rejects honestly", async () => {
     await expect(exportJsonl("out.jsonl", { kind: "ring" })).rejects.toThrow(/desktop app only/i);
+  });
+
+  it("traceAnalyze rejects honestly", async () => {
+    await expect(traceAnalyze({ kind: "ring" })).rejects.toThrow(
+      /analysis is desktop-app only/i,
+    );
   });
 
   it("pickPcapFile returns null (editable path field stays usable)", async () => {

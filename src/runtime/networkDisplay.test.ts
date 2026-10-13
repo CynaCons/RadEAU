@@ -226,7 +226,6 @@ describe("networkDisplay Connection panel", () => {
       expect(corpus.includes(bad), `fabricated string leaked: ${bad}`).toBe(false);
     }
     expect(NETWORK_EMPTY.externalNodes).toBe("no external nodes attached");
-    expect(NETWORK_EMPTY.automation).toMatch(/v0\.7/);
     expect(NETWORK_EMPTY.topology).toMatch(/v0\.5/);
     expect(NETWORK_EMPTY.sdMonitor).toMatch(/SD traffic/);
     expect(NETWORK_EMPTY.ptp).toMatch(/PTP/);

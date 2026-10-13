@@ -4,4 +4,4 @@
  */
 
 export const AUTOMATION_EMPTY =
-  "no scripts — automation surface arrives v0.7";
+  "no scripts — the script runner arrives later; agents drive RadEAU through radeau-mcp";

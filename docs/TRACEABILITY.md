@@ -7,21 +7,21 @@ modules, `scripts/e2e-*.mjs`). CI runs it with `--check`: Implemented and
 Verified requirements need an implementation trace; Verified ones also a test
 trace. Implemented-without-test is the open verification gap listed below.
 
-**168 requirements** — Implemented 6 · Planned 59 · Superseded 7 · Verified 96
+**168 requirements** — Implemented 6 · Planned 50 · Superseded 7 · Verified 105
 
 ## SRS_analysis.md
 
 | ID | Status | Requirement | Implementation | Tests |
 |---|---|---|---|---|
-| AN-001 | Planned | Analysis is one pass over either the core frame ring (a snapshot) or a pcap/pcapng file (streamed through t… | `src-tauri/src/analysis.rs` | — |
-| AN-002 | Planned | Overview: frames, bytes, duration; per protocol frames, bytes and share; endpoints (IPv4 address, else sour… | — | `src-tauri/src/analysis.rs` |
-| AN-003 | Planned | SOME/IP per (service, method): message counts by type, catalog names when a catalog is loaded; for notifica… | — | `src-tauri/src/analysis.rs` |
-| AN-004 | Planned | SOME/IP-SD per offered service instance (service, instance, sender): offers, stop-offers, first and last se… | — | `src-tauri/src/analysis.rs` |
-| AN-005 | Planned | gPTP per sender (source MAC): Sync, Follow_Up, Pdelay_Req, Pdelay_Resp, Announce counts, Sync period statis… | — | `src-tauri/src/analysis.rs` |
-| AN-006 | Planned | Bursts: the maximum frame count in any 10 ms window and the top 5 windows (start time, frames) | — | `src-tauri/src/analysis.rs` |
-| AN-007 | Planned | Automation methods (SRS_automation §2): `trace_analyze {from: {kind:"ring"} \| {kind:"file", path}, sections… | — | — |
-| AN-008 | Planned | UI: the Network view's **Analyze buffered trace** action runs the analysis on the ring and shows a snapshot… | — | `src/views/NetworkView.render.test.tsx` |
-| AN-009 | Planned | Accuracy against the simulator's seeded schedules (fixture `sensor-fusion-5s.pcap`): event periods 0x1101 3… | — | `src-tauri/src/analysis.rs` |
+| AN-001 | Verified | Analysis is one pass over either the core frame ring (a snapshot) or a pcap/pcapng file (streamed through t… | `src-tauri/src/analysis.rs` | `src-tauri/src/analysis.rs` |
+| AN-002 | Verified | Overview: frames, bytes, duration; per protocol frames, bytes and share; endpoints (IPv4 address, else sour… | `src-tauri/src/analysis.rs` | `src-tauri/src/analysis.rs` |
+| AN-003 | Verified | SOME/IP per (service, method): message counts by type, catalog names when a catalog is loaded; for notifica… | `src-tauri/src/analysis.rs` | `src-tauri/src/analysis.rs` |
+| AN-004 | Verified | SOME/IP-SD per offered service instance (service, instance, sender): offers, stop-offers, first and last se… | `src-tauri/src/analysis.rs` | `src-tauri/src/analysis.rs` |
+| AN-005 | Verified | gPTP per sender (source MAC): Sync, Follow_Up, Pdelay_Req, Pdelay_Resp, Announce counts, Sync period statis… | `src-tauri/src/analysis.rs` | `src-tauri/src/analysis.rs` |
+| AN-006 | Verified | Bursts: the maximum frame count in any 10 ms window and the top 5 windows (start time, frames) | `src-tauri/src/analysis.rs` | `src-tauri/src/analysis.rs` |
+| AN-007 | Verified | Automation methods (SRS_automation §2): `trace_analyze {from: {kind:"ring"} \| {kind:"file", path}, sections… | `src-tauri/src/automation/methods.rs` | `scripts/e2e-smoke.mjs` |
+| AN-008 | Verified | UI: the Network view's **Analyze buffered trace** action runs the analysis on the ring and shows a snapshot… | `src/runtime/analysisStore.ts` | `scripts/e2e-smoke.mjs`<br>`src/views/NetworkView.render.test.tsx` |
+| AN-009 | Verified | Accuracy against the simulator's seeded schedules (fixture `sensor-fusion-5s.pcap`): event periods 0x1101 3… | `src-tauri/src/analysis.rs` | `src-tauri/src/analysis.rs` |
 
 ## SRS_automation.md
 
@@ -223,7 +223,7 @@ Implemented requirements with no test trace yet (4): NS-004, VU-007, VU-012, VU-
 
 ## Untraced source files
 
-Implementation files that reference no requirement (52). Each is either covered by a requirement that should name it, or is infrastructure.
+Implementation files that reference no requirement (51). Each is either covered by a requirement that should name it, or is infrastructure.
 
 - `crates/radeau-proto/src/arp.rs`
 - `crates/radeau-proto/src/avtp.rs`
@@ -259,7 +259,6 @@ Implementation files that reference no requirement (52). Each is either covered 
 - `src/components/RaisedPanel.tsx`
 - `src/components/TraceFilterPopover.tsx`
 - `src/devPerfTracks.ts`
-- `src/runtime/analysisStore.ts`
 - `src/runtime/appInfoStore.ts`
 - `src/runtime/automationDisplay.ts`
 - `src/runtime/catalogDisplay.ts`

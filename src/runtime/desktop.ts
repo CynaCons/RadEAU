@@ -688,6 +688,127 @@ export type ReplaySpeed = 0.1 | 0.25 | 0.5 | 1 | 2 | 5 | 10 | null;
 
 export type ExportJsonlFrom = { kind: "ring" } | { kind: "file"; path: string };
 
+export type AnalysisFrom = { kind: "ring" } | { kind: "file"; path: string };
+
+export interface AnalysisSections {
+  overview?: boolean;
+  someip?: boolean;
+  sd?: boolean;
+  ptp?: boolean;
+  bursts?: boolean;
+}
+
+export interface AnalysisStats {
+  count: number;
+  meanNs: number;
+  minNs: number;
+  maxNs: number;
+  p50Ns: number;
+  p99Ns: number;
+  stddevNs: number;
+}
+
+export interface AnalysisReport {
+  source: AnalysisFrom;
+  generatedAtMs: number;
+  overview?: {
+    frames: number;
+    bytes: number;
+    durationNs: number;
+    firstNs: number;
+    lastNs: number;
+    protocols: {
+      protocol: string;
+      frames: number;
+      bytes: number;
+      share: number;
+    }[];
+    endpoints: {
+      endpoint: string;
+      kind: "ipv4" | "mac";
+      framesSent: number;
+      bytesSent: number;
+      protocols: string[];
+    }[];
+    conversations: {
+      a: string;
+      b: string;
+      transport: string;
+      frames: number;
+      bytes: number;
+      firstNs: number;
+      lastNs: number;
+    }[];
+  };
+  someip?: {
+    services: {
+      service: number;
+      method: number;
+      serviceName?: string;
+      methodName?: string;
+      counts: {
+        request: number;
+        requestNoReturn: number;
+        notification: number;
+        response: number;
+        error: number;
+      };
+      senders: {
+        sender: string;
+        count: number;
+        period?: AnalysisStats;
+        gaps: { atNs: number; gapNs: number }[];
+        gapsTotal: number;
+      }[];
+      latency?: AnalysisStats;
+      unanswered: number;
+      errors: number;
+    }[];
+  };
+  sd?: {
+    instances: {
+      service: number;
+      instance: number;
+      sender: string;
+      offers: number;
+      stopOffers: number;
+      firstNs: number;
+      lastNs: number;
+      period?: AnalysisStats;
+      lastTtl: number;
+      reboots: number;
+    }[];
+    eventgroups: {
+      service: number;
+      instance: number;
+      eventgroup: number;
+      subscribes: number;
+      acks: number;
+      nacks: number;
+    }[];
+  };
+  ptp?: {
+    senders: {
+      sender: string;
+      sync: number;
+      followUp: number;
+      pdelayReq: number;
+      pdelayResp: number;
+      announce: number;
+      syncPeriod?: AnalysisStats;
+      grandmaster?: string;
+    }[];
+  };
+  bursts?: {
+    windowNs: 10000000;
+    maxFrames: number;
+    top: { startNs: number; frames: number }[];
+  };
+  overflow: {
+    keysDropped: number;
+  };
+}
+
 export interface ExportJsonlResult {
   frames: number;
   bytes: number;
@@ -754,6 +875,18 @@ export function exportJsonl(
     return Promise.reject(new Error("desktop app only"));
   }
   return invoke<ExportJsonlResult>("export_jsonl", { path, from });
+}
+
+/** Runs the one-shot trace analysis over the ring or a pcap/pcapng file. */
+export function traceAnalyze(
+  from: AnalysisFrom = { kind: "ring" },
+  sections?: AnalysisSections,
+): Promise<AnalysisReport> {
+  if (!isDesktop()) {
+    return Promise.reject(new Error("analysis is desktop-app only"));
+  }
+  const args = sections === undefined ? { from } : { from, sections };
+  return invoke<AnalysisReport>("trace_analyze", args);
 }
 
 /** Progress while export_jsonl runs; no-op-safe in browser mode. */

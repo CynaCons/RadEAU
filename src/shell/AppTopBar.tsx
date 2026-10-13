@@ -13,15 +13,14 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   closeWindow,
   minimizeWindow,
-  onAutomationClients,
   onMaximizedChange,
   toggleMaximizeWindow,
-  type AutomationClientsEvent,
 } from "../runtime/desktop";
 import {
   recordIndicatorColor,
   recordIndicatorTooltip,
 } from "../runtime/recorderDisplay";
+import { automationClientsStore } from "../runtime/automationClientsStore";
 import { recordingStore } from "../runtime/recordingStore";
 import { sessionStore } from "../runtime/sessionStore";
 import { shallowEqual, useStoreSelector } from "../runtime/useStoreSelector";
@@ -41,35 +40,8 @@ const WINDOW_BUTTON_SX = {
   color: "text.secondary",
 } as const;
 
-class AgentClientsStore {
-  private state: AutomationClientsEvent = { count: 0, lastMethod: null };
-  private listeners = new Set<() => void>();
-  private snapshot = this.state;
-
-  constructor() {
-    onAutomationClients((state) => {
-      this.state = state;
-      this.publish();
-    });
-  }
-
-  subscribe = (cb: () => void): (() => void) => {
-    this.listeners.add(cb);
-    return () => this.listeners.delete(cb);
-  };
-
-  getSnapshot = (): AutomationClientsEvent => this.snapshot;
-
-  private publish(): void {
-    this.snapshot = this.state;
-    for (const cb of this.listeners) cb();
-  }
-}
-
-const agentClientsStore = new AgentClientsStore();
-
 function AgentChip() {
-  const { count, lastMethod } = useStoreSelector(agentClientsStore, (state) => state);
+  const { count, lastMethod } = useStoreSelector(automationClientsStore, (state) => state);
   if (count <= 0) return null;
   return (
     <Tooltip title={`${count} agent client(s) · last: ${lastMethod ?? "none"}`}>
