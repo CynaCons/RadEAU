@@ -394,6 +394,8 @@ release.
 
 > v0.1.13 closed 2026-10-13. Evidence: perf/budgets.json gate PASS (Trace Fixed script 365 -> 140 ms/s, hidden-view commits 0, long tasks 6 -> 0; React dev build at 5k frames/s); backend pipeline bench 833k -> 1.05M frames/s with byte-identical frames:batch JSON; E2E smoke PASS; strict TS + ESLint + clippy (pedantic on codec crates) + rustfmt + cargo-deny + machete + knip all clean and in CI; independent review recorded in docs/reviews/v0.1.13-code-review.md (30 confirmed and fixed, 7 rejected with reasons; quick-xml advisory fixed); traceability 140 requirements — 78 Verified, 6 Implemented (4 without a test: VU-007, VU-012, VU-023, NS-004, reasons in the matrix), 51 Planned, 5 Superseded — enforced by CI (scripts/trace-matrix.mjs --check); coverage UI 49% -> 82%, Rust 75% -> 81% (capture.rs 27 -> 68, channel.rs 35 -> 82, recording.rs 40 -> 83).
 
+> Released 2026-10-13: v0.1.16 tagged (covers v0.1.13-v0.1.16: render discipline, pcapng recording, replay, JSONL export, automation server + radeau-mcp bridge, trace analysis). The release workflow attached `RadEAU-0.1.16-win64.zip` (radeau.exe, radeau-mcp.exe, ecu-netsim.exe), `RadEAU_0.1.16_amd64.AppImage` and `RadEAU-0.1.16-linux-x64.tar.gz`. CI moved to clippy 1.99 before the tag; new lints (chunks_exact_to_as_chunks, assert_is_empty, manual_checked_ops, Linux-only dead code / unused imports) fixed in 8153428, 76a71b5, 3c64028.
+
 ## Backlog
 - [ ] CAN / CAN FD backend behind the channel abstraction + DBC schema pipeline (dual bit-walk decoders, shared vectors)
 - [ ] Npcap/libpcap live-capture backend + capture-privilege diagnostics in Settings
