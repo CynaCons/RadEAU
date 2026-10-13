@@ -593,12 +593,32 @@ pub fn dissect_with_catalog(
     detail_with_decoded(idx, t_s, wire, payload_offset, layers, decoded)
 }
 
+const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+
+fn push_hex_byte(out: &mut String, byte: u8) {
+    out.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
+    out.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
+}
+
+/// Space-separated uppercase hex, one allocation.
 fn hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut out = String::with_capacity(bytes.len() * 3);
+    for (i, &byte) in bytes.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        push_hex_byte(&mut out, byte);
+    }
+    out
+}
+
+/// Unseparated uppercase hex (the `FrameDetail::bytes` wire form), one allocation.
+fn hex_compact(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        push_hex_byte(&mut out, byte);
+    }
+    out
 }
 
 fn doip_field(name: &str, value: impl Into<String>, offset: usize, len: usize) -> FrameField {
@@ -1385,7 +1405,11 @@ fn add_igmp(layers: &mut Vec<FrameLayer>, bytes: &[u8], offset: usize) {
                 ),
                 field("Group address", ip(&p.group_address), offset + 4, 4),
             ];
+            // IGMPv3 group records start after the 8-byte report header; each
+            // is 8 + 4·sources + auxiliary bytes long (RFC 3376 §4.2).
+            let mut record_offset = offset + 8;
             for (n, r) in p.records.iter().enumerate() {
+                let record_len = 8 + 4 * r.sources.len() + r.auxiliary_data.len();
                 f.push(field(
                     &format!("Group record {}", n + 1),
                     format!(
@@ -1394,9 +1418,10 @@ fn add_igmp(layers: &mut Vec<FrameLayer>, bytes: &[u8], offset: usize) {
                         ip(&r.multicast_address),
                         r.sources.len()
                     ),
-                    offset + 8,
-                    8,
+                    record_offset,
+                    record_len,
                 ));
+                record_offset += record_len;
             }
             layers.push(FrameLayer {
                 protocol: "IGMP".into(),
@@ -1479,7 +1504,7 @@ fn add_udp_application(
                     "Client MAC",
                     mac(&p.chaddr[..p.hlen.min(16) as usize]),
                     o + 28,
-                    p.hlen as usize,
+                    usize::from(p.hlen.min(16)),
                 ),
                 field("Your address", ip(&p.yiaddr), o + 16, 4),
                 field("Server address", ip(&p.siaddr), o + 20, 4),
@@ -1757,6 +1782,41 @@ fn add_udp_application(
     false
 }
 
+/// (offset, len) of the first occurrence of `needle` at or after `from`; (0, 0) when absent.
+fn find_bytes(haystack: &[u8], from: usize, needle: &[u8]) -> (usize, usize) {
+    if needle.is_empty() || from >= haystack.len() {
+        return (0, 0);
+    }
+    haystack[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map_or((0, 0), |p| (from + p, needle.len()))
+}
+
+/// (offset, len without CRLF) of the header line `name:` at or after `from`.
+fn find_header_line(b: &[u8], from: usize, name: &str) -> (usize, usize) {
+    let mut at = from;
+    while at < b.len() {
+        let end = b[at..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(b.len(), |p| at + p);
+        let line = &b[at..end];
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            break;
+        }
+        if line.len() > name.len()
+            && line[name.len()] == b':'
+            && line[..name.len()].eq_ignore_ascii_case(name.as_bytes())
+        {
+            return (at, line.len());
+        }
+        at = end + 1;
+    }
+    (0, 0)
+}
+
 fn add_tcp_application(
     layers: &mut Vec<FrameLayer>,
     src: u16,
@@ -1783,8 +1843,20 @@ fn add_tcp_application(
                 } => (format!("{version} {status} {reason}"), headers, body_len),
             };
             let mut f = vec![field("Start line", start.clone(), o, start.len())];
+            let mut cursor = b
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(b.len(), |p| p + 1);
             for (n, v) in headers {
-                f.push(field(&n, v, o, 0));
+                let (at, len) = find_header_line(b, cursor, &n);
+                if len > 0 {
+                    // Resume after this line's CRLF so the next header is found.
+                    cursor = b[at..]
+                        .iter()
+                        .position(|&c| c == b'\n')
+                        .map_or(b.len(), |p| at + p + 1);
+                }
+                f.push(field(&n, v, o + at, len));
             }
             f.push(field(
                 "Body length",
@@ -1831,17 +1903,32 @@ fn add_tcp_application(
                         o + 9,
                         2,
                     ));
+                    // Record (5) + handshake header (4) + version (2) + random (32),
+                    // then session id (1 + n) and the 2-byte cipher-suites length.
+                    let (suites_off, suites_len) = b
+                        .get(43)
+                        .map(|&sid| 44 + usize::from(sid))
+                        .filter(|&at| at + 2 <= b.len())
+                        .map_or((0, 0), |at| (at, 2));
                     f.push(field(
                         "Cipher-suite count",
                         cipher_suite_count.to_string(),
-                        o,
-                        0,
+                        o + suites_off,
+                        suites_len,
                     ));
                     if let Some(s) = &sni {
-                        f.push(field("SNI", s.clone(), o, 0));
+                        let (at, len) = find_bytes(b, 5, s.as_bytes());
+                        f.push(field("SNI", s.clone(), o + at, len));
                     }
-                    if !alpn.is_empty() {
-                        f.push(field("ALPN", alpn.join(", "), o, 0));
+                    if let (Some(first), Some(last)) = (alpn.first(), alpn.last()) {
+                        let (at, first_len) = find_bytes(b, 5, first.as_bytes());
+                        let (last_at, last_len) = find_bytes(b, at, last.as_bytes());
+                        let len = if first_len == 0 || last_len == 0 {
+                            0
+                        } else {
+                            last_at + last_len - at
+                        };
+                        f.push(field("ALPN", alpn.join(", "), o + at, len));
                     }
                     format!(
                         "ClientHello{}",
@@ -1863,7 +1950,9 @@ fn add_tcp_application(
                     "ServerHello".into()
                 }
                 Some(tls::Handshake::Other { handshake_type }) => {
-                    tls::handshake_type_name(handshake_type)
+                    let name = tls::handshake_type_name(handshake_type);
+                    f.push(field("Handshake type", name.clone(), o + 5, 1));
+                    name
                 }
                 None => tls::content_type_name(p.content_type),
             };
@@ -1887,12 +1976,20 @@ fn add_tcp_application(
                         "SSH-{protocol_version}-{software_version}{}",
                         comments.map_or(String::new(), |c| format!(" {c}"))
                     ),
-                    vec![field(
-                        "Banner",
-                        String::from_utf8_lossy(b).trim().into(),
-                        o,
-                        b.len(),
-                    )],
+                    {
+                        // The banner is one CRLF-terminated line; binary
+                        // packet data may follow in the same segment.
+                        let line = b
+                            .iter()
+                            .position(|&c| c == b'\n')
+                            .map_or(b, |end| &b[..=end]);
+                        vec![field(
+                            "Banner",
+                            String::from_utf8_lossy(line).trim().into(),
+                            o,
+                            line.len(),
+                        )]
+                    },
                 ),
                 ssh::SshMessage::Packet {
                     packet_length,
@@ -2232,7 +2329,7 @@ fn detail_with_decoded(
         wire_len: wire.len(),
         payload_offset,
         layers,
-        bytes: wire.iter().map(|byte| format!("{byte:02X}")).collect(),
+        bytes: hex_compact(wire),
         decoded,
     }
 }
@@ -2941,5 +3038,178 @@ mod tests {
             "frame no longer buffered"
         );
         assert!(ring.detail(1, None).is_ok());
+    }
+
+    fn field_of<'a>(layer: &'a FrameLayer, name: &str) -> &'a FrameField {
+        layer
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("field {name} missing"))
+    }
+
+    // Review R1b-3a: hex rendering is byte-identical to the per-byte format!
+    // it replaced, without one allocation per byte.
+    #[test]
+    fn hex_helpers_match_reference_formatting() {
+        let bytes: Vec<u8> = (0..=255u8).collect();
+        let spaced: Vec<String> = bytes.iter().map(|b| format!("{b:02X}")).collect();
+        assert_eq!(hex(&bytes), spaced.join(" "));
+        assert_eq!(hex_compact(&bytes), spaced.concat());
+        assert_eq!(hex(&[]), "");
+        let detail = dissect(0, 0.0, &udp_wire(1, 2, &[0xde, 0xad]));
+        assert!(detail.bytes.ends_with("DEAD"));
+        assert_eq!(detail.bytes.len(), detail.wire_len * 2);
+    }
+
+    // Review R1b-2b: the codec rejects hlen > 16 (honest Data layer), and at
+    // the 16-byte boundary the Client MAC highlight covers exactly chaddr.
+    #[test]
+    fn dhcp_client_mac_length_is_bounded_by_chaddr() {
+        let mut payload = Vec::new();
+        dhcp::build_discover(0x1234_5678, [0, 1, 2, 3, 4, 5], &mut payload);
+        payload[2] = 16; // hlen at the chaddr size
+        let detail = dissect(0, 0.0, &udp_wire(68, 67, &payload));
+        assert_eq!(field_of(&detail.layers[3], "Client MAC").len, 16);
+        payload[2] = 17;
+        let detail = dissect(0, 0.0, &udp_wire(68, 67, &payload));
+        assert_eq!(titles(&detail), ["Ethernet II", "IPv4", "UDP", "Data"]);
+    }
+
+    // Review R1b-2a: each IGMPv3 group record highlights its own bytes.
+    #[test]
+    fn igmpv3_group_records_carry_their_own_offsets() {
+        let records = [
+            igmp::IgmpGroupRecord {
+                record_type: 1,
+                multicast_address: [239, 1, 1, 1],
+                sources: vec![[10, 0, 0, 1], [10, 0, 0, 2]],
+                auxiliary_data: vec![],
+            },
+            igmp::IgmpGroupRecord {
+                record_type: 2,
+                multicast_address: [239, 2, 2, 2],
+                sources: vec![],
+                auxiliary_data: vec![0xaa, 0xbb, 0xcc, 0xdd],
+            },
+        ];
+        let mut payload = Vec::new();
+        igmp::build_v3_report(&records, &mut payload);
+        let detail = dissect(0, 0.0, &ipv4_wire(2, &payload));
+        let layer = &detail.layers[2];
+        let first = field_of(layer, "Group record 1");
+        let second = field_of(layer, "Group record 2");
+        assert_eq!(first.len, 8 + 2 * 4);
+        assert_eq!(second.offset, first.offset + first.len);
+        assert_eq!(second.len, 8 + 4);
+    }
+
+    // Review R1b-3b: the banner field is the banner line, not the segment.
+    #[test]
+    fn ssh_banner_field_stops_at_the_line_end() {
+        let mut payload = b"SSH-2.0-RadEAU\r\n".to_vec();
+        payload.extend_from_slice(&[0, 0, 0, 12, 4, 20, 0xff, 0xfe]);
+        let detail = dissect(0, 0.0, &tcp_wire(50_000, 22, &payload));
+        let banner = field_of(&detail.layers[3], "Banner");
+        assert_eq!(banner.value, "SSH-2.0-RadEAU");
+        assert_eq!(banner.len, 16);
+    }
+
+    // Review R1b-3d: header, SNI and ALPN fields point at their bytes.
+    #[test]
+    fn http_and_tls_fields_point_at_their_bytes() {
+        let http = b"GET /status HTTP/1.1\r\nHost: ecu\r\nAccept: */*\r\n\r\n";
+        let wire = tcp_wire(50_000, 80, http);
+        let detail = dissect(0, 0.0, &wire);
+        let host = field_of(&detail.layers[3], "Host");
+        assert_eq!(&wire[host.offset..host.offset + host.len], b"Host: ecu");
+        let accept = field_of(&detail.layers[3], "Accept");
+        assert_eq!(
+            &wire[accept.offset..accept.offset + accept.len],
+            b"Accept: */*"
+        );
+
+        let hello = tls::build_client_hello("ecu.test", &["h2"]);
+        let wire = tcp_wire(50_000, 443, &hello);
+        let detail = dissect(0, 0.0, &wire);
+        let layer = &detail.layers[3];
+        let sni = field_of(layer, "SNI");
+        assert_eq!(&wire[sni.offset..sni.offset + sni.len], b"ecu.test");
+        let alpn = field_of(layer, "ALPN");
+        assert_eq!(&wire[alpn.offset..alpn.offset + alpn.len], b"h2");
+        assert_eq!(field_of(layer, "Cipher-suite count").len, 2);
+    }
+
+    // Review R1b-3e: every TLS handshake shows its type as a field.
+    #[test]
+    fn tls_other_handshakes_show_their_type() {
+        // Handshake record carrying a Finished (20) message with a 1-byte body.
+        let payload = [22, 3, 3, 0, 5, 20, 0, 0, 1, 0];
+        let detail = dissect(0, 0.0, &tcp_wire(50_000, 443, &payload));
+        let layer = &detail.layers[3];
+        assert_eq!(field_of(layer, "Handshake type").value, layer.summary);
+    }
+
+    // Review R1b-3c: every prefix of a valid frame dissects without panicking
+    // and ends in an honest layer, for the protocols that only had a happy path.
+    #[test]
+    fn truncated_application_payloads_never_panic() {
+        let mut chunks = Vec::new();
+        sctp::build_data_chunk(7, 1, 2, 3, 4, &[5], &mut chunks);
+        let mut sctp_payload = Vec::new();
+        sctp::build(5000, 5001, 9, 10, &chunks, &mut sctp_payload);
+        type WireOf = Box<dyn Fn(&[u8]) -> Vec<u8>>;
+        let cases: Vec<(&str, WireOf, Vec<u8>)> = vec![
+            (
+                "HTTP",
+                Box::new(|p| tcp_wire(50_000, 80, p)),
+                b"GET /status HTTP/1.1\r\nHost: ecu\r\n\r\n".to_vec(),
+            ),
+            (
+                "TLS",
+                Box::new(|p| tcp_wire(50_000, 443, p)),
+                tls::build_client_hello("ecu.test", &["h2"]),
+            ),
+            (
+                "SSH",
+                Box::new(|p| tcp_wire(50_000, 22, p)),
+                b"SSH-2.0-RadEAU\r\n".to_vec(),
+            ),
+            (
+                "LLDP",
+                Box::new(|p| l2_wire(lldp::ETHERTYPE, p)),
+                lldp::build([0, 1, 2, 3, 4, 5], "eth0", 120, "ecu"),
+            ),
+            (
+                "AVTP",
+                Box::new(|p| l2_wire(avtp::ETHERTYPE, p)),
+                avtp::build_aaf(7, 2, 3, 4, 5, 2, 24, &[1, 2]),
+            ),
+            (
+                "MACsec",
+                Box::new(|p| l2_wire(macsec::ETHERTYPE, p)),
+                vec![0x2e, 0x12, 0, 0, 0, 7, 1, 2, 3, 4, 5, 6, 0, 9],
+            ),
+            (
+                "EAPOL",
+                Box::new(|p| l2_wire(eapol::ETHERTYPE, p)),
+                vec![2, 3, 0, 13, 2, 0x13, 0xca, 0, 16, 0, 0, 0, 0, 0, 0, 0, 42],
+            ),
+            ("SCTP", Box::new(|p| ipv4_wire(132, p)), sctp_payload),
+        ];
+        for (name, wire_of, full) in cases {
+            for cut in 0..full.len() {
+                let detail = dissect(0, 0.0, &wire_of(&full[..cut]));
+                let last = detail
+                    .layers
+                    .last()
+                    .unwrap_or_else(|| panic!("{name} cut {cut}: no layers"));
+                assert!(
+                    !last.protocol.is_empty(),
+                    "{name} cut {cut}: empty last layer"
+                );
+                assert_eq!(detail.bytes.len(), detail.wire_len * 2, "{name} cut {cut}");
+            }
+        }
     }
 }
